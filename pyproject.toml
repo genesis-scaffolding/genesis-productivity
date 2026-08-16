@@ -1,0 +1,40 @@
+[project]
+name = "myproject"
+version = "0.1.0"
+description = "Python project template for AI agent-friendly development."
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
+    "streamlit>=1.61.1",
+    "typer>=0.27.1",
+]
+
+[project.scripts]
+myproject = "myproject.cli.app:main"
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+include = ["src"]
+exclude = ["**/__pycache__"]
+typeCheckingMode = "basic"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "ruff>=0.16.3",
+]

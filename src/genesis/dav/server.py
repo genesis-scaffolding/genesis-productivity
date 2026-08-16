@@ -122,7 +122,8 @@ class ServerManager:
         htpasswd_path = self._data_path / "users"
         collections_path = self._data_path / "collections"
 
-        # Create htpasswd file with the configured user
+        # Create initial htpasswd file with the configured user
+        # ensure_user() will add more users later
         with open(htpasswd_path, "w") as f:
             f.write(f"{self._config.username}:{self._config.password}\n")
 
@@ -157,6 +158,33 @@ permissions = RrWw
         with open(self._data_path / "rights", "w") as f:
             f.write(rights_content)
 
+    def ensure_user(self, username: str) -> None:
+        """Ensure user exists in Radicale htpasswd file.
+
+        If the user already exists, does nothing.
+        If the user does not exist, adds them with the default password.
+
+        Args:
+            username: The username to ensure exists.
+        """
+        htpasswd_path = self._data_path / "users"
+
+        # Read existing users
+        existing_users: set[str] = set()
+        if htpasswd_path.exists():
+            with open(htpasswd_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if ":" in line:
+                        existing_users.add(line.split(":")[0])
+
+        # Add user if not present
+        if username not in existing_users:
+            # Ensure parent directory exists
+            htpasswd_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(htpasswd_path, "a") as f:
+                f.write(f"{username}:{self._config.password}\n")
+
     def start(self) -> None:
         """Start the server if not already running.
 
@@ -172,7 +200,7 @@ permissions = RrWw
         # Ensure data directory exists
         self._data_path.mkdir(parents=True, exist_ok=True)
 
-        # Write config files
+        # Write config files (includes initial htpasswd with default user)
         self._write_config()
 
         # Find radicale executable
@@ -191,6 +219,9 @@ permissions = RrWw
 
         # Wait for server to be ready
         self._wait_for_ready()
+
+        # Ensure the configured user exists in htpasswd
+        self.ensure_user(self._config.username)
 
     def _wait_for_ready(self) -> None:
         """Wait for server to become ready.

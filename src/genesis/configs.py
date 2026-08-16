@@ -120,7 +120,7 @@ class Configs(BaseSettings):
         yaml_data["paths"] = _build_paths(yaml_data, user)
 
         # Build dav config
-        yaml_data["dav"] = _build_dav(yaml_data)
+        yaml_data["dav"] = _build_dav(yaml_data, user)
 
         # Merge: yaml_data < env_vars < explicit kwargs
         merged = {**yaml_data, **kwargs}
@@ -180,7 +180,7 @@ def _build_paths(raw: dict, user: str) -> dict:
     }
 
 
-def _build_dav(raw: dict) -> dict:
+def _build_dav(raw: dict, user: str) -> dict:
     """Build the DAV config dict from YAML or defaults."""
     yaml_dav = raw.get("dav", {})
     return {
@@ -191,7 +191,7 @@ def _build_dav(raw: dict) -> dict:
             or yaml_dav.get("port", DEFAULT_DAV_PORT)
         ),
         "username": os.environ.get("GENESIS__DAV__USERNAME")
-        or yaml_dav.get("username", DEFAULT_DAV_USERNAME),
+        or yaml_dav.get("username", user),  # Default to extracted user
         "password": os.environ.get("GENESIS__DAV__PASSWORD")
         or yaml_dav.get("password", DEFAULT_DAV_PASSWORD),
         "task_calendar": yaml_dav.get("task_calendar", "tasks"),

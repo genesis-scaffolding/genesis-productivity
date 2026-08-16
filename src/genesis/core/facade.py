@@ -64,6 +64,8 @@ class Facade:
             data_path=self._configs.paths.data / "radicale",
         )
         self._server.start()
+        # Note: ensure_user is called inside ServerManager.start()
+        # Only when a new server is actually started
 
     @property
     def configs(self) -> Configs:

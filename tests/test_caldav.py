@@ -401,3 +401,41 @@ class TestServerManager:
     def test_is_server_not_running(self) -> None:
         """Server is not running on invalid port."""
         assert is_server_running("127.0.0.1", 19999) is False
+
+    def test_ensure_user_adds_new_user(self, tmp_path: Path) -> None:
+        """ensure_user adds a new user to htpasswd."""
+        from genesis.configs import DAV
+        from genesis.dav.server import ServerManager
+
+        # Use a unique port to avoid conflict with other servers
+        dav_config = DAV(host="127.0.0.1", port=39500, username="test", password="test")
+        manager = ServerManager(dav_config=dav_config, data_path=tmp_path / "radicale")
+
+        # Start server (creates initial user)
+        manager.start()
+
+        try:
+            # Check initial user exists
+            htpasswd_path = tmp_path / "radicale" / "users"
+            assert htpasswd_path.exists()
+            with open(htpasswd_path) as f:
+                content = f.read()
+            assert "test:" in content
+
+            # Ensure another user
+            manager.ensure_user("alice")
+
+            # Check alice was added
+            with open(htpasswd_path) as f:
+                content = f.read()
+            assert "alice:" in content
+
+            # Ensure existing user (should not add duplicate)
+            content_before = content
+            manager.ensure_user("alice")
+            with open(htpasswd_path) as f:
+                content_after = f.read()
+            assert content_before == content_after  # No change
+
+        finally:
+            manager.stop()

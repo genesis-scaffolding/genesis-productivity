@@ -24,6 +24,11 @@ from pydantic_settings import BaseSettings
 DEFAULT_APP_NAME = "genesis"
 DEFAULT_USER = "default"
 
+DEFAULT_DAV_HOST = "127.0.0.1"
+DEFAULT_DAV_PORT = 5232
+DEFAULT_DAV_USERNAME = "genesis"
+DEFAULT_DAV_PASSWORD = "genesis-local"
+
 DEFAULT_CONFIG_HOME = Path.home() / ".config"
 DEFAULT_DATA_HOME = Path.home() / ".local" / "share"
 DEFAULT_STATE_HOME = Path.home() / ".local" / "state"
@@ -50,10 +55,8 @@ class Paths(BaseModel):
 class DAV(BaseModel):
     """CalDAV and CardDAV connection settings."""
 
-    server_url: str = Field(
-        default="",
-        description="Base URL of the DAV server.",
-    )
+    host: str = Field(default=DEFAULT_DAV_HOST, description="DAV server host.")
+    port: int = Field(default=DEFAULT_DAV_PORT, description="DAV server port.")
     username: str = Field(default="", description="Username for DAV authentication.")
     password: str = Field(default="", description="Password for DAV authentication.")
     task_calendar: str = Field(
@@ -64,6 +67,11 @@ class DAV(BaseModel):
         default="project:",
         description="Prefix for project calendars.",
     )
+
+    @property
+    def server_url(self) -> str:
+        """Construct server URL from host and port."""
+        return f"http://{self.host}:{self.port}"
 
 
 class Configs(BaseSettings):
@@ -176,12 +184,16 @@ def _build_dav(raw: dict) -> dict:
     """Build the DAV config dict from YAML or defaults."""
     yaml_dav = raw.get("dav", {})
     return {
-        "server_url": os.environ.get("GENESIS__DAV__SERVER_URL")
-        or yaml_dav.get("server_url", ""),
+        "host": os.environ.get("GENESIS__DAV__HOST")
+        or yaml_dav.get("host", DEFAULT_DAV_HOST),
+        "port": int(
+            os.environ.get("GENESIS__DAV__PORT")
+            or yaml_dav.get("port", DEFAULT_DAV_PORT)
+        ),
         "username": os.environ.get("GENESIS__DAV__USERNAME")
-        or yaml_dav.get("username", ""),
+        or yaml_dav.get("username", DEFAULT_DAV_USERNAME),
         "password": os.environ.get("GENESIS__DAV__PASSWORD")
-        or yaml_dav.get("password", ""),
+        or yaml_dav.get("password", DEFAULT_DAV_PASSWORD),
         "task_calendar": yaml_dav.get("task_calendar", "tasks"),
         "project_calendar_prefix": yaml_dav.get("project_calendar_prefix", "project:"),
     }

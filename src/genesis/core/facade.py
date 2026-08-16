@@ -11,6 +11,9 @@ Usage:
     print(facade.configs.app_name)
     facade.caldav.list_tasks()
     facade.journal.get_entry(today)
+
+    with Facade() as facade:
+        facade.caldav.create_task(...)
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..configs import Configs
+from ..dav.server import ServerManager
 
 if TYPE_CHECKING:
     from ..caldav.facade import CalDAVFacade
@@ -34,13 +38,32 @@ class Facade:
                    If None, uses the default XDG path. If that default
                    file does not exist, uses internal defaults only.
                    If provided but not found, raises FileNotFoundError.
+        ensure_server: If True (default), starts the DAV server if not running.
+                       Set to False if managing server separately.
     """
 
-    def __init__(self, yaml_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        yaml_path: str | Path | None = None,
+        *,
+        ensure_server: bool = True,
+    ) -> None:
         self._configs = Configs(yaml_path=yaml_path)
+        self._server: ServerManager | None = None
         self._caldav: CalDAVFacade | None = None
         self._carddav: CardDAVFacade | None = None
         self._journal: JournalFacade | None = None
+
+        if ensure_server:
+            self._ensure_server_running()
+
+    def _ensure_server_running(self) -> None:
+        """Start the DAV server if not already running."""
+        self._server = ServerManager(
+            dav_config=self._configs.dav,
+            data_path=self._configs.paths.data / "radicale",
+        )
+        self._server.start()
 
     @property
     def configs(self) -> Configs:
@@ -53,7 +76,13 @@ class Facade:
         if self._caldav is None:
             from ..caldav.facade import CalDAVFacade
             cfg = self.configs
-            self._caldav = CalDAVFacade(cfg.paths.data / "caldav")
+            self._caldav = CalDAVFacade(
+                server_url=cfg.dav.server_url,
+                username=cfg.dav.username,
+                password=cfg.dav.password,
+                task_calendar_name=cfg.dav.task_calendar,
+                project_calendar_prefix=cfg.dav.project_calendar_prefix,
+            )
         return self._caldav
 
     @property
@@ -77,3 +106,17 @@ class Facade:
             cfg = self.configs
             self._journal = JournalFacade(cfg.paths.data / "journal")
         return self._journal
+
+    def shutdown(self) -> None:
+        """Stop the DAV server if we started it."""
+        if self._server is not None:
+            self._server.stop()
+            self._server = None
+
+    def __enter__(self) -> Facade:
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit."""
+        self.shutdown()

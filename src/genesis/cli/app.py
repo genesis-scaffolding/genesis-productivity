@@ -10,8 +10,10 @@ import typer
 
 from ..configs import DEFAULT_APP_NAME, DEFAULT_USER
 from ..core.facade import Facade
+from .server import server_app
 
 app = typer.Typer(help="CLI for genesis productivity system.")
+app.add_typer(server_app, name="server")
 _CONFIG_ENV = "GENESIS__CONFIG_PATH"
 
 

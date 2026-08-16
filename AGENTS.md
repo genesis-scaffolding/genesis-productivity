@@ -1,6 +1,6 @@
 # Development Rules
 
-This project is a Python template for AI-agent-friendly development. It uses uv, ruff, pyright, pytest, and make.
+This project is a productivity system that manages tasks, projects, calendar, contacts, and journal entries. Data is exposed via CalDAV/CardDAV APIs and markdown files for agentic access and human interaction via a web UI. Uses uv, ruff, pyright, pytest, and make.
 
 ## Adapting This Template
 

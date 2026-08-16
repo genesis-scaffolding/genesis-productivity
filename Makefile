@@ -46,10 +46,10 @@ test:  ## Run tests
 # -----------------------------------------------------------------------------
 
 run-cli:  ## Run the CLI app
-	uv run myproject
+	uv run genesis
 
 run-ui:  ## Start the Streamlit UI
-	uv run streamlit run src/myproject/ui/app.py
+	uv run streamlit run src/genesis/ui/app.py
 
 # -----------------------------------------------------------------------------
 # Utility

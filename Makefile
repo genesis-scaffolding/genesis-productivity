@@ -41,6 +41,12 @@ typecheck:  ## Run pyright type checker
 test:  ## Run tests
 	uv run pytest -v
 
+test-unit:  ## Run unit tests only (fast, no Radicale server)
+	uv run pytest tests/test_caldav_unit.py -v
+
+test-integration:  ## Run integration tests only (slow, spins up Radicale)
+	uv run pytest tests/test_caldav.py -v
+
 # -----------------------------------------------------------------------------
 # Run
 # -----------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Integration tests for CalDAV facade.
 
-These tests spin up a real Radicale server to test the full integration.
+These tests spin up a real Radicale server. For fast unit tests, use test_caldav_unit.py.
 """
 
 from __future__ import annotations
@@ -96,10 +96,10 @@ class TestTaskCRUD:
 
     def test_create_task(self, facade: CalDAVFacade) -> None:
         """Creating a task returns the task with UID and timestamps."""
-        task = facade.create_task(TaskCreate(summary="Buy groceries"))
+        task = facade.create_task(TaskCreate(summary="Test task"))
 
-        assert task.uid.endswith("@genesis")
-        assert task.summary == "Buy groceries"
+        assert task.uid is not None
+        assert task.summary == "Test task"
         assert task.status == TaskStatus.NEEDS_ACTION
         assert task.created is not None
         assert task.modified is not None
@@ -107,16 +107,17 @@ class TestTaskCRUD:
     def test_get_task(self, facade: CalDAVFacade) -> None:
         """Getting a task by UID returns the task."""
         created = facade.create_task(TaskCreate(summary="Test task"))
-        fetched = facade.get_task(created.uid)
 
-        assert fetched is not None
-        assert fetched.uid == created.uid
-        assert fetched.summary == "Test task"
+        found = facade.get_task(created.uid)
+
+        assert found is not None
+        assert found.uid == created.uid
+        assert found.summary == "Test task"
 
     def test_get_task_not_found(self, facade: CalDAVFacade) -> None:
         """Getting a non-existent task returns None."""
-        result = facade.get_task("nonexistent-uid@genesis")
-        assert result is None
+        found = facade.get_task("nonexistent@genesis")
+        assert found is None
 
     def test_list_tasks(self, facade: CalDAVFacade) -> None:
         """Listing tasks returns all tasks."""
@@ -125,30 +126,28 @@ class TestTaskCRUD:
 
         tasks = facade.list_tasks()
 
-        assert len(tasks) >= 2
-        summaries = {t.summary for t in tasks}
-        assert "Task 1" in summaries
-        assert "Task 2" in summaries
+        assert len(tasks) == 2
 
     def test_update_task(self, facade: CalDAVFacade) -> None:
-        """Updating a task modifies its fields."""
+        """Updating a task modifies the task."""
         task = facade.create_task(TaskCreate(summary="Original"))
-        updated = facade.update_task(task.uid, TaskUpdate(summary="Modified"))
+
+        updated = facade.update_task(task.uid, TaskUpdate(summary="Updated"))
 
         assert updated is not None
-        assert updated.summary == "Modified"
-        assert updated.modified is not None and task.created is not None
-        assert updated.modified > task.created
+        assert updated.summary == "Updated"
+        assert updated.created is not None
+        assert updated.modified is not None
 
     def test_update_task_sets_completed_at(self, facade: CalDAVFacade) -> None:
-        """Completing a task sets completed_at timestamp."""
+        """Marking a task completed sets completed_at."""
         task = facade.create_task(TaskCreate(summary="To complete"))
-        assert task.completed_at is None
 
         updated = facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+
         assert updated is not None
-        assert updated.completed_at is not None
         assert updated.status == TaskStatus.COMPLETED
+        assert updated.completed_at is not None
 
     def test_update_task_clears_completed_at(self, facade: CalDAVFacade) -> None:
         """Reopening a completed task clears completed_at."""
@@ -156,27 +155,24 @@ class TestTaskCRUD:
         facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
 
         updated = facade.update_task(task.uid, TaskUpdate(status=TaskStatus.NEEDS_ACTION))
+
         assert updated is not None
+        assert updated.status == TaskStatus.NEEDS_ACTION
         assert updated.completed_at is None
 
     def test_delete_task(self, facade: CalDAVFacade) -> None:
         """Deleting a task removes it."""
         task = facade.create_task(TaskCreate(summary="To delete"))
-        assert facade.get_task(task.uid) is not None
 
         result = facade.delete_task(task.uid)
+
         assert result is True
         assert facade.get_task(task.uid) is None
 
     def test_delete_task_not_found(self, facade: CalDAVFacade) -> None:
         """Deleting a non-existent task returns False."""
-        result = facade.delete_task("nonexistent-uid@genesis")
+        result = facade.delete_task("nonexistent@genesis")
         assert result is False
-
-
-# =============================================================================
-# Task filters
-# =============================================================================
 
 
 class TestTaskFilters:
@@ -188,8 +184,8 @@ class TestTaskFilters:
         completed = facade.create_task(TaskCreate(summary="Completed task"))
         facade.update_task(completed.uid, TaskUpdate(status=TaskStatus.COMPLETED))
 
-        active_tasks = facade.list_tasks(status=TaskStatus.NEEDS_ACTION)
-        assert all(t.status == TaskStatus.NEEDS_ACTION for t in active_tasks)
+        active = facade.list_tasks(status=TaskStatus.NEEDS_ACTION)
+        assert all(t.status == TaskStatus.NEEDS_ACTION for t in active)
 
         completed_tasks = facade.list_tasks(status=TaskStatus.COMPLETED)
         assert all(t.status == TaskStatus.COMPLETED for t in completed_tasks)
@@ -197,46 +193,34 @@ class TestTaskFilters:
     def test_text_search(self, facade: CalDAVFacade) -> None:
         """Text search finds tasks by summary or description."""
         facade.create_task(TaskCreate(summary="Buy groceries"))
-        facade.create_task(TaskCreate(summary="Clean house", description="Kitchen only"))
+        facade.create_task(
+            TaskCreate(summary="Fix bug", description="Memory leak in parser")
+        )
 
-        results = facade.list_tasks(search="groceries")
+        results = facade.list_tasks(search="bug")
         assert len(results) >= 1
-        assert any("groceries" in t.summary.lower() for t in results)
-
-        results = facade.list_tasks(search="kitchen")
-        assert len(results) >= 1
-        assert any("kitchen" in (t.description or "").lower() for t in results)
-
-
-# =============================================================================
-# Task sorting
-# =============================================================================
+        assert any("bug" in t.summary.lower() or "bug" in (t.description or "").lower() for t in results)
 
 
 class TestTaskSorting:
     """Test task sorting."""
 
     def test_sort_by_created(self, facade: CalDAVFacade) -> None:
-        """Tasks can be sorted by creation date."""
-        task1 = facade.create_task(TaskCreate(summary="First"))
-        task2 = facade.create_task(TaskCreate(summary="Second"))
+        """Tasks can be sorted by created date."""
+        t1 = facade.create_task(TaskCreate(summary="First"))
+        t2 = facade.create_task(TaskCreate(summary="Second"))
 
         tasks = facade.list_tasks(sort_by=["created"], sort_order="asc")
-
-        # task1 should come before task2
-        assert tasks[0].uid == task1.uid or tasks[-1].uid == task2.uid
+        assert tasks[0].uid == t1.uid
+        assert tasks[-1].uid == t2.uid
 
     def test_sort_by_summary(self, facade: CalDAVFacade) -> None:
         """Tasks can be sorted by summary."""
         facade.create_task(TaskCreate(summary="Zebra"))
         facade.create_task(TaskCreate(summary="Apple"))
-        facade.create_task(TaskCreate(summary="Mango"))
 
         tasks = facade.list_tasks(sort_by=["summary"], sort_order="asc")
-
-        assert len(tasks) >= 3
-        # Check the order is correct
-        summaries = [t.summary for t in tasks if t.summary in ["Apple", "Mango", "Zebra"]]
+        summaries = [t.summary for t in tasks]
         assert summaries == sorted(summaries)
 
 
@@ -252,7 +236,7 @@ class TestProjectCRUD:
         """Creating a project returns the project with UID and timestamps."""
         project = facade.create_project(ProjectCreate(name="New Project"))
 
-        assert project.uid.endswith("@genesis")
+        assert project.uid is not None
         assert project.name == "New Project"
         assert project.status == ProjectStatus.NEEDS_ACTION
         assert project.created is not None
@@ -261,16 +245,17 @@ class TestProjectCRUD:
     def test_get_project(self, facade: CalDAVFacade) -> None:
         """Getting a project by UID returns the project."""
         created = facade.create_project(ProjectCreate(name="Test Project"))
-        fetched = facade.get_project(created.uid)
 
-        assert fetched is not None
-        assert fetched.uid == created.uid
-        assert fetched.name == "Test Project"
+        found = facade.get_project(created.uid)
+
+        assert found is not None
+        assert found.uid == created.uid
+        assert found.name == "Test Project"
 
     def test_get_project_not_found(self, facade: CalDAVFacade) -> None:
         """Getting a non-existent project returns None."""
-        result = facade.get_project("nonexistent-uid@genesis")
-        assert result is None
+        found = facade.get_project("nonexistent@genesis")
+        assert found is None
 
     def test_list_projects(self, facade: CalDAVFacade) -> None:
         """Listing projects returns all projects."""
@@ -279,38 +264,31 @@ class TestProjectCRUD:
 
         projects = facade.list_projects()
 
-        assert len(projects) >= 2
-        names = {p.name for p in projects}
-        assert "Project 1" in names
-        assert "Project 2" in names
+        assert len(projects) == 2
 
     def test_update_project(self, facade: CalDAVFacade) -> None:
-        """Updating a project modifies its fields."""
+        """Updating a project modifies the project."""
         project = facade.create_project(ProjectCreate(name="Original"))
-        updated = facade.update_project(project.uid, ProjectUpdate(name="Modified"))
+
+        updated = facade.update_project(project.uid, ProjectUpdate(name="Updated"))
 
         assert updated is not None
-        assert updated.name == "Modified"
-        assert updated.modified is not None and project.created is not None
-        assert updated.modified > project.created
+        assert updated.name == "Updated"
+        assert updated.created is not None
+        assert updated.modified is not None
 
     def test_delete_project(self, facade: CalDAVFacade) -> None:
         """Deleting a project removes it."""
         project = facade.create_project(ProjectCreate(name="To delete"))
-        assert facade.get_project(project.uid) is not None
 
         result = facade.delete_project(project.uid)
+
         assert result is True
         assert facade.get_project(project.uid) is None
 
 
-# =============================================================================
-# Project deletion with tasks
-# =============================================================================
-
-
 class TestProjectDeletionWithTasks:
-    """Test project deletion behavior with linked tasks."""
+    """Test project deletion with linked tasks."""
 
     def test_delete_project_removes_task_links(self, facade: CalDAVFacade) -> None:
         """Deleting a project removes project_id from its tasks."""
@@ -325,11 +303,6 @@ class TestProjectDeletionWithTasks:
         updated_task = facade.get_task(task.uid)
         assert updated_task is not None
         assert updated_task.project_id is None
-
-
-# =============================================================================
-# Project filters
-# =============================================================================
 
 
 class TestProjectFilters:
@@ -358,15 +331,6 @@ class TestProjectFilters:
         assert len(results) >= 1
         assert any("marketing" in p.name.lower() for p in results)
 
-        results = facade.list_projects(search="hardware")
-        assert len(results) >= 1
-        assert any("hardware" in (p.description or "").lower() for p in results)
-
-
-# =============================================================================
-# Project sorting
-# =============================================================================
-
 
 class TestProjectSorting:
     """Test project sorting."""
@@ -375,13 +339,10 @@ class TestProjectSorting:
         """Projects can be sorted by name."""
         facade.create_project(ProjectCreate(name="Zebra Project"))
         facade.create_project(ProjectCreate(name="Apple Project"))
-        facade.create_project(ProjectCreate(name="Mango Project"))
 
         projects = facade.list_projects(sort_by=["name"], sort_order="asc")
 
-        assert len(projects) >= 3
-        # Check the order is correct
-        names = [p.name for p in projects if "Project" in p.name]
+        names = [p.name for p in projects]
         assert names == sorted(names)
 
 

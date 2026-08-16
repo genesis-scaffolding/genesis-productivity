@@ -39,5 +39,6 @@ typeCheckingMode = "basic"
 dev = [
     "pyright>=1.1.411",
     "pytest>=9.1.1",
+    "responses>=0.26.2",
     "ruff>=0.16.3",
 ]

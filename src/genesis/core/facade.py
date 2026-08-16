@@ -9,7 +9,7 @@ Usage:
     facade = Facade("/path/to/configs.yaml")   # explicit yaml path
 
     print(facade.configs.app_name)
-    facade.caldav.get_tasks()
+    facade.caldav.list_tasks()
     facade.journal.get_entry(today)
 """
 
@@ -49,15 +49,11 @@ class Facade:
 
     @property
     def caldav(self) -> CalDAVFacade:
-        """Return the CalDAV facade for tasks, projects, and calendar."""
+        """Return the CalDAV facade for tasks and projects."""
         if self._caldav is None:
             from ..caldav.facade import CalDAVFacade
             cfg = self.configs
-            self._caldav = CalDAVFacade(
-                server_url=cfg.dav.server_url,
-                username=cfg.dav.username,
-                password=cfg.dav.password,
-            )
+            self._caldav = CalDAVFacade(cfg.paths.data / "caldav")
         return self._caldav
 
     @property

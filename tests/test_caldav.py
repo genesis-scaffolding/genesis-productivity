@@ -1,6 +1,7 @@
-"""Integration tests for CalDAV facade.
+"""Tests for CalDAV facade.
 
-These tests spin up a real Radicale server. For fast unit tests, use test_caldav_unit.py.
+Unit tests use MockCalDAVFacade for speed.
+Integration tests (marked @pytest.mark.integration) spin up a real Radicale server.
 """
 
 from __future__ import annotations
@@ -91,6 +92,7 @@ def facade(radicale_server: tuple[str, int]) -> Generator[CalDAVFacade, None, No
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestTaskCRUD:
     """Test task CRUD operations."""
 
@@ -175,6 +177,7 @@ class TestTaskCRUD:
         assert result is False
 
 
+@pytest.mark.integration
 class TestTaskFilters:
     """Test task filtering."""
 
@@ -202,6 +205,7 @@ class TestTaskFilters:
         assert any("bug" in t.summary.lower() or "bug" in (t.description or "").lower() for t in results)
 
 
+@pytest.mark.integration
 class TestTaskSorting:
     """Test task sorting."""
 
@@ -229,6 +233,7 @@ class TestTaskSorting:
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestProjectCRUD:
     """Test project CRUD operations."""
 
@@ -287,6 +292,7 @@ class TestProjectCRUD:
         assert facade.get_project(project.uid) is None
 
 
+@pytest.mark.integration
 class TestProjectDeletionWithTasks:
     """Test project deletion with linked tasks."""
 
@@ -305,6 +311,7 @@ class TestProjectDeletionWithTasks:
         assert updated_task.project_id is None
 
 
+@pytest.mark.integration
 class TestProjectFilters:
     """Test project filtering."""
 
@@ -332,6 +339,7 @@ class TestProjectFilters:
         assert any("marketing" in p.name.lower() for p in results)
 
 
+@pytest.mark.integration
 class TestProjectSorting:
     """Test project sorting."""
 
@@ -351,6 +359,7 @@ class TestProjectSorting:
 # =============================================================================
 
 
+@pytest.mark.integration
 class TestServerManager:
     """Test server manager functionality."""
 

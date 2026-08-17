@@ -38,14 +38,14 @@ typecheck:  ## Run pyright type checker
 # Test
 # -----------------------------------------------------------------------------
 
-test:  ## Run tests
+test:  ## Run unit tests (fast, no Radicale)
+	uv run pytest -v -m "not integration"
+
+test-all:  ## Run all tests including integration
 	uv run pytest -v
 
-test-unit:  ## Run unit tests only (fast, no Radicale server)
-	uv run pytest tests/test_caldav_unit.py -v
-
-test-integration:  ## Run integration tests only (slow, spins up Radicale)
-	uv run pytest tests/test_caldav.py -v
+test-integration:  ## Run integration tests only
+	uv run pytest -v -m integration
 
 # -----------------------------------------------------------------------------
 # Run

@@ -22,6 +22,9 @@ package = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require a real Radicale server (deselect with '-m \"not integration\"')",
+]
 
 [tool.ruff]
 line-length = 120

@@ -131,6 +131,26 @@ Keep the test suite small. If nobody can tell what a test is testing, it should 
 
 Fuzzing: add when a concrete need surfaces. Not preemptively.
 
+### Running Tests
+
+```bash
+make test              # Unit tests only (~0.3s) - default for development
+make test-integration  # Integration tests only (~56s)
+make test-all          # All tests (~56s)
+```
+
+### Test Types
+
+**Unit tests**: Fast (~0.3s), use mock backend, no external dependencies.
+
+**Integration tests**: Slow (~56s), use real Radicale server, verify full stack.
+
+Mark integration tests with `@pytest.mark.integration`. During active development, run `make test` to exclude slow tests.
+
+### Writing New Tests
+
+Write unit tests first using `MockCalDAVFacade` in `tests/test_caldav_unit.py`. Add integration tests only when testing real server behavior (iCal parsing, HTTP, file storage).
+
 ## Code Conventions
 
 ### Comments

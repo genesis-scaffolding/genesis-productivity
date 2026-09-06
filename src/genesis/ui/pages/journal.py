@@ -159,37 +159,33 @@ def _render_list() -> None:
 def _render_view(uid: str) -> None:
     entry = journal.get_entry(uid)
 
-    header_cols = st.columns([1, 6])
-    with header_cols[0]:
+    # Back button on its own row
+    back_col, _ = st.columns([1, 8])
+    with back_col:
         if st.button("← Back", key="je_back"):
             st.query_params.clear()
             st.rerun()
-    with header_cols[1]:
-        if entry is not None:
-            st.caption(f"Productivity > Journal > {entry.date.isoformat()}")
-            if entry.type:
-                st.caption(f"{entry.type.value.upper()} — {entry.date.isoformat()}")
-            else:
-                st.caption(f"NO TYPE — {entry.date.isoformat()}")
-            title = entry.title or entry.date.strftime("%A, %B %d, %Y")
-            st.title(title)
-            if entry.type:
-                st.badge(entry.type.value, color="blue")
-        else:
-            st.title("Entry not found")
 
     if entry is None:
+        st.title("Entry not found")
         if st.button("Create entry at this UID", key="je_recreate"):
             st.query_params["new"] = "1"
             st.rerun()
         return
 
-    btn_cols = st.columns([1, 1, 6])
-    with btn_cols[0]:
-        if st.button("✎ Edit Entry", key="je_edit_btn"):
+    # Breadcrumb + title + actions on the next row
+    st.caption(f"Productivity > Journal > {entry.date.isoformat()}")
+    header_cols = st.columns([8, 1, 1])
+    with header_cols[0]:
+        title = entry.title or entry.date.strftime("%A, %B %d, %Y")
+        st.title(title)
+        if entry.type:
+            st.badge(entry.type.value, color="blue")
+    with header_cols[1]:
+        if st.button("✎ Edit", key="je_edit_btn"):
             st.query_params["edit"] = "1"
             st.rerun()
-    with btn_cols[1]:
+    with header_cols[2]:
         if st.button("🗑 Delete", key="je_del_btn"):
             st.session_state["pending_delete"] = (
                 f"je_{entry.uid}",

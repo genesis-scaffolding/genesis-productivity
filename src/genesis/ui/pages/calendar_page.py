@@ -66,16 +66,19 @@ for e in shadow_events:
 
 # --- Week grid: all-day event strip + day columns ---------------------------
 
-# Header row: day labels
+# Header row: day labels. Use the :blue[...] syntax carefully: each
+# colored piece is its own bracketed expression because Streamlit's
+# :color[...] syntax does not handle nested markdown or newlines well.
 day_cols = st.columns(7, gap="small")
 for i, c in enumerate(day_cols):
     day = week_start + timedelta(days=i)
     with c:
-        label = f"**{day.strftime('%a')}**\n\n{day.day}"
         if day == today:
-            st.markdown(f":blue[{label}]")
+            st.markdown(
+                f":blue[**{day.strftime('%a')}**]  \n:blue[{day.day}]"
+            )
         else:
-            st.markdown(label)
+            st.markdown(f"**{day.strftime('%a')}**  \n{day.day}")
 
 st.write("")
 

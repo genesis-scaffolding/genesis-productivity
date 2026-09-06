@@ -24,6 +24,10 @@ from pydantic_settings import BaseSettings
 DEFAULT_APP_NAME = "genesis"
 DEFAULT_USER = "default"
 
+# Env var used by the CLI to hand the resolved config path to the UI subprocess.
+# Both sides import this constant so they cannot drift.
+CONFIG_PATH_ENV = "GENESIS__CONFIG_PATH"
+
 DEFAULT_DAV_HOST = "127.0.0.1"
 DEFAULT_DAV_PORT = 5232
 DEFAULT_DAV_USERNAME = "genesis"
@@ -103,7 +107,9 @@ class Configs(BaseSettings):
             config_home = os.environ.get(
                 "XDG_CONFIG_HOME", str(DEFAULT_CONFIG_HOME)
             )
-            yaml_path = Path(config_home) / DEFAULT_APP_NAME / "configs.yaml"
+            yaml_path = (
+                Path(config_home) / DEFAULT_APP_NAME / DEFAULT_USER / "configs.yaml"
+            )
         else:
             yaml_path = Path(yaml_path).resolve()
 
@@ -137,8 +143,13 @@ class Configs(BaseSettings):
 def _extract_user(yaml_path: Path | None) -> str:
     """Extract user from yaml_path directory structure.
 
-    Expected: ~/.config/genesis/<user>/configs.yaml
+    Expected: <xdg_config_home>/genesis/<user>/configs.yaml
     Falls back to DEFAULT_USER if path doesn't match expected pattern.
+
+    The check for `user != "configs.yaml"` keeps backward compatibility with
+    the legacy flat path (~/.config/genesis/configs.yaml). With the implicit
+    default path now scoped under genesis/default/, this branch only fires
+    for legacy paths passed explicitly.
     """
     if yaml_path is None:
         return DEFAULT_USER
@@ -148,13 +159,44 @@ def _extract_user(yaml_path: Path | None) -> str:
         genesis_idx = parts.index(DEFAULT_APP_NAME)
         if len(parts) >= genesis_idx + 2:
             user = parts[genesis_idx + 1]
-            # Reject if it looks like a filename (no user subdirectory)
             if user != "configs.yaml":
                 return user
     except ValueError:
         pass
 
     return DEFAULT_USER
+
+
+def resolve_config_path(user: str | None = None) -> Path:
+    """Resolve a user name to a config file path.
+
+    Always returns an explicit path under
+    <xdg_config_home>/genesis/<user>/configs.yaml.
+
+    For the default user, creates the parent directory and seeds an empty
+    configs.yaml at the resolved path if it does not already exist. For
+    other users, only the parent directory is created; the configs.yaml
+    is left for the user to provide (defaults apply if absent).
+
+    Args:
+        user: User name. None or empty string resolves to DEFAULT_USER.
+
+    Returns:
+        Absolute path to the configs.yaml file. The parent directory
+        always exists after this call.
+    """
+    if user is None or user == "":
+        user = DEFAULT_USER
+
+    config_home = os.environ.get("XDG_CONFIG_HOME", str(DEFAULT_CONFIG_HOME))
+    config_path = Path(config_home) / DEFAULT_APP_NAME / user / "configs.yaml"
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if user == DEFAULT_USER and not config_path.exists():
+        config_path.write_text("")
+
+    return config_path
 
 
 def _build_paths(raw: dict, user: str) -> dict:

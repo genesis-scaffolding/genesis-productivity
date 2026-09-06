@@ -10,37 +10,45 @@ Usage:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
-from typing import Annotated
 
 import typer
 
-from genesis.configs import Configs
+from genesis.configs import DEFAULT_USER, Configs, resolve_config_path
 from genesis.dav.server import ServerManager, is_server_running
 
 server_app = typer.Typer(help="Manage the Radicale DAV server.")
 
+_user_option = typer.Option(
+    DEFAULT_USER,
+    "--user",
+    "-u",
+    help=f"User name. Defaults to '{DEFAULT_USER}'. Determines config location.",
+)
+
+
+def _build_manager(user: str) -> tuple[ServerManager, Configs]:
+    """Build a ServerManager for the given user's config.
+
+    Returns the manager and the resolved Configs object.
+    """
+    config_path = resolve_config_path(user)
+    configs = Configs(yaml_path=config_path)
+    manager = ServerManager(
+        dav_config=configs.dav,
+        data_path=configs.paths.data / "radicale",
+    )
+    return manager, configs
+
 
 @server_app.command(name="start")
 def start_server(
-    config: Annotated[
-        Path | None,
-        typer.Option("--config", "-c", help="Path to config YAML file."),
-    ] = None,
+    user: str = _user_option,
 ) -> None:
     """Start the Radicale server if not already running.
 
     Blocks until the server is ready to accept connections.
     """
-    if config is not None and not config.exists():
-        typer.echo(f"Config file not found: {config}", err=True)
-        raise typer.Exit(1)
-
-    configs = Configs(yaml_path=config)
-    manager = ServerManager(
-        dav_config=configs.dav,
-        data_path=configs.paths.data / "radicale",
-    )
+    manager, configs = _build_manager(user)
 
     if manager.is_running():
         typer.echo(f"Server already running at {configs.dav.server_url}")
@@ -57,24 +65,13 @@ def start_server(
 
 @server_app.command(name="stop")
 def stop_server(
-    config: Annotated[
-        Path | None,
-        typer.Option("--config", "-c", help="Path to config YAML file."),
-    ] = None,
+    user: str = _user_option,
 ) -> None:
     """Stop the Radicale server.
 
     Note: This only stops a server started by this instance.
     """
-    if config is not None and not config.exists():
-        typer.echo(f"Config file not found: {config}", err=True)
-        raise typer.Exit(1)
-
-    configs = Configs(yaml_path=config)
-    manager = ServerManager(
-        dav_config=configs.dav,
-        data_path=configs.paths.data / "radicale",
-    )
+    manager, _ = _build_manager(user)
 
     if not manager.is_running():
         typer.echo("Server is not running.")
@@ -87,17 +84,10 @@ def stop_server(
 
 @server_app.command(name="status")
 def server_status(
-    config: Annotated[
-        Path | None,
-        typer.Option("--config", "-c", help="Path to config YAML file."),
-    ] = None,
+    user: str = _user_option,
 ) -> None:
     """Check if the Radicale server is running."""
-    if config is not None and not config.exists():
-        typer.echo(f"Config file not found: {config}", err=True)
-        raise typer.Exit(1)
-
-    configs = Configs(yaml_path=config)
+    manager, configs = _build_manager(user)
 
     if is_server_running(configs.dav.host, configs.dav.port):
         typer.echo(f"Server is running at {configs.dav.server_url}")
@@ -108,21 +98,10 @@ def server_status(
 
 @server_app.command(name="restart")
 def restart_server(
-    config: Annotated[
-        Path | None,
-        typer.Option("--config", "-c", help="Path to config YAML file."),
-    ] = None,
+    user: str = _user_option,
 ) -> None:
     """Restart the Radicale server."""
-    if config is not None and not config.exists():
-        typer.echo(f"Config file not found: {config}", err=True)
-        raise typer.Exit(1)
-
-    configs = Configs(yaml_path=config)
-    manager = ServerManager(
-        dav_config=configs.dav,
-        data_path=configs.paths.data / "radicale",
-    )
+    manager, configs = _build_manager(user)
 
     if manager.is_running():
         typer.echo("Stopping server...")

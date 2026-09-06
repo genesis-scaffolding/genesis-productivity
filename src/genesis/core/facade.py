@@ -82,8 +82,6 @@ class Facade:
                 server_url=cfg.dav.server_url,
                 username=cfg.dav.username,
                 password=cfg.dav.password,
-                task_calendar_name=cfg.dav.task_calendar,
-                project_calendar_prefix=cfg.dav.project_calendar_prefix,
             )
         return self._caldav
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -15,12 +16,15 @@ import pytest
 from genesis.caldav.facade import CalDAVFacade
 from genesis.dav.server import ServerManager, is_server_running
 from genesis.entities import (
+    EventCreate,
+    EventStatus,
     ProjectCreate,
     ProjectStatus,
     ProjectUpdate,
     TaskCreate,
     TaskStatus,
     TaskUpdate,
+    TimeLogEntryCreate,
 )
 
 
@@ -69,8 +73,6 @@ def facade(radicale_server: tuple[str, int]) -> Generator[CalDAVFacade, None, No
         server_url=server_url,
         username="test",
         password="test",
-        task_calendar_name="tasks",
-        project_calendar_prefix="project:",
     )
 
     yield fac
@@ -78,7 +80,7 @@ def facade(radicale_server: tuple[str, int]) -> Generator[CalDAVFacade, None, No
     # Cleanup: delete all calendars
     try:
         principal = fac._get_principal()
-        for cal in principal.calendars():
+        for cal in principal.calendars():  # type: ignore[attr-defined]
             try:
                 cal.delete()
             except Exception:
@@ -409,3 +411,155 @@ class TestServerManager:
 
         finally:
             manager.stop()
+
+
+# =============================================================================
+# Shadow VEVENT (integration)
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestShadowVEVENTIntegration:
+    """Verify the shadow VEVENT pattern actually round-trips through Radicale."""
+
+    def test_create_task_with_schedule_writes_shadow_to_events_collection(
+        self, facade: CalDAVFacade
+    ) -> None:
+        start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
+        task = facade.create_task(
+            TaskCreate(summary="Standup", scheduled_start=start)
+        )
+
+        # The shadow should appear in the events collection with the same UID
+        shadow = facade.get_event(task.uid)
+        assert shadow is not None
+        assert shadow.task_id == task.uid
+        assert shadow.start == start
+
+    def test_clear_scheduled_start_removes_shadow(
+        self, facade: CalDAVFacade
+    ) -> None:
+
+        start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
+        task = facade.create_task(
+            TaskCreate(summary="Standup", scheduled_start=start)
+        )
+        assert facade.get_event(task.uid) is not None
+
+        facade.update_task(task.uid, TaskUpdate(clear_scheduled_start=True))
+        assert facade.get_event(task.uid) is None
+
+    def test_delete_task_removes_shadow(self, facade: CalDAVFacade) -> None:
+        start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
+        task = facade.create_task(
+            TaskCreate(summary="Standup", scheduled_start=start)
+        )
+        facade.delete_task(task.uid)
+        assert facade.get_event(task.uid) is None
+
+    def test_reschedule_updates_shadow(self, facade: CalDAVFacade) -> None:
+        first = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
+        task = facade.create_task(
+            TaskCreate(summary="Standup", scheduled_start=first)
+        )
+
+        second = datetime(2030, 1, 2, 14, 0, tzinfo=UTC)
+        facade.update_task(task.uid, TaskUpdate(scheduled_start=second))
+
+        shadow = facade.get_event(task.uid)
+        assert shadow is not None
+        assert shadow.start == second
+
+
+# =============================================================================
+# Event CRUD (integration)
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestEventCRUDIntegration:
+    """Verify standalone event CRUD against Radicale."""
+
+    def test_create_and_get_event(self, facade: CalDAVFacade) -> None:
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        end = datetime(2030, 3, 1, 10, 0, tzinfo=UTC)
+
+        event = facade.create_event(
+            EventCreate(summary="Coffee", start=start, end=end)
+        )
+        assert event.status == EventStatus.CONFIRMED
+
+        fetched = facade.get_event(event.uid)
+        assert fetched is not None
+        assert fetched.summary == "Coffee"
+
+    def test_delete_event(self, facade: CalDAVFacade) -> None:
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        end = datetime(2030, 3, 1, 10, 0, tzinfo=UTC)
+
+        event = facade.create_event(
+            EventCreate(summary="Coffee", start=start, end=end)
+        )
+        assert facade.delete_event(event.uid) is True
+        assert facade.get_event(event.uid) is None
+
+
+# =============================================================================
+# Time log (integration)
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestTimeLogIntegration:
+    """Verify time log CRUD against Radicale."""
+
+    def test_create_and_list_time_log(self, facade: CalDAVFacade) -> None:
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        end = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
+        task = facade.create_task(TaskCreate(summary="Work on"))
+
+        entry = facade.create_time_log_entry(
+            TimeLogEntryCreate(start=start, end=end, task_id=task.uid)
+        )
+        assert entry.task_id == task.uid
+
+        entries = facade.list_time_log(task_id=task.uid)
+        assert len(entries) == 1
+
+
+# =============================================================================
+# Four-collection shape (integration)
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestFourCollectionsIntegration:
+    """Verify the four fixed collections exist and are separate."""
+
+    def test_each_collection_round_trips_independently(
+        self, facade: CalDAVFacade
+    ) -> None:
+        # Create one of each entity type
+        project = facade.create_project(ProjectCreate(name="P"))
+        task = facade.create_task(TaskCreate(summary="T"))
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        end = datetime(2030, 3, 1, 10, 0, tzinfo=UTC)
+        event = facade.create_event(
+            EventCreate(summary="E", start=start, end=end)
+        )
+        entry = facade.create_time_log_entry(
+            TimeLogEntryCreate(start=start, end=end, task_id=task.uid)
+        )
+
+        # Each lives in its own collection
+        assert facade.get_project(project.uid) is not None
+        assert facade.get_task(task.uid) is not None
+        assert facade.get_event(event.uid) is not None
+        assert facade.get_time_log_entry(entry.uid) is not None
+
+        # Lists return only the right type
+        assert len(facade.list_projects()) == 1
+        assert len(facade.list_tasks()) == 1
+        assert len(facade.list_events()) == 1  # standalone only; task has no scheduled_start
+        assert len(facade.list_time_log()) == 1
+

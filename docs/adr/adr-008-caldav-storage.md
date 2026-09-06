@@ -108,7 +108,7 @@ Use `icalendar` library for parsing and writing .ics files.
 
 ## Status
 
-Accepted
+Superseded by adr-012
 
 ## Consequences
 

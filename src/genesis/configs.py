@@ -63,14 +63,6 @@ class DAV(BaseModel):
     port: int = Field(default=DEFAULT_DAV_PORT, description="DAV server port.")
     username: str = Field(default="", description="Username for DAV authentication.")
     password: str = Field(default="", description="Password for DAV authentication.")
-    task_calendar: str = Field(
-        default="tasks",
-        description="Name of the calendar used for tasks.",
-    )
-    project_calendar_prefix: str = Field(
-        default="project:",
-        description="Prefix for project calendars.",
-    )
 
     @property
     def server_url(self) -> str:
@@ -236,6 +228,4 @@ def _build_dav(raw: dict, user: str) -> dict:
         or yaml_dav.get("username", user),  # Default to extracted user
         "password": os.environ.get("GENESIS__DAV__PASSWORD")
         or yaml_dav.get("password", DEFAULT_DAV_PASSWORD),
-        "task_calendar": yaml_dav.get("task_calendar", "tasks"),
-        "project_calendar_prefix": yaml_dav.get("project_calendar_prefix", "project:"),
     }

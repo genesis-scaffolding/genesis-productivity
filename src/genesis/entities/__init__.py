@@ -1,15 +1,24 @@
 """Domain entities for genesis productivity system."""
 
+from .event import Event, EventCreate, EventStatus, EventUpdate
 from .project import Project, ProjectCreate, ProjectStatus, ProjectUpdate
 from .task import Task, TaskCreate, TaskStatus, TaskUpdate
+from .time_log import TimeLogEntry, TimeLogEntryCreate, TimeLogEntryUpdate
 
 __all__ = [
-    "Task",
-    "TaskCreate",
-    "TaskStatus",
-    "TaskUpdate",
+    "Event",
+    "EventCreate",
+    "EventStatus",
+    "EventUpdate",
     "Project",
     "ProjectCreate",
     "ProjectStatus",
     "ProjectUpdate",
+    "Task",
+    "TaskCreate",
+    "TaskStatus",
+    "TaskUpdate",
+    "TimeLogEntry",
+    "TimeLogEntryCreate",
+    "TimeLogEntryUpdate",
 ]

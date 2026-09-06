@@ -54,8 +54,10 @@ test-integration:  ## Run integration tests only
 run-cli:  ## Run the CLI app
 	uv run genesis
 
-run-ui:  ## Start the Streamlit UI
-	uv run streamlit run src/genesis/ui/app.py
+ui:  ## Start the Streamlit UI for the default user
+	uv run streamlit run src/genesis/ui/app.py --server.address 127.0.0.1 --server.port 3000 --server.headless true
+
+run-ui: ui  ## Deprecated alias for `make ui`
 
 # -----------------------------------------------------------------------------
 # Utility

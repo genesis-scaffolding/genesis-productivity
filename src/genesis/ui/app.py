@@ -1,32 +1,47 @@
-"""Streamlit UI application."""
+"""Streamlit entry script for the genesis productivity UI.
+
+Sets the page config and runs ``st.navigation`` with one Productivity
+section containing the seven page modules. Pages are wired in
+``st.Page(...)`` so each gets a sidebar entry and a stable URL path.
+"""
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
 import streamlit as st
 
-from ..configs import CONFIG_PATH_ENV, resolve_config_path
-from ..core.facade import Facade
+_UI_DIR = Path(__file__).parent
+_PAGES = _UI_DIR / "pages"
 
 
-def main() -> None:
-    """Entry point for the Streamlit UI."""
-    # st.set_page_config must be the first st command
-    st.set_page_config(page_title="genesis")
-
-    yaml_path = os.environ.get(CONFIG_PATH_ENV) or str(resolve_config_path())
-    cfg = Facade(yaml_path).configs
-
-    st.title("genesis")
-
-    st.markdown(f"**user:** {cfg.user}")
-    st.markdown(f"**app_name:** {cfg.app_name}")
-    st.markdown(f"**paths.config:** `{cfg.paths.config}`")
-    st.markdown(f"**paths.data:** `{cfg.paths.data}`")
-    st.markdown(f"**paths.state:** `{cfg.paths.state}`")
-    st.markdown(f"**paths.cache:** `{cfg.paths.cache}`")
+def _page(path: Path, title: str, icon: str, url_path: str) -> st.Page:
+    return st.Page(str(path), title=title, icon=icon, url_path=url_path)
 
 
-if __name__ == "__main__":
-    main()
+# Eagerly initialize the Facade so Radicale is up before the first
+# page tries to use it. cache_resource on get_facade() guarantees
+# one instance for the session.
+from genesis.ui._state import get_facade  # noqa: E402
+
+facade = get_facade()
+st.session_state["facade"] = facade
+st.session_state["user"] = facade.configs.user
+
+st.set_page_config(
+    page_title="genesis",
+    layout="wide",
+    page_icon=":material/bolt:",
+)
+
+nav: dict[str, list[st.Page]] = {
+    "Productivity": [
+        _page(_PAGES / "dashboard.py", "Dashboard", ":material/dashboard:", "dashboard"),
+        _page(_PAGES / "projects.py", "Projects", ":material/folder:", "projects"),
+        _page(_PAGES / "tasks.py", "Tasks", ":material/checklist:", "tasks"),
+        _page(_PAGES / "calendar_page.py", "Calendar", ":material/calendar_month:", "calendar"),
+        _page(_PAGES / "journal.py", "Journal", ":material/article:", "journal"),
+    ],
+}
+
+st.navigation(nav).run()

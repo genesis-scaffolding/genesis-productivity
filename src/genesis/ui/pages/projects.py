@@ -10,16 +10,15 @@ while still being reachable from the list.
 
 from __future__ import annotations
 
-from datetime import date, datetime
-
 import streamlit as st
 
-from genesis.entities import ProjectStatus, TaskCreate, TaskStatus
+from genesis.entities import ProjectStatus, TaskStatus
 from genesis.ui._render import (
     maybe_show_delete_confirm,
     maybe_show_project_dialog,
     maybe_show_task_dialog,
     open_project_dialog,
+    open_task_dialog,
     request_delete,
     status_badge,
 )
@@ -178,62 +177,14 @@ def _render_detail(uid: str) -> None:
 
     st.write("")
 
-    # Quick-add task (full-featured; pre-attached to this project)
-    with st.form(f"pd_quickadd_{uid}", clear_on_submit=True):
-        st.subheader("Add task")
-        summary = st.text_input("Summary", placeholder="Task name…")
-        description = st.text_area(
-            "Description", placeholder="Optional details…", height=100
-        )
+    # Task list header with "+ Add Task" button (pre-attached to this project)
+    tasks_header_cols = st.columns([6, 1])
+    with tasks_header_cols[0]:
+        st.subheader("Project Tasks")
+    with tasks_header_cols[1]:
+        if st.button("+ Add Task", key=f"pd_add_task_{uid}"):
+            open_task_dialog(project_id=uid)
 
-        toggle_cols = st.columns(3)
-        has_schedule = toggle_cols[0].checkbox("Schedule on calendar")
-        has_deadline = toggle_cols[1].checkbox("Set hard deadline")
-        has_assigned = toggle_cols[2].checkbox("Assign to a day")
-
-        scheduled_start = scheduled_duration = hard_deadline = assigned_date = None
-        if has_schedule:
-            sched_row = st.columns([3, 1])
-            scheduled_start = sched_row[0].datetime_input(
-                "Start", value=datetime.now()
-            )
-            scheduled_duration = sched_row[1].number_input(
-                "Duration (min)", min_value=5, max_value=480, value=30
-            )
-        if has_deadline:
-            hard_deadline = st.datetime_input("Deadline", value=datetime.now())
-        if has_assigned:
-            assigned_date = st.date_input("Assigned", value=date.today())
-
-        action_cols = st.columns([1, 5, 1])
-        priority = action_cols[0].number_input(
-            "Priority", min_value=1, max_value=9, value=5
-        )
-        submitted = action_cols[2].form_submit_button("Add")
-
-        if submitted and summary.strip():
-            kwargs: dict = {
-                "summary": summary.strip(),
-                "description": description or None,
-                "priority": priority,
-                "project_id": uid,
-            }
-            if scheduled_start is not None:
-                kwargs["scheduled_start"] = scheduled_start
-            if scheduled_duration is not None:
-                kwargs["scheduled_duration"] = scheduled_duration
-            if hard_deadline is not None:
-                kwargs["hard_deadline"] = hard_deadline
-            if assigned_date is not None:
-                kwargs["assigned_date"] = assigned_date
-            caldav.create_task(TaskCreate(**kwargs))
-            st.toast(f"Added: {summary.strip()}")
-            st.rerun()
-
-    st.write("")
-
-    # Task list (shared component; project column hidden)
-    st.subheader("Project Tasks")
     sorted_tasks = sorted(
         tasks, key=lambda t: (t.status.value, -(t.priority or 5))
     )

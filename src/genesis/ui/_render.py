@@ -10,7 +10,7 @@ the next run; the dialog handles its own Save/Cancel and calls
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, time
 from enum import StrEnum
 from typing import Any
 
@@ -54,45 +54,80 @@ def _form_key(prefix: str, uid: str) -> str:
     return f"{prefix}_{uid or 'new'}"
 
 
-@st.dialog("New task")
-def _create_task_dialog() -> None:
-    """Internal: create-task dialog body."""
+def _close_create_task_dialog() -> None:
+    """Pop the create-dialog flags so the dialog dismisses on the next rerun."""
+    st.session_state.pop("open_task_dialog", None)
+    st.session_state.pop("create_task_project_id", None)
+
+
+def _close_edit_task_dialog() -> None:
+    st.session_state.pop("open_task_dialog", None)
+
+
+@st.dialog("New task", width="large")
+def _create_task_dialog(*, project_id: str | None = None) -> None:
+    """Internal: create-task dialog body.
+
+    Direct date/datetime inputs replace the previous checkbox gates.
+    A blank/None value for any date field means "leave it unset".
+    Pass ``project_id`` to pre-attach the new task to a project.
+    """
     facade = get_facade()
     projects = facade.caldav.list_projects()
     project_options = [(p.uid, p.name) for p in projects]
     project_labels = ["(none)"] + [name for _, name in project_options]
-    project_uids = [None] + [uid for uid, _ in project_options]
+    project_uids: list[str | None] = [None] + [uid for uid, _ in project_options]
 
-    summary = st.text_input("Summary", key="_ctd_summary")
-    description = st.text_area("Description", key="_ctd_description", height=120)
-    project_label = st.selectbox(
-        "Project", project_labels, key="_ctd_project", index=0
+    summary = st.text_input("Summary", key="_ntd_summary")
+    description = st.text_area(
+        "Description", key="_ntd_desc", height=100,
+        placeholder="Optional details…",
     )
-    project_uid = project_uids[project_labels.index(project_label)]
-    priority = st.number_input(
-        "Priority (1-9, 1=highest)", min_value=1, max_value=9, value=5,
-        key="_ctd_priority",
-    )
-    has_deadline = st.checkbox("Set hard deadline", key="_ctd_has_deadline")
-    hard_deadline: datetime | None = None
-    if has_deadline:
-        hard_deadline = st.datetime_input(
-            "Hard deadline", key="_ctd_deadline", value=datetime.now()
+
+    if project_id is not None and project_id in project_uids:
+        proj_idx = project_uids.index(project_id)
+        st.caption(f"Project: **{project_labels[proj_idx]}**")
+        selected_project_uid: str | None = project_id
+    else:
+        selected_label = st.selectbox(
+            "Project", project_labels, index=0, key="_ntd_proj"
         )
-    has_schedule = st.checkbox("Schedule on calendar", key="_ctd_has_schedule")
-    scheduled_start: datetime | None = None
-    scheduled_duration: int | None = None
-    if has_schedule:
+        selected_project_uid = project_uids[project_labels.index(selected_label)]
+
+    sched_cols = st.columns(2)
+    with sched_cols[0]:
+        st.caption("Schedule on calendar")
         scheduled_start = st.datetime_input(
-            "Start", key="_ctd_sched_start", value=datetime.now()
+            "scheduled_start", key="_ntd_sched", value=None,
+            label_visibility="collapsed",
         )
         scheduled_duration = st.number_input(
-            "Duration (minutes)", min_value=5, max_value=480, value=30,
-            key="_ctd_sched_dur",
+            "Duration (min)",
+            min_value=5, max_value=480, value=30,
+            key="_ntd_dur",
+        )
+    with sched_cols[1]:
+        st.caption("Hard deadline")
+        hard_deadline = st.date_input(
+            "hard_deadline", key="_ntd_dl", value=None,
+            label_visibility="collapsed", format="YYYY-MM-DD",
+        )
+        st.caption("Assigned")
+        assigned_date = st.date_input(
+            "assigned_date", key="_ntd_assigned", value=None,
+            label_visibility="collapsed", format="YYYY-MM-DD",
         )
 
-    cols = st.columns(2)
-    if cols[0].button("Create", type="primary", key="_ctd_create"):
+    priority = st.number_input(
+        "Priority", min_value=1, max_value=9, value=5, key="_ntd_prio"
+    )
+
+    st.divider()
+    action_cols = st.columns([1, 1, 6])
+    if action_cols[0].button("Cancel", key="_ntd_cancel"):
+        _close_create_task_dialog()
+        st.rerun()
+    if action_cols[1].button("Add", type="primary", key="_ntd_add"):
         if not summary.strip():
             st.error("Summary is required")
             return
@@ -102,22 +137,26 @@ def _create_task_dialog() -> None:
             TaskCreate(
                 summary=summary,
                 description=description or None,
-                hard_deadline=hard_deadline,
+                project_id=selected_project_uid,
                 scheduled_start=scheduled_start,
-                scheduled_duration=scheduled_duration,
+                scheduled_duration=(
+                    scheduled_duration if scheduled_start is not None else None
+                ),
+                hard_deadline=(
+                    datetime.combine(hard_deadline, time.min)
+                    if hard_deadline is not None
+                    else None
+                ),
+                assigned_date=assigned_date,
                 priority=priority,
-                project_id=project_uid,
             )
         )
-        st.session_state.pop("open_task_dialog", None)
+        _close_create_task_dialog()
         st.toast(f"Created task: {summary}")
         st.rerun()
-    if cols[1].button("Cancel", key="_ctd_cancel"):
-        st.session_state.pop("open_task_dialog", None)
-        st.rerun()
 
 
-@st.dialog("Edit task")
+@st.dialog("Edit task", width="large")
 def _edit_task_dialog(uid: str) -> None:
     """Internal: edit-task dialog body."""
     facade = get_facade()
@@ -125,7 +164,7 @@ def _edit_task_dialog(uid: str) -> None:
     if task is None:
         st.error("Task not found")
         if st.button("Close"):
-            st.session_state.pop("open_task_dialog", None)
+            _close_edit_task_dialog()
             st.rerun()
         return
 
@@ -133,7 +172,7 @@ def _edit_task_dialog(uid: str) -> None:
     projects = facade.caldav.list_projects()
     project_options = [(p.uid, p.name) for p in projects]
     project_labels = ["(none)"] + [name for _, name in project_options]
-    project_uids = [None] + [uid for _, uid in project_options]
+    project_uids: list[str | None] = [None] + [uid for _, uid in project_options]
     cur_idx = (
         project_uids.index(task.project_id)
         if task.project_id in project_uids
@@ -142,7 +181,8 @@ def _edit_task_dialog(uid: str) -> None:
 
     summary = st.text_input("Summary", value=task.summary, key=f"{kp}_summary")
     description = st.text_area(
-        "Description", value=task.description or "", key=f"{kp}_desc", height=140
+        "Description", value=task.description or "", key=f"{kp}_desc",
+        height=100,
     )
     project_label = st.selectbox(
         "Project", project_labels, key=f"{kp}_proj", index=cur_idx
@@ -157,82 +197,96 @@ def _edit_task_dialog(uid: str) -> None:
         key=f"{kp}_status",
     )
     priority = st.number_input(
-        "Priority (1-9)", min_value=1, max_value=9,
+        "Priority", min_value=1, max_value=9,
         value=task.priority or 5, key=f"{kp}_prio",
     )
-    has_deadline = st.checkbox(
-        "Set hard deadline",
-        value=task.hard_deadline is not None,
-        key=f"{kp}_has_dl",
-    )
-    hard_deadline = (
-        st.datetime_input(
-            "Hard deadline", key=f"{kp}_dl", value=task.hard_deadline or datetime.now()
+
+    sched_cols = st.columns(2)
+    with sched_cols[0]:
+        st.caption("Schedule on calendar")
+        scheduled_start = st.date_input(
+            "scheduled_start_date",
+            value=task.scheduled_start.date() if task.scheduled_start else None,
+            key=f"{kp}_sch_d", label_visibility="collapsed",
+            format="YYYY-MM-DD",
         )
-        if has_deadline
-        else None
-    )
-    has_schedule = st.checkbox(
-        "Schedule on calendar",
-        value=task.scheduled_start is not None,
-        key=f"{kp}_has_sch",
-    )
-    scheduled_start: datetime | None = None
-    scheduled_duration: int | None = None
-    if has_schedule:
-        scheduled_start = st.datetime_input(
-            "Start",
-            key=f"{kp}_sch_s",
-            value=task.scheduled_start or datetime.now(),
+        schedule_time = st.time_input(
+            "schedule_time",
+            value=task.scheduled_start.time() if task.scheduled_start else None,
+            key=f"{kp}_sch_t",
         )
         scheduled_duration = st.number_input(
-            "Duration (minutes)",
-            min_value=5,
-            max_value=480,
+            "Duration (min)", min_value=5, max_value=480,
             value=task.scheduled_duration or 30,
-            key=f"{kp}_sch_d",
+            key=f"{kp}_dur",
+        )
+    with sched_cols[1]:
+        st.caption("Hard deadline")
+        hard_deadline = st.date_input(
+            "hard_deadline",
+            value=task.hard_deadline,
+            key=f"{kp}_dl", label_visibility="collapsed",
+            format="YYYY-MM-DD",
+        )
+        st.caption("Assigned")
+        assigned_date = st.date_input(
+            "assigned_date",
+            value=task.assigned_date,
+            key=f"{kp}_assigned", label_visibility="collapsed",
+            format="YYYY-MM-DD",
         )
 
-    cols = st.columns([1, 1, 1])
-    if cols[0].button("Save", type="primary", key=f"{kp}_save"):
+    combined_scheduled: datetime | None = None
+    if scheduled_start is not None and schedule_time is not None:
+        combined_scheduled = datetime.combine(scheduled_start, schedule_time)
+
+    st.divider()
+    action_cols = st.columns([1, 1, 1, 6])
+    if action_cols[0].button("Save", type="primary", key=f"{kp}_save"):
         from genesis.entities import TaskUpdate
 
         new_status = TaskStatus(status_label)
-        facade.caldav.update_task(
-            uid,
-            TaskUpdate(
-                summary=summary,
-                description=description or None,
-                hard_deadline=hard_deadline,
-                clear_scheduled_start=(not has_schedule),
-                scheduled_start=scheduled_start,
-                scheduled_duration=scheduled_duration,
-                priority=priority,
-                status=new_status,
-                project_id=project_uid,
-                clear_project_id=(project_uid is None),
-            ),
-        )
-        st.session_state.pop("open_task_dialog", None)
+        update_kwargs: dict = {
+            "summary": summary,
+            "description": description or None,
+            "hard_deadline": hard_deadline,
+            "assigned_date": assigned_date,
+            "priority": priority,
+            "status": new_status,
+            "project_id": project_uid,
+            "clear_project_id": (project_uid is None),
+        }
+        if combined_scheduled is None and task.scheduled_start is not None:
+            update_kwargs["clear_scheduled_start"] = True
+        elif combined_scheduled is not None:
+            update_kwargs["scheduled_start"] = combined_scheduled
+            update_kwargs["scheduled_duration"] = scheduled_duration
+        facade.caldav.update_task(uid, TaskUpdate(**update_kwargs))
+        _close_edit_task_dialog()
         st.toast("Task updated")
         st.rerun()
-    if cols[1].button("Cancel", key=f"{kp}_cancel"):
-        st.session_state.pop("open_task_dialog", None)
+    if action_cols[1].button("Cancel", key=f"{kp}_cancel"):
+        _close_edit_task_dialog()
         st.rerun()
-    if cols[2].button("Delete", key=f"{kp}_del"):
+    if action_cols[2].button("Delete", key=f"{kp}_del"):
         facade.caldav.delete_task(uid)
-        st.session_state.pop("open_task_dialog", None)
+        _close_edit_task_dialog()
         st.toast("Task deleted")
         st.rerun()
 
 
-def open_task_dialog(uid: str | None = None) -> None:
-    """Open the task create-or-edit dialog. Pass uid to edit, None to create.
+def open_task_dialog(uid: str | None = None, *, project_id: str | None = None) -> None:
+    """Open the task create-or-edit dialog.
+
+    ``uid``: pass to edit; pass ``None`` (the default) to create.
+    ``project_id``: for create, pre-attach the new task to a project.
 
     Sets the trigger in session state and reruns so the dialog opens
     on the next render.
     """
     st.session_state["open_task_dialog"] = uid or ""
+    if project_id is not None:
+        st.session_state["create_task_project_id"] = project_id
     st.rerun()
 
 
@@ -247,7 +301,8 @@ def maybe_show_task_dialog() -> None:
         if uid:
             _edit_task_dialog(uid)
         else:
-            _create_task_dialog()
+            project_id = st.session_state.pop("create_task_project_id", None)
+            _create_task_dialog(project_id=project_id)
 
 
 # -----------------------------------------------------------------------------

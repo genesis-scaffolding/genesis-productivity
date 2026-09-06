@@ -7,10 +7,14 @@ from datetime import date, datetime, time, timedelta
 import streamlit as st
 
 from genesis.entities import EventStatus
+from genesis.ui._render import maybe_show_task_dialog
 from genesis.ui._state import get_facade
+from genesis.ui._table import render_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
+
+maybe_show_task_dialog()
 
 # --- Week navigation --------------------------------------------------------
 
@@ -103,34 +107,16 @@ for i, c in enumerate(strip_cols):
 
 st.write("")
 
-# --- Detail list: tap-into view of the week's events -----------------------
+# --- Detail list: this week's tasks via shared table component -------------
 
 with st.expander("This week in detail", expanded=True):
-    if not shadow_events:
-        st.info("No events scheduled this week.")
-    else:
-        for e in sorted(shadow_events, key=lambda e: e.start):
-            task_uid = e.task_id
-            task = caldav.get_task(task_uid) if task_uid else None
-            with st.container(border=True):
-                cols = st.columns([6, 2, 2])
-                with cols[0]:
-                    st.markdown(f"**{e.summary}**")
-                    if e.location:
-                        st.caption(f"📍 {e.location}")
-                with cols[1]:
-                    st.caption(
-                        f"{e.start:%a %Y-%m-%d}\n{e.start:%H:%M}–{e.end:%H:%M}"
-                    )
-                with cols[2]:
-                    if task and st.button("Open task", key=f"cal_open_{e.uid}"):
-                        st.session_state["open_task_dialog"] = task.uid
-                        st.rerun()
-
-
-# Render task dialog if a button above triggered it
-if "open_task_dialog" in st.session_state:
-    from genesis.ui._render import _edit_task_dialog
-
-    uid = st.session_state.pop("open_task_dialog")
-    _edit_task_dialog(uid)
+    week_tasks = [
+        t for t in caldav.list_tasks()
+        if t.scheduled_start is not None
+        and week_window_start <= t.scheduled_start < week_window_end
+    ]
+    week_tasks.sort(key=lambda t: t.scheduled_start or datetime.min)
+    render_tasks_table(
+        week_tasks, caldav=caldav, key="cal_this_week_tasks",
+        show_project_column=False,
+    )

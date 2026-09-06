@@ -18,21 +18,20 @@ if "cal_week" not in st.session_state:
     st.session_state["cal_week"] = date.today()
 
 today = date.today()
-header_cols = st.columns([1, 4, 1, 1, 1])
-with header_cols[0]:
+with st.container(horizontal=True, vertical_alignment="center"):
     st.title("Calendar")
-with header_cols[2]:
-    if st.button("Today", key="cal_today"):
-        st.session_state["cal_week"] = today
-        st.rerun()
-with header_cols[3]:
-    if st.button("◀ Prev", key="cal_prev"):
-        st.session_state["cal_week"] -= timedelta(days=7)
-        st.rerun()
-with header_cols[4]:
-    if st.button("Next ▶", key="cal_next"):
-        st.session_state["cal_week"] += timedelta(days=7)
-        st.rerun()
+    spacer_left, _, nav = st.columns([6, 0.5, 4])
+    with nav:
+        b1, b2, b3 = st.columns(3)
+        if b1.button("Today", key="cal_today"):
+            st.session_state["cal_week"] = today
+            st.rerun()
+        if b2.button("◀ Prev", key="cal_prev"):
+            st.session_state["cal_week"] -= timedelta(days=7)
+            st.rerun()
+        if b3.button("Next ▶", key="cal_next"):
+            st.session_state["cal_week"] += timedelta(days=7)
+            st.rerun()
 
 # Compute Monday of the current week
 week_start = st.session_state["cal_week"] - timedelta(days=st.session_state["cal_week"].weekday())

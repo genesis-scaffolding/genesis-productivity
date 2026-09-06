@@ -59,7 +59,7 @@ else:
         with st.container(border=True):
             cols = st.columns([1, 6, 2, 2])
             with cols[0]:
-                if st.button("Open", key=f"dash_open_{task.uid}", use_container_width=True):
+                if st.button("Open", key=f"dash_open_{task.uid}"):
                     st.session_state["open_task_dialog"] = task.uid
                     st.rerun()
             with cols[1]:

@@ -43,7 +43,7 @@ def _render_list() -> None:
 
     header_cols = st.columns([6, 1])
     with header_cols[1]:
-        if st.button("+ New Project", key="new_project_btn", use_container_width=True):
+        if st.button("+ New Project", key="new_project_btn"):
             open_project_dialog(None)
 
     projects = caldav.list_projects(sort_by=["status", "name"])
@@ -85,16 +85,14 @@ def _render_list() -> None:
                         with btn_cols[0]:
                             if st.button(
                                 "Open",
-                                key=f"proj_open_{project.uid}",
-                                use_container_width=True,
+                                key=f"proj_open_{project.uid}"
                             ):
                                 st.query_params["project"] = project.uid
                                 st.rerun()
                         with btn_cols[1]:
                             if st.button(
                                 "Delete",
-                                key=f"proj_del_{project.uid}",
-                                use_container_width=True,
+                                key=f"proj_del_{project.uid}"
                             ):
                                 request_delete(
                                     f"proj_{project.uid}",
@@ -118,23 +116,24 @@ def _render_detail(uid: str) -> None:
             st.rerun()
         return
 
-    # Breadcrumb
-    bc_cols = st.columns([1, 6])
-    with bc_cols[0]:
+    # Back button on its own row
+    back_col, _ = st.columns([1, 8])
+    with back_col:
         if st.button("← Back", key="pd_back"):
             st.query_params.pop("project", None)
             st.rerun()
-    with bc_cols[1]:
-        st.caption("Productivity > Projects")
+
+    # Breadcrumb + title + actions on the next row.
+    st.caption("Productivity > Projects")
+    header_cols = st.columns([8, 1, 1])
+    with header_cols[0]:
         st.title(project.name)
         status_badge(project.status)
-
-    action_cols = st.columns([1, 1, 6])
-    with action_cols[0]:
-        if st.button("Edit", key="pd_edit", use_container_width=True):
+    with header_cols[1]:
+        if st.button("Edit", key="pd_edit"):
             open_project_dialog(uid)
-    with action_cols[1]:
-        if st.button("Delete", key="pd_del", use_container_width=True):
+    with header_cols[2]:
+        if st.button("Delete", key="pd_del"):
             request_delete(
                 f"pd_{uid}",
                 f"project '{project.name}'",
@@ -187,7 +186,7 @@ def _render_detail(uid: str) -> None:
         priority = fcols[1].number_input(
             "Priority", min_value=1, max_value=9, value=5, label_visibility="collapsed"
         )
-        submitted = fcols[2].form_submit_button("Add", use_container_width=True)
+        submitted = fcols[2].form_submit_button("Add")
         if submitted and summary.strip():
             caldav.create_task(
                 TaskCreate(summary=summary.strip(), project_id=uid, priority=priority)
@@ -207,7 +206,7 @@ def _render_detail(uid: str) -> None:
                 cols = st.columns([1, 6, 1])
                 with cols[0]:
                     if st.button(
-                        "Open", key=f"pd_open_{task.uid}", use_container_width=True
+                        "Open", key=f"pd_open_{task.uid}"
                     ):
                         open_task_dialog(task.uid)
                 with cols[1]:

@@ -238,7 +238,7 @@ def _render_edit(uid: str) -> None:
             f"Date: {entry.date.isoformat()} (set at creation, not editable)"
         )
         cols = st.columns([1, 1, 6])
-        if cols[0].form_submit_button("Save", use_container_width=True):
+        if cols[0].form_submit_button("Save"):
             new_type = EntryType(ftype) if ftype != "(none)" else None
             entry.title = ftitle or None
             entry.type = new_type
@@ -250,7 +250,7 @@ def _render_edit(uid: str) -> None:
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
-        if cols[1].form_submit_button("Cancel", use_container_width=True):
+        if cols[1].form_submit_button("Cancel"):
             st.query_params.pop("edit", None)
             st.rerun()
 
@@ -276,7 +276,7 @@ def _render_create(uid: str) -> None:
         )
         st.caption(f"Date: {today.isoformat()} (set at creation, not editable)")
         cols = st.columns([1, 1, 6])
-        if cols[0].form_submit_button("Create", use_container_width=True):
+        if cols[0].form_submit_button("Create"):
             new_type = EntryType(ftype) if ftype != "(none)" else None
             if (
                 new_type == EntryType.DAILY
@@ -302,7 +302,7 @@ def _render_create(uid: str) -> None:
                     st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
-        if cols[1].form_submit_button("Cancel", use_container_width=True):
+        if cols[1].form_submit_button("Cancel"):
             st.query_params.clear()
             st.rerun()
 

@@ -92,7 +92,7 @@ def _create_task_dialog() -> None:
         )
 
     cols = st.columns(2)
-    if cols[0].button("Create", type="primary", key="_ctd_create", use_container_width=True):
+    if cols[0].button("Create", type="primary", key="_ctd_create"):
         if not summary.strip():
             st.error("Summary is required")
             return
@@ -112,7 +112,7 @@ def _create_task_dialog() -> None:
         st.session_state.pop("open_task_dialog", None)
         st.toast(f"Created task: {summary}")
         st.rerun()
-    if cols[1].button("Cancel", key="_ctd_cancel", use_container_width=True):
+    if cols[1].button("Cancel", key="_ctd_cancel"):
         st.session_state.pop("open_task_dialog", None)
         st.rerun()
 
@@ -194,7 +194,7 @@ def _edit_task_dialog(uid: str) -> None:
         )
 
     cols = st.columns([1, 1, 1])
-    if cols[0].button("Save", type="primary", key=f"{kp}_save", use_container_width=True):
+    if cols[0].button("Save", type="primary", key=f"{kp}_save"):
         from genesis.entities import TaskUpdate
 
         new_status = TaskStatus(status_label)
@@ -216,10 +216,10 @@ def _edit_task_dialog(uid: str) -> None:
         st.session_state.pop("open_task_dialog", None)
         st.toast("Task updated")
         st.rerun()
-    if cols[1].button("Cancel", key=f"{kp}_cancel", use_container_width=True):
+    if cols[1].button("Cancel", key=f"{kp}_cancel"):
         st.session_state.pop("open_task_dialog", None)
         st.rerun()
-    if cols[2].button("Delete", key=f"{kp}_del", use_container_width=True):
+    if cols[2].button("Delete", key=f"{kp}_del"):
         facade.caldav.delete_task(uid)
         st.session_state.pop("open_task_dialog", None)
         st.toast("Task deleted")
@@ -261,7 +261,7 @@ def _create_project_dialog() -> None:
     name = st.text_input("Name", key="_cpd_name")
     description = st.text_area("Description", key="_cpd_desc", height=160)
     cols = st.columns([1, 1])
-    if cols[0].button("Create", type="primary", key="_cpd_save", use_container_width=True):
+    if cols[0].button("Create", type="primary", key="_cpd_save"):
         if not name.strip():
             st.error("Name is required")
             return
@@ -271,7 +271,7 @@ def _create_project_dialog() -> None:
         st.session_state.pop("open_project_dialog", None)
         st.toast(f"Created project: {name}")
         st.rerun()
-    if cols[1].button("Cancel", key="_cpd_cancel", use_container_width=True):
+    if cols[1].button("Cancel", key="_cpd_cancel"):
         st.session_state.pop("open_project_dialog", None)
         st.rerun()
 
@@ -314,7 +314,7 @@ def _edit_project_dialog(uid: str) -> None:
     )
 
     cols = st.columns([1, 1, 1])
-    if cols[0].button("Save", type="primary", key=f"{kp}_save", use_container_width=True):
+    if cols[0].button("Save", type="primary", key=f"{kp}_save"):
         from genesis.entities import ProjectUpdate
 
         facade.caldav.update_project(
@@ -330,10 +330,10 @@ def _edit_project_dialog(uid: str) -> None:
         st.session_state.pop("open_project_dialog", None)
         st.toast("Project updated")
         st.rerun()
-    if cols[1].button("Cancel", key=f"{kp}_cancel", use_container_width=True):
+    if cols[1].button("Cancel", key=f"{kp}_cancel"):
         st.session_state.pop("open_project_dialog", None)
         st.rerun()
-    if cols[2].button("Delete", key=f"{kp}_del", use_container_width=True):
+    if cols[2].button("Delete", key=f"{kp}_del"):
         facade.caldav.delete_project(uid)
         st.session_state.pop("open_project_dialog", None)
         st.toast(f"Deleted project: {name}")
@@ -365,11 +365,11 @@ def maybe_show_project_dialog() -> None:
 def _delete_confirm_dialog(label: str, kind: str, callback: Callable[[], Any]) -> None:
     st.write(f"Delete **{label}**? This cannot be undone.")
     cols = st.columns(2)
-    if cols[0].button("Delete", type="primary", key=f"delcfm_{kind}", use_container_width=True):
+    if cols[0].button("Delete", type="primary", key=f"delcfm_{kind}"):
         callback()
         st.session_state.pop("pending_delete", None)
         st.rerun()
-    if cols[1].button("Cancel", key=f"delcn_{kind}", use_container_width=True):
+    if cols[1].button("Cancel", key=f"delcn_{kind}"):
         st.session_state.pop("pending_delete", None)
         st.rerun()
 

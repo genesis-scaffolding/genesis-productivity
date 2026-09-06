@@ -1,11 +1,18 @@
-"""Tasks page: global list with quick-add and per-row dialog actions."""
+"""Tasks page: global list with quick-add and inline edit table.
+
+The ``st.data_editor`` is the single source of truth for task rows.
+Inline edits (Summary, Priority, Scheduled, Deadline, Status) flow
+through the ``on_change`` callback which reads
+``st.session_state["tasks_editor"]["edited_rows"]``. Per-row Open and
+Delete buttons live in the same table via ``ButtonColumn``.
+"""
 
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from genesis.entities import TaskCreate, TaskStatus
+from genesis.entities import TaskCreate, TaskStatus, TaskUpdate
 from genesis.ui._render import (
     maybe_show_delete_confirm,
     maybe_show_task_dialog,
@@ -27,9 +34,13 @@ st.caption("Your global backlog and scheduled work.")
 
 with st.form("tasks_quickadd", clear_on_submit=True):
     fcols = st.columns([6, 2, 1])
-    summary = fcols[0].text_input("Summary", label_visibility="collapsed", placeholder="Task name…")
-    priority = fcols[1].number_input("Priority", min_value=1, max_value=9, value=5, label_visibility="collapsed")
-    submitted = fcols[2].form_submit_button("Add", use_container_width=True)
+    summary = fcols[0].text_input(
+        "Summary", label_visibility="collapsed", placeholder="Task name…"
+    )
+    priority = fcols[1].number_input(
+        "Priority", min_value=1, max_value=9, value=5, label_visibility="collapsed"
+    )
+    submitted = fcols[2].form_submit_button("Add")
     if submitted and summary.strip():
         caldav.create_task(TaskCreate(summary=summary.strip(), priority=priority))
         st.toast(f"Added: {summary.strip()}")
@@ -57,7 +68,8 @@ tasks = caldav.list_tasks()
 if active_statuses:
     tasks = [t for t in tasks if t.status.value in active_statuses]
 
-# Build dataframe for the data editor
+# Build dataframe for the data editor. The uid is hidden but needed
+# by the inline-edit handler to look up the task by row position.
 projects = {p.uid: p.name for p in caldav.list_projects()}
 rows: list[dict] = []
 for t in tasks:
@@ -66,87 +78,129 @@ for t in tasks:
             "uid": t.uid,
             "Summary": t.summary,
             "Project": projects.get(t.project_id, "—") if t.project_id else "—",
-            "Priority": t.priority or 5,
+            "Priority": t.priority if t.priority is not None else 5,
             "Scheduled": t.scheduled_start,
             "Deadline": t.hard_deadline,
             "Status": t.status.value,
+            "actions": ["Edit", "Delete"],
         }
     )
 df = pd.DataFrame(rows)
 
+
+def _handle_action() -> None:
+    """Row action (Edit / Delete) handler.
+
+    Reads the click info stashed by the ButtonColumn callback and
+    dispatches to the dialog helper or the delete-confirm helper.
+    """
+    click = st.session_state.get("task_action")
+    if not click:
+        return
+    row_idx = click["row"]
+    label = click["label"]
+    if row_idx >= len(tasks):
+        return
+    target = tasks[row_idx]
+    if label == "Edit":
+        open_task_dialog(target.uid)
+    elif label == "Delete":
+        request_delete(
+            f"tasks_{target.uid}",
+            f"task '{target.summary}'",
+            lambda uid=target.uid: caldav.delete_task(uid),
+        )
+
+
+def _handle_inline_edit() -> None:
+    """Apply inline cell edits to the backend.
+
+    Reads the data editor's ``edited_rows`` and issues a single
+    ``update_task`` per changed row covering all changed columns.
+    A rerun reloads the table from the backend so the next render
+    reflects the saved state and the in-flight edits clear.
+    """
+    state = st.session_state.get("tasks_editor") or {}
+    edited_rows = state.get("edited_rows") or {}
+    if not edited_rows:
+        return
+    any_changed = False
+    for row_idx_str, changes in edited_rows.items():
+        row_idx = int(row_idx_str)
+        if row_idx >= len(tasks):
+            continue
+        original = tasks[row_idx]
+
+        update: TaskUpdate = TaskUpdate()
+        touched = False
+        if "Summary" in changes:
+            update = update.model_copy(update={"summary": str(changes["Summary"])})
+            touched = True
+        if "Priority" in changes:
+            update = update.model_copy(update={"priority": int(changes["Priority"])})
+            touched = True
+        if "Status" in changes:
+            update = update.model_copy(
+                update={"status": TaskStatus(str(changes["Status"]))}
+            )
+            touched = True
+        if "Scheduled" in changes:
+            new_val = changes["Scheduled"]
+            scheduled = (
+                None
+                if pd.isna(new_val)
+                else pd.Timestamp(new_val).to_pydatetime()
+            )
+            update = update.model_copy(update={"scheduled_start": scheduled})
+            touched = True
+        if "Deadline" in changes:
+            new_val = changes["Deadline"]
+            deadline = (
+                None
+                if pd.isna(new_val)
+                else pd.Timestamp(new_val).to_pydatetime()
+            )
+            update = update.model_copy(update={"hard_deadline": deadline})
+            touched = True
+
+        if not touched:
+            continue
+        caldav.update_task(original.uid, update)
+        any_changed = True
+    if any_changed:
+        st.rerun()
+
+
 if df.empty:
     st.info("No tasks match the current filter.")
 else:
-    edited = st.data_editor(
+    st.data_editor(
         df,
         column_config={
             "uid": None,  # hidden
             "Summary": st.column_config.TextColumn("Summary", width="large"),
             "Project": st.column_config.TextColumn("Project", disabled=True),
-            "Priority": st.column_config.NumberColumn("Priority", min_value=1, max_value=9),
+            "Priority": st.column_config.NumberColumn(
+                "Priority", min_value=1, max_value=9
+            ),
             "Scheduled": st.column_config.DatetimeColumn(
-                "Scheduled", format="YYYY-MM-DD HH:mm", disabled=True
+                "Scheduled", format="YYYY-MM-DD HH:mm"
             ),
             "Deadline": st.column_config.DatetimeColumn(
-                "Deadline", format="YYYY-MM-DD", disabled=True
+                "Deadline", format="YYYY-MM-DD"
             ),
             "Status": st.column_config.SelectboxColumn(
                 "Status",
                 options=statuses_all,
                 required=True,
             ),
+            "actions": st.column_config.ButtonColumn(
+                "Actions",
+                on_click=_handle_action,
+                key="task_action",
+            ),
         },
         hide_index=True,
-        use_container_width=True,
+        on_change=_handle_inline_edit,
         key="tasks_editor",
     )
-
-    # Apply inline edits: status, summary, priority
-    if edited is not None:
-        edited_rows = edited.to_dict(orient="records")
-        for row in edited_rows:
-            uid = str(row["uid"])
-            orig = next((t for t in tasks if t.uid == uid), None)
-            if orig is None:
-                continue
-            new_status = TaskStatus(str(row["Status"]))
-            new_summary = str(row["Summary"])
-            new_prio = int(row["Priority"])
-            changed = (
-                new_status != orig.status
-                or new_summary != orig.summary
-                or new_prio != (orig.priority or 5)
-            )
-            if not changed:
-                continue
-            from genesis.entities import TaskUpdate
-
-            caldav.update_task(
-                uid,
-                TaskUpdate(
-                    summary=new_summary,
-                    priority=new_prio,
-                    status=new_status,
-                ),
-            )
-            st.rerun()
-
-# --- Row actions: edit / delete --------------------------------------------
-
-if not df.empty:
-    st.divider()
-    st.subheader("Actions")
-    for t in tasks:
-        c = st.columns([6, 1, 1])
-        with c[0]:
-            st.markdown(f"**{t.summary}**")
-        with c[1]:
-            if st.button("Edit", key=f"tasks_edit_{t.uid}", use_container_width=True):
-                open_task_dialog(t.uid)
-        with c[2]:
-            if st.button("Delete", key=f"tasks_del_{t.uid}", use_container_width=True):
-                request_delete(
-                    f"tasks_{t.uid}",
-                    f"task '{t.summary}'",
-                    lambda uid=t.uid: caldav.delete_task(uid),
-                )

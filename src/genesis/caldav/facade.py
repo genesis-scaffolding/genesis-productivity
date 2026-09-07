@@ -122,11 +122,13 @@ class CalDAVFacade:
         project_id: str | None = None,
         status=None,
         search: str | None = None,
+        start=None,
+        end=None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):
         return tasks.list_tasks(
-            self, project_id, status, search, sort_by, sort_order
+            self, project_id, status, search, start, end, sort_by, sort_order
         )
 
     def update_task(self, uid: str, data):
@@ -150,11 +152,13 @@ class CalDAVFacade:
         task_id: str | None = None,
         status=None,
         search: str | None = None,
+        start=None,
+        end=None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):
         return events.list_events(
-            self, task_id, status, search, sort_by, sort_order
+            self, task_id, status, search, start, end, sort_by, sort_order
         )
 
     def update_event(self, uid: str, data):

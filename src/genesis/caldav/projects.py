@@ -88,10 +88,29 @@ def list_projects(
     sort_by: list[str] | None = None,
     sort_order: str = "asc",
 ) -> list[Project]:
-    """List all projects, optionally filtered and sorted."""
-    projects: list[Project] = []
+    """List projects with optional filters using server-side calendar-query
+    (RFC 4791 REPORT) where possible.
+
+    Filters applied server-side:
+        - status -> STATUS exact match
+        - search -> SUMMARY substring match (SUMMARY = project name)
+
+    DESCRIPTION substring search is not exposed; see list_events.
+    """
     cal = _get_calendar(facade)
-    for obj in cal.objects():
+    searcher = cal.searcher(
+        todo=True,
+        include_completed=True,
+    )
+    if status is not None:
+        searcher.add_property_filter("STATUS", status.value, operator="==")
+    if search:
+        searcher.add_property_filter("SUMMARY", search, operator="contains")
+
+    objects = searcher.search()
+
+    projects: list[Project] = []
+    for obj in objects:
         try:
             component = obj.icalendar_component
         except NotFoundError:
@@ -103,22 +122,16 @@ def list_projects(
         except Exception:
             continue
 
-    if status is not None:
-        projects = [p for p in projects if p.status == status]
-    if search:
-        needle = search.lower()
-        projects = [
-            p
-            for p in projects
-            if needle in p.name.lower()
-            or (p.description and needle in p.description.lower())
-        ]
     if sort_by:
         for key in reversed(sort_by):
             projects.sort(
                 key=lambda p, k=key: getattr(p, k, "") or "",
                 reverse=(sort_order == "desc"),
             )
+    else:
+        # Default: stable order by (name, uid) so the projects page has
+        # a stable render order.
+        projects.sort(key=lambda p: (p.name, p.uid))
     return projects
 
 

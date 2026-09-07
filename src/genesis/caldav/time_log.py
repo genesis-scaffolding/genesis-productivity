@@ -81,9 +81,22 @@ def list_time_log(
     sort_by: list[str] | None = None,
     sort_order: str = "asc",
 ) -> list[TimeLogEntry]:
-    """List time log entries, optionally filtered by task_id."""
+    """List time log entries, optionally filtered by task_id.
+
+    Filter applied server-side:
+        - task_id -> X-TASK-ID exact match
+
+    Time log entries have no SUMMARY, so search is not applicable.
+    """
+    cal = _get_calendar(facade)
+    searcher = cal.searcher(event=True, include_completed=True)
+    if task_id is not None:
+        searcher.add_property_filter("X-TASK-ID", task_id, operator="==")
+
+    objects = searcher.search()
+
     entries: list[TimeLogEntry] = []
-    for obj in _get_calendar(facade).objects():
+    for obj in objects:
         try:
             component = obj.icalendar_component
         except NotFoundError:
@@ -95,14 +108,15 @@ def list_time_log(
         except Exception:
             continue
 
-    if task_id is not None:
-        entries = [e for e in entries if e.task_id == task_id]
     if sort_by:
         for key in reversed(sort_by):
             entries.sort(
                 key=lambda e, k=key: getattr(e, k, "") or "",
                 reverse=(sort_order == "desc"),
             )
+    else:
+        # Default: stable order by (start, uid). Newest entries on top.
+        entries.sort(key=lambda e: (e.start, e.uid), reverse=True)
     return entries
 
 

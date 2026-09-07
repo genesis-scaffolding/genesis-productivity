@@ -7,14 +7,11 @@ from datetime import date, datetime, time, timedelta
 import streamlit as st
 
 from genesis.entities import EventStatus
-from genesis.ui._render import maybe_show_task_dialog
 from genesis.ui._state import get_facade
 from genesis.ui._table import render_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
-
-maybe_show_task_dialog()
 
 # --- Week navigation --------------------------------------------------------
 
@@ -50,11 +47,14 @@ st.write("")
 week_window_start = datetime.combine(week_start, time.min)
 week_window_end = datetime.combine(week_end + timedelta(days=1), time.min)
 
-all_events = caldav.list_events(status=EventStatus.CONFIRMED)
-# Only shadow events (have task_id) for the calendar — those are the
-# time-blocked tasks. Standalone events would also show, but per the
-# design those aren't currently used; include them anyway for completeness.
-shadow_events = [e for e in all_events if e.start < week_window_end and e.end > week_window_start]
+# Server-side time-range filter: VEVENT overlap with the week window
+# (RFC 4791 §9.9). Both standalone and shadow (task_id set) events are
+# returned; the design deliberately shows both kinds.
+shadow_events = caldav.list_events(
+    status=EventStatus.CONFIRMED,
+    start=week_window_start,
+    end=week_window_end,
+)
 
 
 def _event_day(e) -> date:
@@ -110,8 +110,14 @@ st.write("")
 # --- Detail list: this week's tasks via shared table component -------------
 
 with st.expander("This week in detail", expanded=True):
+    # Server-side time-range narrows to tasks whose DTSTART/DUE/DTEND
+    # falls in the week. The server-side result is a SUPERSET of
+    # "scheduled this week" (RFC 4791 VTODO time-range matches any of
+    # those three anchors), so we additionally client-side refine to
+    # tasks whose scheduled_start is strictly in the window.
+    week_tasks = caldav.list_tasks(start=week_window_start, end=week_window_end)
     week_tasks = [
-        t for t in caldav.list_tasks()
+        t for t in week_tasks
         if t.scheduled_start is not None
         and week_window_start <= t.scheduled_start < week_window_end
     ]

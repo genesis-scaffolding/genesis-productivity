@@ -230,6 +230,132 @@ class TestTaskSorting:
         assert summaries == sorted(summaries)
 
 
+@pytest.mark.integration
+class TestServerSideFilters:
+    """Verify that list_* uses server-side calendar-query against Radicale.
+
+    These tests check filters that the new searcher-based implementation
+    pushes down to RFC 4791 REPORT:
+      - VTODO X-PROJECT-ID exact match
+      - VTODO time-range (DTSTART/DUE/DTEND within window)
+      - VEVENT time-range (event overlap with window)
+    """
+
+    def test_tasks_filter_by_project_id_server_side(
+        self, facade: CalDAVFacade
+    ) -> None:
+        """list_tasks(project_id=uid) returns only tasks with that X-PROJECT-ID."""
+        proj_a = facade.create_project(ProjectCreate(name="Alpha"))
+        proj_b = facade.create_project(ProjectCreate(name="Beta"))
+
+        facade.create_task(TaskCreate(summary="A-1", project_id=proj_a.uid))
+        facade.create_task(TaskCreate(summary="A-2", project_id=proj_a.uid))
+        facade.create_task(TaskCreate(summary="B-1", project_id=proj_b.uid))
+
+        alpha_tasks = facade.list_tasks(project_id=proj_a.uid)
+        assert {t.summary for t in alpha_tasks} == {"A-1", "A-2"}
+
+        beta_tasks = facade.list_tasks(project_id=proj_b.uid)
+        assert {t.summary for t in beta_tasks} == {"B-1"}
+
+    def test_tasks_time_range_filter_server_side(
+        self, facade: CalDAVFacade
+    ) -> None:
+        """list_tasks(start=..., end=...) narrows to tasks with DTSTART/DUE/DTEND in window.
+
+        The server-side filter is a SUPERSET of DTSTART-only matching; we
+        additionally apply a client-side refinement to scheduled_start.
+        """
+        from genesis.entities import TaskUpdate
+
+        # In-window: scheduled Tuesday at 10:00
+        in_window = facade.create_task(TaskCreate(summary="In window"))
+        tuesday_10 = datetime(2026, 9, 8, 10, 0, tzinfo=UTC)
+        facade.update_task(
+            in_window.uid, TaskUpdate(scheduled_start=tuesday_10)
+        )
+
+        # Out of window: scheduled the following week
+        next_week = facade.create_task(TaskCreate(summary="Next week"))
+        next_monday_10 = datetime(2026, 9, 14, 10, 0, tzinfo=UTC)
+        facade.update_task(
+            next_week.uid, TaskUpdate(scheduled_start=next_monday_10)
+        )
+
+        # In-window by DUE only (no scheduled_start)
+        due_in_window = facade.create_task(TaskCreate(summary="Due in window"))
+        next_monday_due = datetime(2026, 9, 13, 23, 59, tzinfo=UTC)
+        facade.update_task(
+            due_in_window.uid,
+            TaskUpdate(hard_deadline=next_monday_due, clear_scheduled_start=True),
+        )
+
+        week_start = datetime(2026, 9, 7, 0, 0, tzinfo=UTC)
+        week_end = datetime(2026, 9, 14, 0, 0, tzinfo=UTC)
+        week_tasks = facade.list_tasks(start=week_start, end=week_end)
+
+        # Server returns in-window AND due-in-window (by DUE).
+        uids = {t.uid for t in week_tasks}
+        assert in_window.uid in uids
+        assert due_in_window.uid in uids
+        assert next_week.uid not in uids
+
+        # Apply the same strict DTSTART refinement the calendar page does.
+        scheduled_in_window = [
+            t for t in week_tasks
+            if t.scheduled_start is not None
+            and week_start <= t.scheduled_start < week_end
+        ]
+        assert {t.summary for t in scheduled_in_window} == {"In window"}
+
+    def test_events_time_range_filter_server_side(
+        self, facade: CalDAVFacade
+    ) -> None:
+        """list_events(start=..., end=...) returns events that overlap the window."""
+        from genesis.entities import EventCreate
+
+        # Event fully inside the window
+        facade.create_event(EventCreate(
+            summary="Mid-week meeting",
+            start=datetime(2026, 9, 9, 10, 0, tzinfo=UTC),
+            end=datetime(2026, 9, 9, 11, 0, tzinfo=UTC),
+        ))
+        # Event that starts before the window and ends inside it
+        facade.create_event(EventCreate(
+            summary="Overlapping start",
+            start=datetime(2026, 9, 6, 23, 0, tzinfo=UTC),
+            end=datetime(2026, 9, 7, 1, 0, tzinfo=UTC),
+        ))
+        # Event entirely before the window
+        facade.create_event(EventCreate(
+            summary="Before window",
+            start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+            end=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
+        ))
+        # Event entirely after the window
+        facade.create_event(EventCreate(
+            summary="After window",
+            start=datetime(2026, 9, 20, 10, 0, tzinfo=UTC),
+            end=datetime(2026, 9, 20, 11, 0, tzinfo=UTC),
+        ))
+
+        week_start = datetime(2026, 9, 7, 0, 0, tzinfo=UTC)
+        week_end = datetime(2026, 9, 14, 0, 0, tzinfo=UTC)
+        week_events = facade.list_events(
+            start=week_start, end=week_end,
+            status=EventStatus.CONFIRMED,
+        )
+
+        summaries = {e.summary for e in week_events}
+        assert "Mid-week meeting" in summaries
+        # Overlapping-start was entirely before the window (start=Sun 23:00,
+        # end=Mon 01:00). The Mon 01:00 end IS within [Mon 00:00, Mon+7 00:00),
+        # so RFC 4791 §9.9 VEVENT overlap keeps this event.
+        assert "Overlapping start" in summaries
+        assert "Before window" not in summaries
+        assert "After window" not in summaries
+
+
 # =============================================================================
 # Project tests
 # =============================================================================

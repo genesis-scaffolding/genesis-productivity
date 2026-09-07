@@ -21,7 +21,6 @@ st.title("Dashboard")
 # --- Cards: today + active projects -----------------------------------------
 
 all_tasks = caldav.list_tasks()
-all_projects = caldav.list_projects()
 today = date.today()
 today_start = datetime.combine(today, time.min)
 today_end = datetime.combine(today, time.max)
@@ -33,7 +32,8 @@ today_tasks = [
     or (t.assigned_date == today)
     or (t.hard_deadline and today_start <= t.hard_deadline <= today_end)
 ]
-active_projects = [p for p in all_projects if p.status == ProjectStatus.IN_PROGRESS]
+# Server-side STATUS filter for the active-projects count.
+active_projects = caldav.list_projects(status=ProjectStatus.IN_PROGRESS)
 
 cols = st.columns(2, gap="medium")
 with cols[0]:

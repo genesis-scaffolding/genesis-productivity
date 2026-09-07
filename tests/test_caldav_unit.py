@@ -556,9 +556,10 @@ class TestNoDeleteOnUpdate:
 
 
 def _stale_then_good_calendar(good_components: list) -> MagicMock:
-    """Build a mock calendar whose .objects() yields a stale object first
-    (raises NotFoundError on .icalendar_component) followed by good
-    objects whose .icalendar_component returns the provided components.
+    """Build a mock calendar whose .searcher().search() yields a stale
+    object first (raises NotFoundError on .icalendar_component) followed
+    by good objects whose .icalendar_component returns the provided
+    components.
     """
     stale = MagicMock()
     type(stale).icalendar_component = PropertyMock(
@@ -571,8 +572,12 @@ def _stale_then_good_calendar(good_components: list) -> MagicMock:
         type(obj).icalendar_component = PropertyMock(return_value=comp)
         good_objs.append(obj)
 
+    searcher = MagicMock()
+    searcher.add_property_filter = MagicMock()
+    searcher.search = MagicMock(return_value=[stale, *good_objs])
+
     cal = MagicMock()
-    cal.objects = MagicMock(return_value=[stale, *good_objs])
+    cal.searcher = MagicMock(return_value=searcher)
     return cal
 
 

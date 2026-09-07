@@ -8,6 +8,7 @@ through update_task, not via direct event writes.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from caldav.lib.error import NotFoundError
@@ -84,12 +85,43 @@ def list_events(
     task_id: str | None = None,
     status: EventStatus | None = None,
     search: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
     sort_by: list[str] | None = None,
     sort_order: str = "asc",
 ) -> list[Event]:
-    """List events with optional filters."""
+    """List events with optional filters using server-side calendar-query
+    (RFC 4791 REPORT) where possible.
+
+    Filters applied server-side:
+        - task_id   -> X-TASK-ID exact match
+        - status    -> STATUS exact match
+        - search    -> SUMMARY substring match
+        - start/end -> VEVENT time-range overlap (RFC 4791 §9.9)
+
+    DESCRIPTION substring search is not exposed because CalDAV REPORT
+    AND's PropFilter clauses, so OR-matching across two properties
+    requires two REPORTs. The single-property SUMMARY filter covers the
+    primary use case (search by title).
+    """
+    cal = _get_calendar(facade)
+    searcher = cal.searcher(
+        event=True,
+        include_completed=True,
+        start=start,
+        end=end,
+    )
+    if task_id is not None:
+        searcher.add_property_filter("X-TASK-ID", task_id, operator="==")
+    if status is not None:
+        searcher.add_property_filter("STATUS", status.value, operator="==")
+    if search:
+        searcher.add_property_filter("SUMMARY", search, operator="contains")
+
+    objects = searcher.search()
+
     events: list[Event] = []
-    for obj in _get_calendar(facade).objects():
+    for obj in objects:
         try:
             component = obj.icalendar_component
         except NotFoundError:
@@ -104,24 +136,15 @@ def list_events(
         except Exception:
             continue
 
-    if task_id is not None:
-        events = [e for e in events if e.task_id == task_id]
-    if status is not None:
-        events = [e for e in events if e.status == status]
-    if search:
-        needle = search.lower()
-        events = [
-            e
-            for e in events
-            if needle in e.summary.lower()
-            or (e.description and needle in e.description.lower())
-        ]
     if sort_by:
         for key in reversed(sort_by):
             events.sort(
                 key=lambda e, k=key: getattr(e, k, "") or "",
                 reverse=(sort_order == "desc"),
             )
+    else:
+        # Default stable order by (start, uid).
+        events.sort(key=lambda e: (e.start, e.uid))
     return events
 
 

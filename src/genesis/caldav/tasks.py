@@ -9,7 +9,7 @@ time-blocked tasks render as appointments in off-the-shelf CalDAV clients.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from caldav.lib.error import NotFoundError
@@ -162,12 +162,47 @@ def list_tasks(
     project_id: str | None = None,
     status: TaskStatus | None = None,
     search: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
     sort_by: list[str] | None = None,
     sort_order: str = "asc",
 ) -> list[Task]:
-    """List tasks with optional filters."""
+    """List tasks with optional filters using server-side calendar-query
+    (RFC 4791 REPORT) where possible.
+
+    Filters applied server-side:
+        - project_id -> X-PROJECT-ID exact match
+        - status     -> STATUS exact match
+        - search     -> SUMMARY substring match
+        - start/end  -> VTODO time-range (RFC 4791 §9.9). Matches tasks
+          whose DTSTART/DUE/DTEND falls in [start, end). The server-side
+          range is a SUPERSET of "scheduled in window"; callers wanting
+          strict DTSTART-only matching should additionally client-side
+          filter by ``task.scheduled_start in [start, end)``.
+
+    DESCRIPTION substring search is not exposed; see list_events.
+
+    ``include_completed=True`` is set because the previous full-collection
+    walk returned both active and completed tasks.
+    """
+    cal = _get_tasks_calendar(facade)
+    searcher = cal.searcher(
+        todo=True,
+        include_completed=True,
+        start=start,
+        end=end,
+    )
+    if project_id is not None:
+        searcher.add_property_filter("X-PROJECT-ID", project_id, operator="==")
+    if status is not None:
+        searcher.add_property_filter("STATUS", status.value, operator="==")
+    if search:
+        searcher.add_property_filter("SUMMARY", search, operator="contains")
+
+    objects = searcher.search()
+
     tasks: list[Task] = []
-    for obj in _get_tasks_calendar(facade).objects():
+    for obj in objects:
         try:
             component = obj.icalendar_component
         except NotFoundError:
@@ -179,18 +214,6 @@ def list_tasks(
         except Exception:
             continue
 
-    if project_id is not None:
-        tasks = [t for t in tasks if t.project_id == project_id]
-    if status is not None:
-        tasks = [t for t in tasks if t.status == status]
-    if search:
-        needle = search.lower()
-        tasks = [
-            t
-            for t in tasks
-            if needle in t.summary.lower()
-            or (t.description and needle in t.description.lower())
-        ]
     if sort_by:
         for key in reversed(sort_by):
             tasks.sort(

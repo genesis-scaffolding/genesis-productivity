@@ -18,6 +18,7 @@ Date semantics:
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from datetime import date as date_cls
@@ -104,9 +105,10 @@ def _parse(raw: str) -> tuple[dict, str]:
 def _serialize(meta: dict, body: str) -> str:
     """Combine frontmatter dict and body into a file's raw text.
 
-    Frontmatter is hand-written rather than dumped via PyYAML so that
-    string values (e.g. the ISO date) are not quoted — the on-disk
-    format stays human-friendly.
+    String values that contain YAML-special characters (``:``, ``[``,
+    ``&``, etc.) are JSON-quoted so the on-disk round-trip survives
+    parsing. The ``date`` value is rendered unquoted as an ISO date
+    to match the legacy on-disk format.
     """
     if not meta:
         return body
@@ -114,12 +116,21 @@ def _serialize(meta: dict, body: str) -> str:
     for key, value in meta.items():
         if isinstance(value, date_cls):
             lines.append(f"{key}: {value.isoformat()}")
+        elif isinstance(value, str) and _needs_quoting(value):
+            lines.append(f"{key}: {json.dumps(value)}")
         else:
             lines.append(f"{key}: {value}")
     lines.append("---")
     lines.append("")
     lines.append(body)
     return "\n".join(lines)
+
+
+def _needs_quoting(s: str) -> bool:
+    """True if a string contains YAML-special characters and would
+    not round-trip safely if written unquoted.
+    """
+    return any(c in s for c in ":#@&*!|>'\"%`[]{},?")
 
 
 class JournalFacade:

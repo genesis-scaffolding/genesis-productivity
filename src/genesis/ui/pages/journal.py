@@ -96,14 +96,15 @@ def _render_list() -> None:
         target = entries[row_idx]
         if label == "Open":
             st.query_params["uid"] = target.uid
-            st.rerun()
         elif label == "Delete":
             st.session_state["pending_delete"] = (
                 f"je_{target.uid}",
                 f"entry {target.date.isoformat()}",
                 lambda uid=target.uid: journal.delete_entry(uid),
             )
-            st.rerun()
+        # No explicit st.rerun() — this is an on_click callback.
+        # Streamlit's natural rerun picks up the query_params /
+        # pending_delete changes on the next render.
 
     def _handle_inline_edit() -> None:
         state = st.session_state.get("journal_list") or {}

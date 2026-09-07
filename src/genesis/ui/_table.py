@@ -40,9 +40,12 @@ def render_tasks_table(
             to the same project.
 
     Inline edits to Summary, Priority, Scheduled, Deadline, Assigned,
-    and Status flow through ``on_change``. The on-change handler reads
-    ``st.session_state[key]["edited_rows"]`` and dispatches a single
-    ``update_task`` per changed row covering all changed columns.
+    Status, and Project flow through ``on_change``. The on-change
+    handler reads ``st.session_state[key]["edited_rows"]`` and
+    dispatches a single ``update_task`` per changed row covering all
+    changed columns. The Project column is a SelectboxColumn so users
+    can reassign or unassign tasks without opening the edit dialog;
+    Actions (Edit / Delete) is the last column.
     """
     if not tasks:
         st.info("No tasks to show.")
@@ -50,11 +53,21 @@ def render_tasks_table(
 
     statuses_all = [s.value for s in TaskStatus]
 
-    projects: dict[str, str] = (
-        {p.uid: p.name for p in caldav.list_projects()}
-        if show_project_column
-        else {}
+    projects_list = (
+        list(caldav.list_projects()) if show_project_column else []
     )
+    project_label_to_uid: dict[str, str | None] = {"(none)": None}
+    for p in projects_list:
+        project_label_to_uid[p.name] = p.uid
+    project_labels = ["(none)"] + [p.name for p in projects_list]
+
+    def _project_label(project_id: str | None) -> str:
+        if project_id is None:
+            return "(none)"
+        for p in projects_list:
+            if p.uid == project_id:
+                return p.name
+        return "(missing)"
 
     rows: list[dict] = []
     for t in tasks:
@@ -66,12 +79,10 @@ def render_tasks_table(
             "Deadline": t.hard_deadline,
             "Assigned": t.assigned_date,
             "Status": t.status.value,
-            "actions": ["Edit", "Delete"],
         }
         if show_project_column:
-            row["Project"] = (
-                projects.get(t.project_id, "—") if t.project_id else "—"
-            )
+            row["Project"] = _project_label(t.project_id)
+        row["actions"] = ["Edit", "Delete"]
         rows.append(row)
     df = pd.DataFrame(rows)
 
@@ -101,7 +112,6 @@ def render_tasks_table(
         edited_rows = state.get("edited_rows") or {}
         if not edited_rows:
             return
-        any_changed = False
         for row_idx_str, changes in edited_rows.items():
             row_idx = int(row_idx_str)
             if row_idx >= len(table_tasks):
@@ -150,13 +160,25 @@ def render_tasks_table(
                 )
                 update = update.model_copy(update={"assigned_date": assigned})
                 touched = True
+            if "Project" in changes and show_project_column:
+                new_label = str(changes["Project"])
+                if new_label in project_label_to_uid:
+                    new_uid = project_label_to_uid[new_label]
+                    if new_uid is None:
+                        update = update.model_copy(
+                            update={"clear_project_id": True}
+                        )
+                    else:
+                        update = update.model_copy(
+                            update={"project_id": new_uid}
+                        )
+                    touched = True
 
             if not touched:
                 continue
             caldav.update_task(original.uid, update)
-            any_changed = True
-        if any_changed:
-            st.rerun()
+        # No explicit st.rerun() — this is an on_change callback.
+        # Streamlit's natural rerun after on_change picks up the updates.
 
     column_config: dict = {
         "uid": None,  # hidden
@@ -176,16 +198,22 @@ def render_tasks_table(
         "Status": st.column_config.SelectboxColumn(
             "Status", options=statuses_all, required=True
         ),
-        "actions": st.column_config.ButtonColumn(
-            "Actions", on_click=_handle_action, key=action_key
-        ),
     }
     if show_project_column:
-        column_config["Project"] = st.column_config.TextColumn(
-            "Project", disabled=True
+        column_config["Project"] = st.column_config.SelectboxColumn(
+            "Project",
+            options=project_labels,
+            required=False,
+            help=(
+                "Reassign task to another project. "
+                "Select (none) to unassign."
+            ),
         )
     else:
         column_config["Project"] = None
+    column_config["actions"] = st.column_config.ButtonColumn(
+        "Actions", on_click=_handle_action, key=action_key
+    )
 
     st.data_editor(
         df,

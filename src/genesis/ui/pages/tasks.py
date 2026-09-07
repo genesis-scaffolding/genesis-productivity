@@ -28,13 +28,10 @@ maybe_show_delete_confirm()
 
 # --- Header with title and "+ Add Task" button -----------------------------
 
-header_cols = st.columns([6, 1])
-with header_cols[0]:
-    st.title("Tasks")
-    st.caption("Your global backlog and scheduled work.")
-with header_cols[1]:
-    if st.button("+ Add Task", key="global_add_task_btn"):
-        open_task_dialog()
+st.title("Tasks")
+st.caption("Your global backlog and scheduled work.")
+if st.button("+ Add Task", key="global_add_task_btn"):
+    open_task_dialog()
 
 st.divider()
 

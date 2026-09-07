@@ -281,13 +281,14 @@ def open_task_dialog(uid: str | None = None, *, project_id: str | None = None) -
     ``uid``: pass to edit; pass ``None`` (the default) to create.
     ``project_id``: for create, pre-attach the new task to a project.
 
-    Sets the trigger in session state and reruns so the dialog opens
-    on the next render.
+    Sets the trigger in session state; streamlit's natural rerun after
+    a button click (or after an on_click callback) is what opens the
+    dialog on the next render. No explicit ``st.rerun()`` here because
+    callers may be inside callbacks where rerun is a no-op.
     """
     st.session_state["open_task_dialog"] = uid or ""
     if project_id is not None:
         st.session_state["create_task_project_id"] = project_id
-    st.rerun()
 
 
 def maybe_show_task_dialog() -> None:
@@ -396,9 +397,13 @@ def _edit_project_dialog(uid: str) -> None:
 
 
 def open_project_dialog(uid: str | None = None) -> None:
-    """Open the project create-or-edit dialog."""
+    """Open the project create-or-edit dialog.
+
+    Sets the trigger in session state; streamlit's natural rerun
+    after the click (button body or callback) opens the dialog on the
+    next render. No explicit ``st.rerun()``.
+    """
     st.session_state["open_project_dialog"] = uid or ""
-    st.rerun()
 
 
 def maybe_show_project_dialog() -> None:
@@ -434,10 +439,12 @@ def request_delete(kind: str, label: str, callback: Callable[[], Any]) -> None:
 
     The dialog opens on the next render and runs ``callback()`` on
     confirmation. ``kind`` is a short tag used to keep the dialog's
-    widget keys unique across pages.
+    widget keys unique across pages. No ``st.rerun()`` here because
+    callers may be inside ``on_click``/``on_change`` callbacks where
+    rerun is a no-op; streamlit's natural rerun after the callback
+    picks up the session-state change.
     """
     st.session_state["pending_delete"] = (kind, label, callback)
-    st.rerun()
 
 
 def maybe_show_delete_confirm() -> None:

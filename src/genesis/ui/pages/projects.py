@@ -42,10 +42,8 @@ def _render_list() -> None:
     st.title("Projects")
     st.caption("Long-term goals and project-specific task groups.")
 
-    header_cols = st.columns([6, 1])
-    with header_cols[1]:
-        if st.button("+ New Project", key="new_project_btn"):
-            open_project_dialog(None)
+    if st.button("+ New Project", key="new_project_btn"):
+        open_project_dialog(None)
 
     projects = caldav.list_projects(sort_by=["status", "name"])
     groups: dict[ProjectStatus, list] = {}
@@ -178,12 +176,9 @@ def _render_detail(uid: str) -> None:
     st.write("")
 
     # Task list header with "+ Add Task" button (pre-attached to this project)
-    tasks_header_cols = st.columns([6, 1])
-    with tasks_header_cols[0]:
-        st.subheader("Project Tasks")
-    with tasks_header_cols[1]:
-        if st.button("+ Add Task", key=f"pd_add_task_{uid}"):
-            open_task_dialog(project_id=uid)
+    st.subheader("Project Tasks")
+    if st.button("+ Add Task", key=f"pd_add_task_{uid}"):
+        open_task_dialog(project_id=uid)
 
     sorted_tasks = sorted(
         tasks, key=lambda t: (t.status.value, -(t.priority or 5))

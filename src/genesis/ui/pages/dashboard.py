@@ -1,12 +1,23 @@
-"""Dashboard page: today's tasks, active project count, today's task list."""
+"""Dashboard page: active assignments and deadlines.
+
+Surfaces two forward-looking tasks views plus a project count:
+
+* Active assignments: tasks whose ``assigned_date`` is today or earlier,
+  so you should look at them.
+* Deadlines: tasks whose ``hard_deadline`` is within the next 7 days,
+  or already overdue.
+
+Both exclude tasks with status COMPLETED or CANCELED. A task may
+appear in both lists if both fields are set.
+"""
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 import streamlit as st
 
-from genesis.entities import ProjectStatus
+from genesis.entities import ProjectStatus, TaskStatus
 from genesis.ui._render import maybe_show_task_dialog
 from genesis.ui._state import get_facade
 from genesis.ui._table import render_tasks_table
@@ -17,48 +28,88 @@ caldav = facade.caldav
 maybe_show_task_dialog()
 
 st.title("Dashboard")
+st.caption("What's on your plate.")
 
-# --- Cards: today + active projects -----------------------------------------
+# --- Compute today / week window -------------------------------------------
 
-all_tasks = caldav.list_tasks()
 today = date.today()
 today_start = datetime.combine(today, time.min)
-today_end = datetime.combine(today, time.max)
+week_end_dt = today_start + timedelta(days=7)
 
-today_tasks = [
+# --- Fetch tasks once, derive both views -----------------------------------
+
+all_tasks = caldav.list_tasks()
+done_statuses = {TaskStatus.COMPLETED, TaskStatus.CANCELED}
+
+# Active assignments: assigned_date <= today, not done/canceled.
+active_assignments = [
     t
     for t in all_tasks
-    if (t.scheduled_start and today_start <= t.scheduled_start <= today_end)
-    or (t.assigned_date == today)
-    or (t.hard_deadline and today_start <= t.hard_deadline <= today_end)
+    if t.assigned_date is not None
+    and t.assigned_date <= today
+    and t.status not in done_statuses
 ]
-# Server-side STATUS filter for the active-projects count.
+active_assignments.sort(key=lambda t: t.assigned_date or date.min)
+
+# Deadlines: hard_deadline within 7 days or already overdue.
+deadlines = [
+    t
+    for t in all_tasks
+    if t.hard_deadline is not None
+    and t.hard_deadline <= week_end_dt
+    and t.status not in done_statuses
+]
+deadlines.sort(key=lambda t: t.hard_deadline or today_start)
+
 active_projects = caldav.list_projects(status=ProjectStatus.IN_PROGRESS)
 
-cols = st.columns(2, gap="medium")
+# --- Metric cards ----------------------------------------------------------
+
+cols = st.columns(3, gap="medium")
 with cols[0]:
     with st.container(border=True):
-        st.subheader("Today")
-        st.markdown(f"## {len(today_tasks)} Tasks")
-        st.caption("Due today, scheduled today, or assigned today")
+        st.caption("Active assignments")
+        st.markdown(f"## {len(active_assignments)}")
+        st.caption("Assigned today or earlier")
 with cols[1]:
     with st.container(border=True):
-        st.subheader("Active Projects")
+        st.caption("Deadlines this week")
+        st.markdown(f"## {len(deadlines)}")
+        st.caption("Due in the next 7 days or overdue")
+with cols[2]:
+    with st.container(border=True):
+        st.caption("Active projects")
         st.markdown(f"## {len(active_projects)}")
         st.caption("Projects currently in progress")
 
 st.divider()
 
-# --- Today's task list via the shared tasks table --------------------------
+# --- Active assignments -----------------------------------------------------
 
-st.subheader("Your day")
-if not today_tasks:
-    st.info("Nothing scheduled for today. Use the Tasks page to add something.")
+st.subheader(f"Active assignments ({len(active_assignments)})")
+st.caption("Assigned today or earlier. Oldest first.")
+if not active_assignments:
+    st.info("No overdue or today assignments.")
 else:
-    sorted_today = sorted(
-        today_tasks, key=lambda t: t.scheduled_start or datetime.max
-    )
     render_tasks_table(
-        sorted_today, caldav=caldav, key="dashboard_today_tasks",
+        active_assignments,
+        caldav=caldav,
+        key="dashboard_assignments",
+        show_project_column=True,
+    )
+
+st.write("")
+
+# --- Deadlines --------------------------------------------------------------
+
+st.subheader(f"Deadlines ({len(deadlines)})")
+st.caption("Due in the next 7 days or already overdue.")
+if not deadlines:
+    st.info("Nothing due in the next 7 days.")
+else:
+    render_tasks_table(
+        deadlines,
+        caldav=caldav,
+        key="dashboard_deadlines",
         show_project_column=True,
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import typer
 
@@ -68,6 +69,40 @@ def ui(
 
 def main() -> None:
     app()
+
+
+def main_ui() -> int:
+    """Console-script entry point for ``genesis-ui``.
+
+    Starts Streamlit for the default user. Honors ``GENESIS_UI_PORT``
+    (default 3000) and ``GENESIS_UI_HOST`` (default 127.0.0.1).
+    """
+    import subprocess
+    import sys
+
+    from ..configs import CONFIG_PATH_ENV, DEFAULT_USER, resolve_config_path
+
+    config_path = resolve_config_path(DEFAULT_USER)
+    os.environ[CONFIG_PATH_ENV] = str(config_path.resolve())
+
+    app_path = Path(__file__).resolve().parent.parent / "ui" / "app.py"
+    port = os.environ.get("GENESIS_UI_PORT", "3000")
+    host = os.environ.get("GENESIS_UI_HOST", "127.0.0.1")
+    return subprocess.call(
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            str(app_path),
+            "--server.address",
+            host,
+            "--server.port",
+            port,
+            "--server.headless",
+            "true",
+        ]
+    )
 
 
 if __name__ == "__main__":

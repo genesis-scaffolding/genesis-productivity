@@ -50,23 +50,23 @@ class TestTaskCRUD:
 
     def test_create_task(self, facade: MockCalDAVFacade) -> None:
         """Creating a task returns the task with UID and timestamps."""
-        task = facade.create_task(TaskCreate(summary="Test task"))
+        task = facade.create_task(TaskCreate(title="Test task"))
 
         assert task.uid is not None
-        assert task.summary == "Test task"
+        assert task.title == "Test task"
         assert task.status == TaskStatus.NEEDS_ACTION
         assert task.created is not None
         assert task.modified is not None
 
     def test_get_task(self, facade: MockCalDAVFacade) -> None:
         """Getting a task by UID returns the task."""
-        created = facade.create_task(TaskCreate(summary="Test task"))
+        created = facade.create_task(TaskCreate(title="Test task"))
 
         found = facade.get_task(created.uid)
 
         assert found is not None
         assert found.uid == created.uid
-        assert found.summary == "Test task"
+        assert found.title == "Test task"
 
     def test_get_task_not_found(self, facade: MockCalDAVFacade) -> None:
         """Getting a non-existent task returns None."""
@@ -74,25 +74,25 @@ class TestTaskCRUD:
 
     def test_list_tasks(self, facade: MockCalDAVFacade) -> None:
         """Listing tasks returns all tasks."""
-        facade.create_task(TaskCreate(summary="Task 1"))
-        facade.create_task(TaskCreate(summary="Task 2"))
+        facade.create_task(TaskCreate(title="Task 1"))
+        facade.create_task(TaskCreate(title="Task 2"))
 
         assert len(facade.list_tasks()) == 2
 
     def test_update_task(self, facade: MockCalDAVFacade) -> None:
         """Updating a task modifies the task in place."""
-        task = facade.create_task(TaskCreate(summary="Original"))
+        task = facade.create_task(TaskCreate(title="Original"))
 
-        updated = facade.update_task(task.uid, TaskUpdate(summary="Updated"))
+        updated = facade.update_task(task.uid, TaskUpdate(title="Updated"))
 
         assert updated is not None
-        assert updated.summary == "Updated"
+        assert updated.title == "Updated"
         assert updated.created is not None
         assert updated.modified is not None
 
     def test_update_task_sets_completed_at(self, facade: MockCalDAVFacade) -> None:
         """Marking a task completed sets completed_at."""
-        task = facade.create_task(TaskCreate(summary="To complete"))
+        task = facade.create_task(TaskCreate(title="To complete"))
 
         updated = facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
 
@@ -102,7 +102,7 @@ class TestTaskCRUD:
 
     def test_update_task_clears_completed_at(self, facade: MockCalDAVFacade) -> None:
         """Reopening a completed task clears completed_at."""
-        task = facade.create_task(TaskCreate(summary="To complete"))
+        task = facade.create_task(TaskCreate(title="To complete"))
         facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
 
         updated = facade.update_task(task.uid, TaskUpdate(status=TaskStatus.NEEDS_ACTION))
@@ -113,7 +113,7 @@ class TestTaskCRUD:
 
     def test_delete_task(self, facade: MockCalDAVFacade) -> None:
         """Deleting a task removes it."""
-        task = facade.create_task(TaskCreate(summary="To delete"))
+        task = facade.create_task(TaskCreate(title="To delete"))
 
         assert facade.delete_task(task.uid) is True
         assert facade.get_task(task.uid) is None
@@ -127,13 +127,13 @@ class TestTaskFields:
     """Test the new priority and scheduled_duration fields."""
 
     def test_create_task_with_priority(self, facade: MockCalDAVFacade) -> None:
-        task = facade.create_task(TaskCreate(summary="Urgent", priority=1))
+        task = facade.create_task(TaskCreate(title="Urgent", priority=1))
         assert task.priority == 1
 
     def test_create_task_with_scheduled_duration(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Meeting", scheduled_start=start, scheduled_duration=45)
+            TaskCreate(title="Meeting", scheduled_start=start, scheduled_duration=45)
         )
         assert task.scheduled_duration == 45
 
@@ -143,9 +143,9 @@ class TestTaskFilters:
 
     def test_filter_by_status(self, facade: MockCalDAVFacade) -> None:
         """Filtering by status returns only matching tasks."""
-        completed = facade.create_task(TaskCreate(summary="Completed task"))
+        completed = facade.create_task(TaskCreate(title="Completed task"))
         facade.update_task(completed.uid, TaskUpdate(status=TaskStatus.COMPLETED))
-        facade.create_task(TaskCreate(summary="Active task"))
+        facade.create_task(TaskCreate(title="Active task"))
 
         active = facade.list_tasks(status=TaskStatus.NEEDS_ACTION)
         assert all(t.status == TaskStatus.NEEDS_ACTION for t in active)
@@ -153,8 +153,8 @@ class TestTaskFilters:
     def test_filter_by_project(self, facade: MockCalDAVFacade) -> None:
         """Filtering by project_id returns only linked tasks."""
         project = facade.create_project(ProjectCreate(name="Work"))
-        facade.create_task(TaskCreate(summary="Linked", project_id=project.uid))
-        facade.create_task(TaskCreate(summary="Unlinked"))
+        facade.create_task(TaskCreate(title="Linked", project_id=project.uid))
+        facade.create_task(TaskCreate(title="Unlinked"))
 
         linked = facade.list_tasks(project_id=project.uid)
         assert len(linked) == 1
@@ -162,9 +162,9 @@ class TestTaskFilters:
 
     def test_text_search(self, facade: MockCalDAVFacade) -> None:
         """Text search finds tasks by summary or description."""
-        facade.create_task(TaskCreate(summary="Buy groceries"))
+        facade.create_task(TaskCreate(title="Buy groceries"))
         facade.create_task(
-            TaskCreate(summary="Fix bug", description="Memory leak in parser")
+            TaskCreate(title="Fix bug", description="Memory leak in parser")
         )
 
         results = facade.list_tasks(search="bug")
@@ -176,8 +176,8 @@ class TestTaskSorting:
 
     def test_sort_by_created(self, facade: MockCalDAVFacade) -> None:
         """Tasks can be sorted by created date."""
-        t1 = facade.create_task(TaskCreate(summary="First"))
-        t2 = facade.create_task(TaskCreate(summary="Second"))
+        t1 = facade.create_task(TaskCreate(title="First"))
+        t2 = facade.create_task(TaskCreate(title="Second"))
 
         tasks = facade.list_tasks(sort_by=["created"], sort_order="asc")
         assert tasks[0].uid == t1.uid
@@ -185,11 +185,11 @@ class TestTaskSorting:
 
     def test_sort_by_summary(self, facade: MockCalDAVFacade) -> None:
         """Tasks can be sorted by summary."""
-        facade.create_task(TaskCreate(summary="Zebra"))
-        facade.create_task(TaskCreate(summary="Apple"))
+        facade.create_task(TaskCreate(title="Zebra"))
+        facade.create_task(TaskCreate(title="Apple"))
 
-        tasks = facade.list_tasks(sort_by=["summary"], sort_order="asc")
-        assert [t.summary for t in tasks] == ["Apple", "Zebra"]
+        tasks = facade.list_tasks(sort_by=["title"], sort_order="asc")
+        assert [t.title for t in tasks] == ["Apple", "Zebra"]
 
 
 # =============================================================================
@@ -205,7 +205,7 @@ class TestShadowVEVENT:
     ) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
 
         shadow = facade.get_event(task.uid)
@@ -222,7 +222,7 @@ class TestShadowVEVENT:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
             TaskCreate(
-                summary="Long meeting",
+                title="Long meeting",
                 scheduled_start=start,
                 scheduled_duration=90,
             )
@@ -235,13 +235,13 @@ class TestShadowVEVENT:
     def test_create_task_without_scheduled_start_creates_no_shadow(
         self, facade: MockCalDAVFacade
     ) -> None:
-        task = facade.create_task(TaskCreate(summary="Plain task"))
+        task = facade.create_task(TaskCreate(title="Plain task"))
         assert facade.get_event(task.uid) is None
 
     def test_update_task_set_scheduled_start_creates_shadow(
         self, facade: MockCalDAVFacade
     ) -> None:
-        task = facade.create_task(TaskCreate(summary="No schedule yet"))
+        task = facade.create_task(TaskCreate(title="No schedule yet"))
         assert facade.get_event(task.uid) is None
 
         start = datetime(2030, 2, 1, 10, 0, tzinfo=UTC)
@@ -259,7 +259,7 @@ class TestShadowVEVENT:
     ) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
         assert facade.get_event(task.uid) is not None
 
@@ -272,7 +272,7 @@ class TestShadowVEVENT:
     def test_delete_task_removes_shadow(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
         assert facade.get_event(task.uid) is not None
 
@@ -284,7 +284,7 @@ class TestShadowVEVENT:
     ) -> None:
         first = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=first)
+            TaskCreate(title="Standup", scheduled_start=first)
         )
 
         second = datetime(2030, 1, 2, 14, 0, tzinfo=UTC)
@@ -299,10 +299,10 @@ class TestShadowVEVENT:
     ) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Old name", scheduled_start=start)
+            TaskCreate(title="Old name", scheduled_start=start)
         )
 
-        facade.update_task(task.uid, TaskUpdate(summary="New name"))
+        facade.update_task(task.uid, TaskUpdate(title="New name"))
 
         shadow = facade.get_event(task.uid)
         assert shadow is not None
@@ -313,7 +313,7 @@ class TestShadowVEVENT:
     ) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
 
         shadows = facade.list_events(task_id=task.uid)
@@ -329,7 +329,7 @@ class TestShadowVEVENTProtection:
 
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
 
         with pytest.raises(ValueError, match="shadow event"):
@@ -338,7 +338,7 @@ class TestShadowVEVENTProtection:
     def test_cannot_delete_shadow_event(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
 
         with pytest.raises(ValueError, match="shadow event"):
@@ -404,7 +404,7 @@ class TestProjectDeletionWithTasks:
     def test_delete_project_removes_task_links(self, facade: MockCalDAVFacade) -> None:
         """Deleting a project removes project_id from its tasks."""
         project = facade.create_project(ProjectCreate(name="Test Project"))
-        task = facade.create_task(TaskCreate(summary="Linked task", project_id=project.uid))
+        task = facade.create_task(TaskCreate(title="Linked task", project_id=project.uid))
 
         assert task.project_id == project.uid
 
@@ -479,7 +479,7 @@ class TestEventCRUD:
         facade.create_event(EventCreate(summary="Coffee", start=start, end=end))
 
         task_start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        facade.create_task(TaskCreate(summary="Appt", scheduled_start=task_start))
+        facade.create_task(TaskCreate(title="Appt", scheduled_start=task_start))
 
         all_events = facade.list_events()
         shadows = [e for e in all_events if e.task_id is not None]
@@ -499,7 +499,7 @@ class TestTimeLogCRUD:
     def test_create_time_log_entry(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
-        task = facade.create_task(TaskCreate(summary="Work on"))
+        task = facade.create_task(TaskCreate(title="Work on"))
 
         entry = facade.create_time_log_entry(
             TimeLogEntryCreate(
@@ -606,8 +606,8 @@ class TestTimeLogCRUD:
     def test_list_time_log_filtered_by_task(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
-        t1 = facade.create_task(TaskCreate(summary="Task 1"))
-        t2 = facade.create_task(TaskCreate(summary="Task 2"))
+        t1 = facade.create_task(TaskCreate(title="Task 1"))
+        t2 = facade.create_task(TaskCreate(title="Task 2"))
 
         facade.create_time_log_entry(
             TimeLogEntryCreate(
@@ -654,10 +654,10 @@ class TestNoDeleteOnUpdate:
     def test_update_task_preserves_object_identity(
         self, facade: MockCalDAVFacade
     ) -> None:
-        task = facade.create_task(TaskCreate(summary="Original"))
+        task = facade.create_task(TaskCreate(title="Original"))
         original_object_id = id(task)
 
-        facade.update_task(task.uid, TaskUpdate(summary="Updated"))
+        facade.update_task(task.uid, TaskUpdate(title="Updated"))
 
         same = facade.get_task(task.uid)
         assert same is not None
@@ -724,7 +724,7 @@ class TestStaleObjectResilience:
 
         assert len(tasks) == 1
         assert tasks[0].uid == "alive@genesis"
-        assert tasks[0].summary == "Alive task"
+        assert tasks[0].title == "Alive task"
 
     def test_list_events_skips_stale_object(self) -> None:
         from icalendar import Event

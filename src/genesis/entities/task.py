@@ -29,7 +29,7 @@ class Task(BaseModel):
 
     Attributes:
         uid: Unique identifier.
-        summary: Task title.
+        title: Task title.
         description: Optional detailed description.
         hard_deadline: The firm delivery date (datetime UTC; stored as DUE).
         assigned_date: The calendar day the user plans to work on the task
@@ -46,7 +46,7 @@ class Task(BaseModel):
     """
 
     uid: str
-    summary: str
+    title: str
     description: str | None = None
     hard_deadline: datetime | None = None
     assigned_date: date | None = None
@@ -79,7 +79,7 @@ class Task(BaseModel):
 class TaskCreate(BaseModel):
     """Data for creating a new task."""
 
-    summary: str
+    title: str
     description: str | None = None
     hard_deadline: datetime | None = None
     assigned_date: date | None = None
@@ -106,7 +106,7 @@ class TaskUpdate(BaseModel):
     scheduled_start" in an update call.
     """
 
-    summary: str | None = None
+    title: str | None = None
     description: str | None = None
     hard_deadline: datetime | None = None
     assigned_date: date | None = None

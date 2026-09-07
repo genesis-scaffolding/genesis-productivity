@@ -73,7 +73,7 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
     project_labels = ["(none)"] + [name for _, name in project_options]
     project_uids: list[str | None] = [None] + [uid for uid, _ in project_options]
 
-    summary = st.text_input("Summary", key="_ntd_summary")
+    title = st.text_input("Title", key="_ntd_title")
     description = st.text_area(
         "Description", key="_ntd_desc", height=100,
         placeholder="Optional details…",
@@ -122,8 +122,8 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
     if action_cols[0].button("Cancel", key="_ntd_cancel"):
         st.rerun()
     if action_cols[1].button("Add", type="primary", key="_ntd_add"):
-        if not summary.strip():
-            st.error("Summary is required")
+        if not title.strip():
+            st.error("Title is required")
             return
         from genesis.entities import TaskCreate
 
@@ -136,7 +136,7 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
 
         facade.caldav.create_task(
             TaskCreate(
-                summary=summary,
+                title=title,
                 description=description or None,
                 project_id=selected_project_uid,
                 scheduled_start=scheduled_start_utc,
@@ -148,7 +148,7 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
                 priority=priority,
             )
         )
-        st.toast(f"Created task: {summary}")
+        st.toast(f"Created task: {title}")
         st.rerun()
 
 
@@ -174,7 +174,7 @@ def task_edit_dialog(uid: str) -> None:
         else 0
     )
 
-    summary = st.text_input("Summary", value=task.summary, key=f"{kp}_summary")
+    title = st.text_input("Title", value=task.title, key=f"{kp}_title")
     description = st.text_area(
         "Description", value=task.description or "", key=f"{kp}_desc",
         height=100,
@@ -265,7 +265,7 @@ def task_edit_dialog(uid: str) -> None:
         hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
 
         update_kwargs: dict = {
-            "summary": summary,
+            "title": title,
             "description": description or None,
             "hard_deadline": hard_deadline_utc,
             "assigned_date": assigned_date,

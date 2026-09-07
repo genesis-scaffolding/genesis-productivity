@@ -114,7 +114,7 @@ class TestEntityValidators:
         from genesis.entities import Task
 
         naive = datetime(2026, 9, 7, 14, 0)
-        task = Task(uid="t", summary="x", scheduled_start=naive)
+        task = Task(uid="t", title="x", scheduled_start=naive)
         assert task.scheduled_start is not None
         assert task.scheduled_start.tzinfo is UTC
 

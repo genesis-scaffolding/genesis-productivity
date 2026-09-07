@@ -300,7 +300,7 @@ def migrate_tasks(
             new_status = TASK_STATUS_MAP.get(t.status, TaskStatus.NEEDS_ACTION)
             project_uid = project_id_map.get(t.project_id) if t.project_id else None
             data = TaskCreate(
-                summary=t.title,
+                title=t.title,
                 description=t.description,
                 hard_deadline=t.hard_deadline,
                 assigned_date=t.assigned_date,

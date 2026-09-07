@@ -217,7 +217,7 @@ else:
         assert tid is not None
         if tid not in task_label_cache:
             task = caldav.get_task(tid)
-            task_label_cache[tid] = task.summary if task else "(deleted)"
+            task_label_cache[tid] = task.title if task else "(deleted)"
         label = task_label_cache[tid]
         bucket = by_task.get(label)
         secs = _duration_seconds(s)
@@ -271,7 +271,7 @@ else:
         task_label = ""
         if s.task_id is not None:
             task = caldav.get_task(s.task_id)
-            task_label = task.summary if task else "(deleted)"
+            task_label = task.title if task else "(deleted)"
         rows.append(
             {
                 "Started": format_local(s.start, "%Y-%m-%d %H:%M"),

@@ -102,23 +102,23 @@ class TestTaskCRUD:
 
     def test_create_task(self, facade: CalDAVFacade) -> None:
         """Creating a task returns the task with UID and timestamps."""
-        task = facade.create_task(TaskCreate(summary="Test task"))
+        task = facade.create_task(TaskCreate(title="Test task"))
 
         assert task.uid is not None
-        assert task.summary == "Test task"
+        assert task.title == "Test task"
         assert task.status == TaskStatus.NEEDS_ACTION
         assert task.created is not None
         assert task.modified is not None
 
     def test_get_task(self, facade: CalDAVFacade) -> None:
         """Getting a task by UID returns the task."""
-        created = facade.create_task(TaskCreate(summary="Test task"))
+        created = facade.create_task(TaskCreate(title="Test task"))
 
         found = facade.get_task(created.uid)
 
         assert found is not None
         assert found.uid == created.uid
-        assert found.summary == "Test task"
+        assert found.title == "Test task"
 
     def test_get_task_not_found(self, facade: CalDAVFacade) -> None:
         """Getting a non-existent task returns None."""
@@ -127,8 +127,8 @@ class TestTaskCRUD:
 
     def test_list_tasks(self, facade: CalDAVFacade) -> None:
         """Listing tasks returns all tasks."""
-        facade.create_task(TaskCreate(summary="Task 1"))
-        facade.create_task(TaskCreate(summary="Task 2"))
+        facade.create_task(TaskCreate(title="Task 1"))
+        facade.create_task(TaskCreate(title="Task 2"))
 
         tasks = facade.list_tasks()
 
@@ -136,18 +136,18 @@ class TestTaskCRUD:
 
     def test_update_task(self, facade: CalDAVFacade) -> None:
         """Updating a task modifies the task."""
-        task = facade.create_task(TaskCreate(summary="Original"))
+        task = facade.create_task(TaskCreate(title="Original"))
 
-        updated = facade.update_task(task.uid, TaskUpdate(summary="Updated"))
+        updated = facade.update_task(task.uid, TaskUpdate(title="Updated"))
 
         assert updated is not None
-        assert updated.summary == "Updated"
+        assert updated.title == "Updated"
         assert updated.created is not None
         assert updated.modified is not None
 
     def test_update_task_sets_completed_at(self, facade: CalDAVFacade) -> None:
         """Marking a task completed sets completed_at."""
-        task = facade.create_task(TaskCreate(summary="To complete"))
+        task = facade.create_task(TaskCreate(title="To complete"))
 
         updated = facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
 
@@ -157,7 +157,7 @@ class TestTaskCRUD:
 
     def test_update_task_clears_completed_at(self, facade: CalDAVFacade) -> None:
         """Reopening a completed task clears completed_at."""
-        task = facade.create_task(TaskCreate(summary="To complete"))
+        task = facade.create_task(TaskCreate(title="To complete"))
         facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
 
         updated = facade.update_task(task.uid, TaskUpdate(status=TaskStatus.NEEDS_ACTION))
@@ -168,7 +168,7 @@ class TestTaskCRUD:
 
     def test_delete_task(self, facade: CalDAVFacade) -> None:
         """Deleting a task removes it."""
-        task = facade.create_task(TaskCreate(summary="To delete"))
+        task = facade.create_task(TaskCreate(title="To delete"))
 
         result = facade.delete_task(task.uid)
 
@@ -187,8 +187,8 @@ class TestTaskFilters:
 
     def test_filter_by_status(self, facade: CalDAVFacade) -> None:
         """Filtering by status returns only matching tasks."""
-        facade.create_task(TaskCreate(summary="Active task"))
-        completed = facade.create_task(TaskCreate(summary="Completed task"))
+        facade.create_task(TaskCreate(title="Active task"))
+        completed = facade.create_task(TaskCreate(title="Completed task"))
         facade.update_task(completed.uid, TaskUpdate(status=TaskStatus.COMPLETED))
 
         active = facade.list_tasks(status=TaskStatus.NEEDS_ACTION)
@@ -199,14 +199,14 @@ class TestTaskFilters:
 
     def test_text_search(self, facade: CalDAVFacade) -> None:
         """Text search finds tasks by summary or description."""
-        facade.create_task(TaskCreate(summary="Buy groceries"))
+        facade.create_task(TaskCreate(title="Buy groceries"))
         facade.create_task(
-            TaskCreate(summary="Fix bug", description="Memory leak in parser")
+            TaskCreate(title="Fix bug", description="Memory leak in parser")
         )
 
         results = facade.list_tasks(search="bug")
         assert len(results) >= 1
-        assert any("bug" in t.summary.lower() or "bug" in (t.description or "").lower() for t in results)
+        assert any("bug" in t.title.lower() or "bug" in (t.description or "").lower() for t in results)
 
 
 @pytest.mark.integration
@@ -215,8 +215,8 @@ class TestTaskSorting:
 
     def test_sort_by_created(self, facade: CalDAVFacade) -> None:
         """Tasks can be sorted by created date."""
-        t1 = facade.create_task(TaskCreate(summary="First"))
-        t2 = facade.create_task(TaskCreate(summary="Second"))
+        t1 = facade.create_task(TaskCreate(title="First"))
+        t2 = facade.create_task(TaskCreate(title="Second"))
 
         tasks = facade.list_tasks(sort_by=["created"], sort_order="asc")
         assert tasks[0].uid == t1.uid
@@ -224,11 +224,11 @@ class TestTaskSorting:
 
     def test_sort_by_summary(self, facade: CalDAVFacade) -> None:
         """Tasks can be sorted by summary."""
-        facade.create_task(TaskCreate(summary="Zebra"))
-        facade.create_task(TaskCreate(summary="Apple"))
+        facade.create_task(TaskCreate(title="Zebra"))
+        facade.create_task(TaskCreate(title="Apple"))
 
         tasks = facade.list_tasks(sort_by=["summary"], sort_order="asc")
-        summaries = [t.summary for t in tasks]
+        summaries = [t.title for t in tasks]
         assert summaries == sorted(summaries)
 
 
@@ -250,15 +250,15 @@ class TestServerSideFilters:
         proj_a = facade.create_project(ProjectCreate(name="Alpha"))
         proj_b = facade.create_project(ProjectCreate(name="Beta"))
 
-        facade.create_task(TaskCreate(summary="A-1", project_id=proj_a.uid))
-        facade.create_task(TaskCreate(summary="A-2", project_id=proj_a.uid))
-        facade.create_task(TaskCreate(summary="B-1", project_id=proj_b.uid))
+        facade.create_task(TaskCreate(title="A-1", project_id=proj_a.uid))
+        facade.create_task(TaskCreate(title="A-2", project_id=proj_a.uid))
+        facade.create_task(TaskCreate(title="B-1", project_id=proj_b.uid))
 
         alpha_tasks = facade.list_tasks(project_id=proj_a.uid)
-        assert {t.summary for t in alpha_tasks} == {"A-1", "A-2"}
+        assert {t.title for t in alpha_tasks} == {"A-1", "A-2"}
 
         beta_tasks = facade.list_tasks(project_id=proj_b.uid)
-        assert {t.summary for t in beta_tasks} == {"B-1"}
+        assert {t.title for t in beta_tasks} == {"B-1"}
 
     def test_tasks_time_range_filter_server_side(
         self, facade: CalDAVFacade
@@ -271,21 +271,21 @@ class TestServerSideFilters:
         from genesis.entities import TaskUpdate
 
         # In-window: scheduled Tuesday at 10:00
-        in_window = facade.create_task(TaskCreate(summary="In window"))
+        in_window = facade.create_task(TaskCreate(title="In window"))
         tuesday_10 = datetime(2026, 9, 8, 10, 0, tzinfo=UTC)
         facade.update_task(
             in_window.uid, TaskUpdate(scheduled_start=tuesday_10)
         )
 
         # Out of window: scheduled the following week
-        next_week = facade.create_task(TaskCreate(summary="Next week"))
+        next_week = facade.create_task(TaskCreate(title="Next week"))
         next_monday_10 = datetime(2026, 9, 14, 10, 0, tzinfo=UTC)
         facade.update_task(
             next_week.uid, TaskUpdate(scheduled_start=next_monday_10)
         )
 
         # In-window by DUE only (no scheduled_start)
-        due_in_window = facade.create_task(TaskCreate(summary="Due in window"))
+        due_in_window = facade.create_task(TaskCreate(title="Due in window"))
         next_monday_due = datetime(2026, 9, 13, 23, 59, tzinfo=UTC)
         facade.update_task(
             due_in_window.uid,
@@ -308,7 +308,7 @@ class TestServerSideFilters:
             if t.scheduled_start is not None
             and week_start <= t.scheduled_start < week_end
         ]
-        assert {t.summary for t in scheduled_in_window} == {"In window"}
+        assert {t.title for t in scheduled_in_window} == {"In window"}
 
     def test_events_time_range_filter_server_side(
         self, facade: CalDAVFacade
@@ -429,7 +429,7 @@ class TestProjectDeletionWithTasks:
     def test_delete_project_removes_task_links(self, facade: CalDAVFacade) -> None:
         """Deleting a project removes project_id from its tasks."""
         project = facade.create_project(ProjectCreate(name="Test Project"))
-        task = facade.create_task(TaskCreate(summary="Linked task", project_id=project.uid))
+        task = facade.create_task(TaskCreate(title="Linked task", project_id=project.uid))
 
         assert task.project_id == project.uid
 
@@ -555,7 +555,7 @@ class TestShadowVEVENTIntegration:
     ) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
 
         # The shadow should appear in the events collection with the same UID
@@ -570,7 +570,7 @@ class TestShadowVEVENTIntegration:
 
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
         assert facade.get_event(task.uid) is not None
 
@@ -580,7 +580,7 @@ class TestShadowVEVENTIntegration:
     def test_delete_task_removes_shadow(self, facade: CalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=start)
+            TaskCreate(title="Standup", scheduled_start=start)
         )
         facade.delete_task(task.uid)
         assert facade.get_event(task.uid) is None
@@ -588,7 +588,7 @@ class TestShadowVEVENTIntegration:
     def test_reschedule_updates_shadow(self, facade: CalDAVFacade) -> None:
         first = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
-            TaskCreate(summary="Standup", scheduled_start=first)
+            TaskCreate(title="Standup", scheduled_start=first)
         )
 
         second = datetime(2030, 1, 2, 14, 0, tzinfo=UTC)
@@ -644,7 +644,7 @@ class TestTimeLogIntegration:
     def test_create_and_list_time_log(self, facade: CalDAVFacade) -> None:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
-        task = facade.create_task(TaskCreate(summary="Work on"))
+        task = facade.create_task(TaskCreate(title="Work on"))
 
         entry = facade.create_time_log_entry(
             TimeLogEntryCreate(
@@ -671,7 +671,7 @@ class TestTimeLogIntegration:
     def test_stop_time_log_entry(self, facade: CalDAVFacade) -> None:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
-        task = facade.create_task(TaskCreate(summary="Work on"))
+        task = facade.create_task(TaskCreate(title="Work on"))
 
         entry = facade.create_time_log_entry(
             TimeLogEntryCreate(
@@ -745,7 +745,7 @@ class TestFourCollectionsIntegration:
     ) -> None:
         # Create one of each entity type
         project = facade.create_project(ProjectCreate(name="P"))
-        task = facade.create_task(TaskCreate(summary="T"))
+        task = facade.create_task(TaskCreate(title="T"))
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         end = datetime(2030, 3, 1, 10, 0, tzinfo=UTC)
         event = facade.create_event(

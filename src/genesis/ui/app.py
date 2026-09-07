@@ -42,6 +42,7 @@ nav: dict[str, list[st.Page]] = {
         _page(_PAGES / "tasks.py", "Tasks", ":material/checklist:", "tasks"),
         _page(_PAGES / "calendar_page.py", "Calendar", ":material/calendar_month:", "calendar"),
         _page(_PAGES / "journal.py", "Journal", ":material/article:", "journal"),
+        _page(_PAGES / "statistics.py", "Statistics", ":material/analytics:", "statistics"),
     ],
 }
 

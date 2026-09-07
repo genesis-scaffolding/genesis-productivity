@@ -37,6 +37,7 @@ st.set_page_config(
 nav: dict[str, list[st.Page]] = {
     "Productivity": [
         _page(_PAGES / "dashboard.py", "Dashboard", ":material/dashboard:", "dashboard"),
+        _page(_PAGES / "focus.py", "Focus", ":material/timer:", "focus"),
         _page(_PAGES / "projects.py", "Projects", ":material/folder:", "projects"),
         _page(_PAGES / "tasks.py", "Tasks", ":material/checklist:", "tasks"),
         _page(_PAGES / "calendar_page.py", "Calendar", ":material/calendar_month:", "calendar"),

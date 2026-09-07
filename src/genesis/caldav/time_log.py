@@ -1,17 +1,27 @@
 """Time log entry CRUD operations for CalDAVFacade.
 
-TimeLogEntry is a VEVENT stored in the time_log collection. Each entry
-records a completed work session (e.g. a pomodoro) and carries a FK back
-to its source task via X-TASK-ID.
+A TimeLogEntry is a VTODO stored in the time_log collection. The same
+collection holds both active focus sessions (STATUS != COMPLETED) and
+completed historical records (STATUS == COMPLETED). See ADR-014.
+
+Stop flow uses ``stop_time_log_entry`` which mutates the VTODO in place
+and PUTs with If-Match so a concurrent stop on another device 412s
+cleanly. Discard is a hard DELETE with no audit trail.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from caldav.lib import error as caldav_error
 from caldav.lib.error import NotFoundError
 
-from ..entities import TimeLogEntry, TimeLogEntryCreate, TimeLogEntryUpdate
+from ..entities import (
+    TimeLogEntry,
+    TimeLogEntryCreate,
+    TimeLogEntryUpdate,
+    TimeLogStatus,
+)
 from .ical import new_uid, now_utc, time_log_from_ical, time_log_to_ical
 
 if TYPE_CHECKING:
@@ -34,8 +44,12 @@ def _populate(component: Component, entry: TimeLogEntry) -> None:
             component.add(key, value)
 
     set_or_delete("uid", entry.uid)
+    set_or_delete("summary", entry.label)
     set_or_delete("dtstart", entry.start)
-    set_or_delete("dtend", entry.end)
+    set_or_delete("due", entry.due)
+    set_or_delete("completed", entry.completed_at)
+    set_or_delete("status", entry.status.value)
+    set_or_delete("x-mode", entry.mode.value)
     set_or_delete("x-task-id", entry.task_id)
     set_or_delete("description", entry.description)
 
@@ -47,17 +61,22 @@ def _get_calendar(facade: CalDAVFacade):
 def create_time_log_entry(
     facade: CalDAVFacade, data: TimeLogEntryCreate
 ) -> TimeLogEntry:
-    """Create a new time log entry."""
+    """Create a new time log entry (typically a new focus session)."""
     now = now_utc()
     entry = TimeLogEntry(
         uid=new_uid(),
+        label=data.label,
         start=data.start,
-        end=data.end,
+        due=data.due,
+        completed_at=None,
+        status=data.status,
+        mode=data.mode,
         task_id=data.task_id,
         description=data.description,
         created=now,
+        modified=now,
     )
-    _get_calendar(facade).save_event(time_log_to_ical(entry))
+    _get_calendar(facade).save_todo(time_log_to_ical(entry))
     return entry
 
 
@@ -78,20 +97,33 @@ def get_time_log_entry(facade: CalDAVFacade, uid: str) -> TimeLogEntry | None:
 def list_time_log(
     facade: CalDAVFacade,
     task_id: str | None = None,
+    status: TimeLogStatus | None = None,
+    active_only: bool = False,
     sort_by: list[str] | None = None,
     sort_order: str = "asc",
 ) -> list[TimeLogEntry]:
-    """List time log entries, optionally filtered by task_id.
+    """List time log entries.
+
+    Default: completed historical records (STATUS == COMPLETED), newest
+    first. Use ``active_only=True`` to get in-progress focus sessions
+    (``STATUS != COMPLETED``). ``status`` filters to an exact status
+    value when set; ``active_only`` and ``status`` are mutually exclusive.
 
     Filter applied server-side:
         - task_id -> X-TASK-ID exact match
 
-    Time log entries have no SUMMARY, so search is not applicable.
+    Time log entries have no SUMMARY in the searchable sense for our
+    use cases, so no ``search`` parameter.
     """
+    if active_only and status is not None:
+        raise ValueError("active_only and status are mutually exclusive")
+
     cal = _get_calendar(facade)
-    searcher = cal.searcher(event=True, include_completed=True)
+    searcher = cal.searcher(todo=True, include_completed=True)
     if task_id is not None:
         searcher.add_property_filter("X-TASK-ID", task_id, operator="==")
+    if status is not None:
+        searcher.add_property_filter("STATUS", status.value, operator="==")
 
     objects = searcher.search()
 
@@ -101,12 +133,20 @@ def list_time_log(
             component = obj.icalendar_component
         except NotFoundError:
             continue
-        if component.name != "VEVENT":
+        if component.name != "VTODO":
             continue
         try:
-            entries.append(time_log_from_ical(component))
+            entry = time_log_from_ical(component)
         except Exception:
             continue
+        if active_only:
+            if entry.status == TimeLogStatus.COMPLETED:
+                continue
+        elif status is None:
+            # Default semantic: completed historical records only.
+            if entry.status != TimeLogStatus.COMPLETED:
+                continue
+        entries.append(entry)
 
     if sort_by:
         for key in reversed(sort_by):
@@ -114,8 +154,9 @@ def list_time_log(
                 key=lambda e, k=key: getattr(e, k, "") or "",
                 reverse=(sort_order == "desc"),
             )
+    elif active_only:
+        entries.sort(key=lambda e: (e.start, e.uid))
     else:
-        # Default: stable order by (start, uid). Newest entries on top.
         entries.sort(key=lambda e: (e.start, e.uid), reverse=True)
     return entries
 
@@ -123,7 +164,12 @@ def list_time_log(
 def update_time_log_entry(
     facade: CalDAVFacade, uid: str, data: TimeLogEntryUpdate
 ) -> TimeLogEntry | None:
-    """Update an existing time log entry in place."""
+    """Update an existing time log entry in place. All fields optional.
+
+    Prefer ``stop_time_log_entry`` for the stop flow because it
+    guarantees a single PUT round-trip with If-Match for race
+    protection; this is for ad-hoc edits.
+    """
     try:
         obj = _get_calendar(facade).object_by_uid(uid)
     except Exception:
@@ -138,11 +184,58 @@ def update_time_log_entry(
 
     update_data = data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        if value is not None:
-            setattr(entry, key, value)
+        setattr(entry, key, value)
+    entry.modified = now_utc()
 
     _populate(obj.icalendar_component, entry)
     obj.save()
+    return entry
+
+
+def stop_time_log_entry(
+    facade: CalDAVFacade,
+    uid: str,
+    *,
+    actual_due: object,
+    completed_at: object,
+) -> TimeLogEntry | None:
+    """Mark a time log entry as COMPLETED with the canonical end times.
+
+    Issues a single PUT. The caldav library sends If-Match with the
+    object etag automatically (set by ``object_by_uid``), so a
+    concurrent stop on another device 412s and raises
+    ``ETagMismatchError``; this function returns None in that case.
+    The losing device's caller should refetch.
+
+    ``actual_due`` is the value written to DUE: ``start + duration`` for
+    countdown auto-stop, ``now`` for manual stop. ``completed_at`` is
+    written to COMPLETED (usually ``now``).
+
+    Returns the updated entry, or None on 404 (already gone) or 412
+    (concurrent stop won).
+    """
+    try:
+        obj = _get_calendar(facade).object_by_uid(uid)
+    except Exception:
+        return None
+    if obj is None:
+        return None
+
+    try:
+        entry = time_log_from_ical(obj.icalendar_component)
+    except Exception:
+        return None
+
+    entry.due = actual_due  # type: ignore[assignment]
+    entry.completed_at = completed_at  # type: ignore[assignment]
+    entry.status = TimeLogStatus.COMPLETED
+    entry.modified = now_utc()
+
+    _populate(obj.icalendar_component, entry)
+    try:
+        obj.save()
+    except caldav_error.ETagMismatchError:
+        return None
     return entry
 
 

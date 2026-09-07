@@ -28,6 +28,7 @@ from genesis.entities import (
     TimeLogEntry,
     TimeLogEntryCreate,
     TimeLogEntryUpdate,
+    TimeLogStatus,
 )
 
 
@@ -313,11 +314,16 @@ class MockCalDAVFacade:
         now = self._now()
         entry = TimeLogEntry(
             uid=self._new_uid(),
+            label=data.label,
             start=data.start,
-            end=data.end,
+            due=data.due,
+            completed_at=None,
+            status=data.status,
+            mode=data.mode,
             task_id=data.task_id,
             description=data.description,
             created=now,
+            modified=now,
         )
         self._time_log[entry.uid] = entry
         return entry
@@ -328,18 +334,33 @@ class MockCalDAVFacade:
     def list_time_log(
         self,
         task_id: str | None = None,
+        status=None,
+        active_only: bool = False,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ) -> list[TimeLogEntry]:
+        if active_only and status is not None:
+            raise ValueError("active_only and status are mutually exclusive")
         entries = list(self._time_log.values())
         if task_id is not None:
             entries = [e for e in entries if e.task_id == task_id]
+        if status is not None:
+            entries = [e for e in entries if e.status == status]
+        elif not active_only:
+            # Default semantic: completed historical records only.
+            entries = [e for e in entries if e.status == TimeLogStatus.COMPLETED]
+        if active_only:
+            entries = [e for e in entries if e.status != TimeLogStatus.COMPLETED]
         if sort_by:
             for key in reversed(sort_by):
                 entries.sort(
                     key=lambda e, k=key: getattr(e, k, "") or "",
                     reverse=(sort_order == "desc"),
                 )
+        elif active_only:
+            entries.sort(key=lambda e: (e.start, e.uid))
+        else:
+            entries.sort(key=lambda e: (e.start, e.uid), reverse=True)
         return entries
 
     def update_time_log_entry(
@@ -352,6 +373,16 @@ class MockCalDAVFacade:
         for key, value in update_data.items():
             if value is not None:
                 setattr(entry, key, value)
+        return entry
+
+    def stop_time_log_entry(self, uid: str, *, actual_due, completed_at):
+        entry = self._time_log.get(uid)
+        if entry is None:
+            return None
+        entry.due = actual_due
+        entry.completed_at = completed_at
+        entry.status = TimeLogStatus.COMPLETED
+        entry.modified = self._now()
         return entry
 
     def delete_time_log_entry(self, uid: str) -> bool:

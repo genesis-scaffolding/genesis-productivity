@@ -27,6 +27,8 @@ from ..entities import (
     Task,
     TaskStatus,
     TimeLogEntry,
+    TimeLogMode,
+    TimeLogStatus,
 )
 
 # -----------------------------------------------------------------------------
@@ -263,41 +265,63 @@ def event_to_ical(event: Event) -> icalendar.Component:
 
 
 def time_log_from_ical(component: icalendar.Component) -> TimeLogEntry:
-    """Build a TimeLogEntry from a VEVENT ical component."""
+    """Build a TimeLogEntry from a VTODO ical component.
+
+    Required fields: DTSTART, X-MODE. SUMMARY is required for round-tripping
+    but a missing value falls back to an empty label rather than failing.
+    """
     start = to_datetime(component.get("dtstart"))
-    end = to_datetime(component.get("dtend"))
-    task_id = to_str(component.get("x-task-id")) or ""
-    if start is None or end is None:
+    mode_str = to_str(component.get("x-mode"))
+    if start is None:
         raise ValueError(
-            f"time_log VEVENT {component.get('uid')} is missing DTSTART or DTEND"
+            f"time_log VTODO {component.get('uid')} is missing DTSTART"
         )
-    if not task_id:
+    if mode_str is None:
         raise ValueError(
-            f"time_log VEVENT {component.get('uid')} is missing X-TASK-ID"
+            f"time_log VTODO {component.get('uid')} is missing X-MODE"
         )
+    status_str = to_str(component.get("status"))
+    status = (
+        TimeLogStatus(status_str)
+        if status_str in {s.value for s in TimeLogStatus}
+        else TimeLogStatus.NEEDS_ACTION
+    )
     return TimeLogEntry(
         uid=to_str(component.get("uid")) or "",
+        label=to_str(component.get("summary")) or "",
         start=start,
-        end=end,
+        due=to_datetime(component.get("due")),
+        completed_at=to_datetime(component.get("completed")),
+        status=status,
+        mode=TimeLogMode(mode_str),
+        task_id=to_str(component.get("x-task-id")) or None,
         description=to_str(component.get("description")),
-        task_id=task_id,
         created=to_datetime(component.get("created")),
+        modified=to_datetime(component.get("last-modified")),
     )
 
 
 def time_log_to_ical(entry: TimeLogEntry) -> icalendar.Component:
-    """Build a VEVENT ical component from a TimeLogEntry."""
-    component = icalendar.Event()
+    """Build a VTODO ical component from a TimeLogEntry."""
+    component = icalendar.Todo()
     component.add("uid", entry.uid)
-    component.add("summary", "")  # VTODO-equivalent summary; required by some clients
+    component.add("summary", entry.label)
     component.add("dtstart", entry.start)
-    component.add("dtend", entry.end)
-    component.add("dtstamp", entry.created or now_utc())
+    component.add("status", entry.status.value)
+    component.add("x-mode", entry.mode.value)
+    if entry.due is not None:
+        component.add("due", entry.due)
+    if entry.completed_at is not None:
+        component.add("completed", entry.completed_at)
+    if entry.task_id:
+        component.add("x-task-id", entry.task_id)
     if entry.description:
         component.add("description", entry.description)
-    component.add("x-task-id", entry.task_id)
+    component.add("dtstamp", entry.modified or now_utc())
     if entry.created:
         component.add("created", entry.created)
+    if entry.modified:
+        component.add("last-modified", entry.modified)
     return component
 
 

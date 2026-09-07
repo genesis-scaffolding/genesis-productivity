@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from caldav.lib.error import NotFoundError
+
 from ..entities import (
     Event,
     EventStatus,
@@ -166,7 +168,10 @@ def list_tasks(
     """List tasks with optional filters."""
     tasks: list[Task] = []
     for obj in _get_tasks_calendar(facade).objects():
-        component = obj.icalendar_component
+        try:
+            component = obj.icalendar_component
+        except NotFoundError:
+            continue
         if component.name != "VTODO":
             continue
         try:

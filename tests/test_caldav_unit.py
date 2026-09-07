@@ -6,9 +6,14 @@ These tests are fast and do not require a real Radicale server.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock, PropertyMock
 
 import pytest
+from caldav.lib.error import NotFoundError
 
+from genesis.caldav.events import list_events
+from genesis.caldav.projects import list_projects
+from genesis.caldav.tasks import list_tasks
 from genesis.entities import (
     EventCreate,
     EventStatus,
@@ -543,3 +548,94 @@ class TestNoDeleteOnUpdate:
         same = facade.get_task(task.uid)
         assert same is not None
         assert id(same) == original_object_id
+
+
+# =============================================================================
+# Resilience: skip objects whose icalendar_component fetch 404s
+# =============================================================================
+
+
+def _stale_then_good_calendar(good_components: list) -> MagicMock:
+    """Build a mock calendar whose .objects() yields a stale object first
+    (raises NotFoundError on .icalendar_component) followed by good
+    objects whose .icalendar_component returns the provided components.
+    """
+    stale = MagicMock()
+    type(stale).icalendar_component = PropertyMock(
+        side_effect=NotFoundError("stale", "404")
+    )
+
+    good_objs = []
+    for comp in good_components:
+        obj = MagicMock()
+        type(obj).icalendar_component = PropertyMock(return_value=comp)
+        good_objs.append(obj)
+
+    cal = MagicMock()
+    cal.objects = MagicMock(return_value=[stale, *good_objs])
+    return cal
+
+
+class TestStaleObjectResilience:
+    """Regression: list_* must skip objects that 404 on access.
+
+    Without per-object try/except, a single stale object listed by the
+    server but missing its underlying resource crashes the entire list.
+    The calendar page can reproduce this without user action whenever a
+    test run leaves a stale VEVENT/VTODO entry behind.
+    """
+
+    def _facade_with_calendar(self, cal: MagicMock) -> MagicMock:
+        f = MagicMock()
+        f._get_calendar = MagicMock(return_value=cal)
+        return f
+
+    def test_list_tasks_skips_stale_object(self) -> None:
+        from icalendar import Todo
+
+        todo = Todo()
+        todo.add("uid", "alive@genesis")
+        todo.add("summary", "Alive task")
+        todo.add("status", "needs-action")
+
+        cal = _stale_then_good_calendar([todo])
+        facade = self._facade_with_calendar(cal)
+
+        tasks = list_tasks(facade)  # type: ignore[arg-type]
+
+        assert len(tasks) == 1
+        assert tasks[0].uid == "alive@genesis"
+        assert tasks[0].summary == "Alive task"
+
+    def test_list_events_skips_stale_object(self) -> None:
+        from icalendar import Event
+
+        ev = Event()
+        ev.add("uid", "alive-event@genesis")
+        ev.add("summary", "Alive event")
+        ev.add("dtstart", datetime(2026, 9, 7, 9, 0, tzinfo=UTC))
+        ev.add("dtend", datetime(2026, 9, 7, 10, 0, tzinfo=UTC))
+
+        cal = _stale_then_good_calendar([ev])
+        facade = self._facade_with_calendar(cal)
+
+        events = list_events(facade)  # type: ignore[arg-type]
+
+        assert len(events) == 1
+        assert events[0].uid == "alive-event@genesis"
+
+    def test_list_projects_skips_stale_object(self) -> None:
+        from icalendar import Todo
+
+        proj = Todo()
+        proj.add("uid", "alive-project@genesis")
+        proj.add("summary", "Alive project")
+        proj.add("status", "needs-action")
+
+        cal = _stale_then_good_calendar([proj])
+        facade = self._facade_with_calendar(cal)
+
+        projects = list_projects(facade)  # type: ignore[arg-type]
+
+        assert len(projects) == 1
+        assert projects[0].uid == "alive-project@genesis"

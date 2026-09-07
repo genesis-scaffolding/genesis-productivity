@@ -7,7 +7,7 @@ for tasks with scheduled_start.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -375,12 +375,20 @@ class MockCalDAVFacade:
                 setattr(entry, key, value)
         return entry
 
-    def stop_time_log_entry(self, uid: str, *, actual_due, completed_at):
+    def stop_time_log_entry(
+        self,
+        uid: str,
+        *,
+        actual_due: datetime | None,
+        completed_at: datetime | None,
+    ):
+        from genesis.tz import to_utc_optional
+
         entry = self._time_log.get(uid)
         if entry is None:
             return None
-        entry.due = actual_due
-        entry.completed_at = completed_at
+        entry.due = to_utc_optional(actual_due)
+        entry.completed_at = to_utc_optional(completed_at)
         entry.status = TimeLogStatus.COMPLETED
         entry.modified = self._now()
         return entry

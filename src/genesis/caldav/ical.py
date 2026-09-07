@@ -59,12 +59,22 @@ def to_str(val: Any) -> str | None:
 
 
 def to_datetime(val: Any) -> datetime | None:
-    """Return a datetime from an ical property, or None."""
+    """Return a tz-aware UTC datetime from an ical property, or None.
+
+    Per project convention in ``genesis.tz``, all entity datetime
+    fields hold UTC. Reads strip any TZID and convert to UTC. Floating
+    time (no tzinfo) is treated as already-UTC for backward
+    compatibility with any legacy entries; new writes always pass
+    tz-aware UTC and serialize as ``Z``.
+    """
     val = _to_python(val)
     if val is None:
         return None
     if isinstance(val, datetime):
-        return val
+        if val.tzinfo is None:
+            # Legacy floating-time entry: treat as UTC for safety.
+            return val.replace(tzinfo=UTC)
+        return val.astimezone(UTC)
     return None
 
 

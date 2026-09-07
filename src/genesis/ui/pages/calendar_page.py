@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta
 import streamlit as st
 
 from genesis.entities import EventStatus
+from genesis.tz import to_local, to_utc
 from genesis.ui._state import get_facade
 from genesis.ui._table import render_tasks_table
 
@@ -44,8 +45,8 @@ st.write("")
 # --- Load shadow events for this week ---------------------------------------
 
 # All-day events whose start is in [week_start, week_end + 1 day)
-week_window_start = datetime.combine(week_start, time.min)
-week_window_end = datetime.combine(week_end + timedelta(days=1), time.min)
+week_window_start = to_utc(datetime.combine(week_start, time.min))
+week_window_end = to_utc(datetime.combine(week_end + timedelta(days=1), time.min))
 
 # Server-side time-range filter: VEVENT overlap with the week window
 # (RFC 4791 §9.9). Both standalone and shadow (task_id set) events are
@@ -97,9 +98,11 @@ for i, c in enumerate(strip_cols):
             continue
         for e in day_events:
             with st.container(border=True):
+                local_start = to_local(e.start)
+                local_end = to_local(e.end)
                 time_label = (
-                    f"{e.start:%H:%M}–{e.end:%H:%M}"
-                    if (e.end - e.start) < timedelta(days=1)
+                    f"{local_start:%H:%M}–{local_end:%H:%M}"
+                    if (local_end - local_start) < timedelta(days=1)
                     else "all day"
                 )
                 st.markdown(f"**{e.summary}**")

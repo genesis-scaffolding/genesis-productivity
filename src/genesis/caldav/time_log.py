@@ -11,6 +11,7 @@ cleanly. Discard is a hard DELETE with no audit trail.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from caldav.lib import error as caldav_error
@@ -22,6 +23,7 @@ from ..entities import (
     TimeLogEntryUpdate,
     TimeLogStatus,
 )
+from ..tz import to_utc_optional
 from .ical import new_uid, now_utc, time_log_from_ical, time_log_to_ical
 
 if TYPE_CHECKING:
@@ -196,8 +198,8 @@ def stop_time_log_entry(
     facade: CalDAVFacade,
     uid: str,
     *,
-    actual_due: object,
-    completed_at: object,
+    actual_due: datetime | None,
+    completed_at: datetime | None,
 ) -> TimeLogEntry | None:
     """Mark a time log entry as COMPLETED with the canonical end times.
 
@@ -226,8 +228,8 @@ def stop_time_log_entry(
     except Exception:
         return None
 
-    entry.due = actual_due  # type: ignore[assignment]
-    entry.completed_at = completed_at  # type: ignore[assignment]
+    entry.due = to_utc_optional(actual_due)
+    entry.completed_at = to_utc_optional(completed_at)
     entry.status = TimeLogStatus.COMPLETED
     entry.modified = now_utc()
 

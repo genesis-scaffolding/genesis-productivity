@@ -3,6 +3,10 @@
 A TimeLogEntry is a VTODO stored in the time_log collection. It
 covers both active focus sessions (STATUS != COMPLETED) and completed
 historical records (STATUS == COMPLETED). See ADR-014.
+
+All datetime fields hold tz-aware UTC datetimes per the project
+convention documented in ``genesis.tz``. Naive input is coerced to
+UTC at construction by ``_utc_field``.
 """
 
 from __future__ import annotations
@@ -10,7 +14,9 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from ..tz import to_utc
 
 
 class TimeLogStatus(StrEnum):
@@ -68,6 +74,15 @@ class TimeLogEntry(BaseModel):
         "extra": "ignore",
     }
 
+    @field_validator(
+        "start", "due", "completed_at", "created", "modified", mode="before"
+    )
+    @classmethod
+    def _utc_field(cls, v: object) -> object:
+        if isinstance(v, datetime):
+            return to_utc(v)
+        return v
+
 
 class TimeLogEntryCreate(BaseModel):
     """Data for creating a new time log entry (typically a new session)."""
@@ -79,6 +94,15 @@ class TimeLogEntryCreate(BaseModel):
     status: TimeLogStatus = TimeLogStatus.NEEDS_ACTION
     task_id: str | None = None
     description: str | None = None
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("start", "due", mode="before")
+    @classmethod
+    def _utc_field(cls, v: object) -> object:
+        if isinstance(v, datetime):
+            return to_utc(v)
+        return v
 
 
 class TimeLogEntryUpdate(BaseModel):
@@ -96,3 +120,12 @@ class TimeLogEntryUpdate(BaseModel):
     mode: TimeLogMode | None = None
     task_id: str | None = None
     description: str | None = None
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("start", "due", "completed_at", mode="before")
+    @classmethod
+    def _utc_field(cls, v: object) -> object:
+        if isinstance(v, datetime):
+            return to_utc(v)
+        return v

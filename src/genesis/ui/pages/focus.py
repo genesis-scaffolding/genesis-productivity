@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
+from genesis.caldav.ical import now_utc
 from genesis.entities import Task, TimeLogEntryCreate, TimeLogMode, TimeLogStatus
 from genesis.ui._state import get_facade
 
@@ -56,7 +57,7 @@ def _start_session(
     countdown_minutes: int | None,
 ) -> TimeLogEntryCreate:
     """Build a TimeLogEntryCreate for a new session."""
-    now = datetime.now()
+    now = now_utc()
     if mode == TimeLogMode.COUNTDOWN:
         assert countdown_minutes is not None
         due = now + timedelta(minutes=countdown_minutes)
@@ -152,7 +153,7 @@ def _render_start_form() -> None:
 
 @st.fragment(run_every="1s")
 def _render_active_sessions() -> None:
-    now = datetime.now()
+    now = now_utc()
     sessions = caldav.list_time_log(active_only=True)
 
     # Auto-stop any countdown sessions whose target has passed.

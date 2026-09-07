@@ -11,12 +11,13 @@ cleanly.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, time
+from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Any
 
 import streamlit as st
 
+from genesis.tz import to_utc
 from genesis.ui._state import get_facade
 
 # -----------------------------------------------------------------------------
@@ -102,7 +103,7 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
         )
     with sched_cols[1]:
         st.caption("Hard deadline")
-        hard_deadline = st.date_input(
+        hard_deadline_date: date | None = st.date_input(
             "hard_deadline", key="_ntd_dl", value=None,
             label_visibility="collapsed", format="YYYY-MM-DD",
         )
@@ -126,20 +127,23 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
             return
         from genesis.entities import TaskCreate
 
+        # Build UTC datetimes from local-naive streamlit widgets.
+        scheduled_start_utc = to_utc(scheduled_start) if scheduled_start else None
+        hard_deadline_dt = (
+            datetime.combine(hard_deadline_date, time.min) if hard_deadline_date else None
+        )
+        hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
+
         facade.caldav.create_task(
             TaskCreate(
                 summary=summary,
                 description=description or None,
                 project_id=selected_project_uid,
-                scheduled_start=scheduled_start,
+                scheduled_start=scheduled_start_utc,
                 scheduled_duration=(
-                    scheduled_duration if scheduled_start is not None else None
+                    scheduled_duration if scheduled_start_utc is not None else None
                 ),
-                hard_deadline=(
-                    datetime.combine(hard_deadline, time.min)
-                    if hard_deadline is not None
-                    else None
-                ),
+                hard_deadline=hard_deadline_utc,
                 assigned_date=assigned_date,
                 priority=priority,
             )
@@ -195,15 +199,23 @@ def task_edit_dialog(uid: str) -> None:
     sched_cols = st.columns(2)
     with sched_cols[0]:
         st.caption("Schedule on calendar")
-        scheduled_start = st.date_input(
+        scheduled_start_date: date | None = st.date_input(
             "scheduled_start_date",
-            value=task.scheduled_start.date() if task.scheduled_start else None,
+            value=(
+                task.scheduled_start.astimezone().date()
+                if task.scheduled_start
+                else None
+            ),
             key=f"{kp}_sch_d", label_visibility="collapsed",
             format="YYYY-MM-DD",
         )
         schedule_time = st.time_input(
             "schedule_time",
-            value=task.scheduled_start.time() if task.scheduled_start else None,
+            value=(
+                task.scheduled_start.astimezone().time()
+                if task.scheduled_start
+                else None
+            ),
             key=f"{kp}_sch_t",
         )
         scheduled_duration = st.number_input(
@@ -213,9 +225,13 @@ def task_edit_dialog(uid: str) -> None:
         )
     with sched_cols[1]:
         st.caption("Hard deadline")
-        hard_deadline = st.date_input(
+        hard_deadline_date: date | None = st.date_input(
             "hard_deadline",
-            value=task.hard_deadline,
+            value=(
+                task.hard_deadline.astimezone().date()
+                if task.hard_deadline
+                else None
+            ),
             key=f"{kp}_dl", label_visibility="collapsed",
             format="YYYY-MM-DD",
         )
@@ -228,8 +244,8 @@ def task_edit_dialog(uid: str) -> None:
         )
 
     combined_scheduled: datetime | None = None
-    if scheduled_start is not None and schedule_time is not None:
-        combined_scheduled = datetime.combine(scheduled_start, schedule_time)
+    if scheduled_start_date is not None and schedule_time is not None:
+        combined_scheduled = datetime.combine(scheduled_start_date, schedule_time)
 
     st.divider()
     action_cols = st.columns([1, 1, 1, 6])
@@ -237,20 +253,31 @@ def task_edit_dialog(uid: str) -> None:
         from genesis.entities import TaskUpdate
 
         new_status = TaskStatus(status_label)
+        # Build UTC datetimes from local-naive streamlit widgets.
+        combined_scheduled_utc = (
+            to_utc(combined_scheduled) if combined_scheduled else None
+        )
+        hard_deadline_dt = (
+            datetime.combine(hard_deadline_date, time.min)
+            if hard_deadline_date
+            else None
+        )
+        hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
+
         update_kwargs: dict = {
             "summary": summary,
             "description": description or None,
-            "hard_deadline": hard_deadline,
+            "hard_deadline": hard_deadline_utc,
             "assigned_date": assigned_date,
             "priority": priority,
             "status": new_status,
             "project_id": project_uid,
             "clear_project_id": (project_uid is None),
         }
-        if combined_scheduled is None and task.scheduled_start is not None:
+        if combined_scheduled_utc is None and task.scheduled_start is not None:
             update_kwargs["clear_scheduled_start"] = True
-        elif combined_scheduled is not None:
-            update_kwargs["scheduled_start"] = combined_scheduled
+        elif combined_scheduled_utc is not None:
+            update_kwargs["scheduled_start"] = combined_scheduled_utc
             update_kwargs["scheduled_duration"] = scheduled_duration
         facade.caldav.update_task(uid, TaskUpdate(**update_kwargs))
         st.toast("Task updated")

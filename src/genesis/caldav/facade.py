@@ -8,6 +8,7 @@ collection layout and the shadow VEVENT pattern.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from . import events, projects, tasks, time_log
@@ -192,7 +193,9 @@ class CalDAVFacade:
     def update_time_log_entry(self, uid: str, data):
         return time_log.update_time_log_entry(self, uid, data)
 
-    def stop_time_log_entry(self, uid: str, *, actual_due, completed_at):
+    def stop_time_log_entry(
+        self, uid: str, *, actual_due: datetime | None, completed_at: datetime | None
+    ):
         return time_log.stop_time_log_entry(
             self, uid, actual_due=actual_due, completed_at=completed_at
         )

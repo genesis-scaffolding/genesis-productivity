@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from genesis.entities import Task, TaskStatus, TaskUpdate
-from genesis.ui._render import open_task_dialog, request_delete
+from genesis.ui._render import delete_confirm_dialog, task_edit_dialog
 
 if TYPE_CHECKING:
     from genesis.caldav import CalDAVFacade
@@ -99,10 +99,9 @@ def render_tasks_table(
             return
         target = table_tasks[row_idx]
         if label == "Edit":
-            open_task_dialog(target.uid)
+            task_edit_dialog(target.uid)
         elif label == "Delete":
-            request_delete(
-                f"{key}_{target.uid}",
+            delete_confirm_dialog(
                 f"task '{target.summary}'",
                 lambda uid=target.uid: caldav.delete_task(uid),
             )

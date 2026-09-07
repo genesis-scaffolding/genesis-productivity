@@ -18,14 +18,11 @@ from datetime import date, datetime, time, timedelta
 import streamlit as st
 
 from genesis.entities import ProjectStatus, TaskStatus
-from genesis.ui._render import maybe_show_task_dialog
 from genesis.ui._state import get_facade
 from genesis.ui._table import render_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
-
-maybe_show_task_dialog()
 
 st.title("Dashboard")
 st.caption("What's on your plate.")

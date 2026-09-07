@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from genesis.journal.facade import Entry, EntryType
+from genesis.ui._render import delete_confirm_dialog
 from genesis.ui._state import get_facade
 
 facade = get_facade()
@@ -97,14 +98,13 @@ def _render_list() -> None:
         if label == "Open":
             st.query_params["uid"] = target.uid
         elif label == "Delete":
-            st.session_state["pending_delete"] = (
-                f"je_{target.uid}",
+            delete_confirm_dialog(
                 f"entry {target.date.isoformat()}",
                 lambda uid=target.uid: journal.delete_entry(uid),
             )
         # No explicit st.rerun() — this is an on_click callback.
-        # Streamlit's natural rerun picks up the query_params /
-        # pending_delete changes on the next render.
+        # Streamlit's natural rerun picks up the query_params change
+        # on the next render.
 
     def _handle_inline_edit() -> None:
         state = st.session_state.get("journal_list") or {}
@@ -148,12 +148,6 @@ def _render_list() -> None:
         key="journal_list",
     )
 
-    # Render delete confirm if pending
-    if "pending_delete" in st.session_state:
-        from genesis.ui._render import maybe_show_delete_confirm
-
-        maybe_show_delete_confirm()
-
 
 # -----------------------------------------------------------------------------
 # Entry view
@@ -191,23 +185,16 @@ def _render_view(uid: str) -> None:
             st.rerun()
     with header_cols[2]:
         if st.button("🗑 Delete", key="je_del_btn"):
-            st.session_state["pending_delete"] = (
-                f"je_{entry.uid}",
+            delete_confirm_dialog(
                 f"entry {entry.date.isoformat()}",
                 lambda: journal.delete_entry(entry.uid),
             )
-            st.rerun()
 
     st.divider()
     if entry.content.strip():
         st.markdown(entry.content)
     else:
         st.caption("Empty entry.")
-
-    if "pending_delete" in st.session_state:
-        from genesis.ui._render import maybe_show_delete_confirm
-
-        maybe_show_delete_confirm()
 
 
 def _render_edit(uid: str) -> None:

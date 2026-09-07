@@ -14,23 +14,17 @@ import streamlit as st
 
 from genesis.entities import ProjectStatus, TaskStatus
 from genesis.ui._render import (
-    maybe_show_delete_confirm,
-    maybe_show_project_dialog,
-    maybe_show_task_dialog,
-    open_project_dialog,
-    open_task_dialog,
-    request_delete,
+    delete_confirm_dialog,
+    project_create_dialog,
+    project_edit_dialog,
     status_badge,
+    task_create_dialog,
 )
 from genesis.ui._state import get_facade
 from genesis.ui._table import render_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
-
-maybe_show_project_dialog()
-maybe_show_task_dialog()
-maybe_show_delete_confirm()
 
 
 # -----------------------------------------------------------------------------
@@ -43,7 +37,7 @@ def _render_list() -> None:
     st.caption("Long-term goals and project-specific task groups.")
 
     if st.button("+ New Project", key="new_project_btn"):
-        open_project_dialog(None)
+        project_create_dialog()
 
     projects = caldav.list_projects(sort_by=["status", "name"])
     groups: dict[ProjectStatus, list] = {}
@@ -93,8 +87,7 @@ def _render_list() -> None:
                                 "Delete",
                                 key=f"proj_del_{project.uid}"
                             ):
-                                request_delete(
-                                    f"proj_{project.uid}",
+                                delete_confirm_dialog(
                                     f"project '{project.name}'",
                                     lambda uid=project.uid: caldav.delete_project(uid),
                                 )
@@ -130,11 +123,10 @@ def _render_detail(uid: str) -> None:
         status_badge(project.status)
     with header_cols[1]:
         if st.button("Edit", key="pd_edit"):
-            open_project_dialog(uid)
+            project_edit_dialog(uid)
     with header_cols[2]:
         if st.button("Delete", key="pd_del"):
-            request_delete(
-                f"pd_{uid}",
+            delete_confirm_dialog(
                 f"project '{project.name}'",
                 lambda: caldav.delete_project(uid),
             )
@@ -178,7 +170,7 @@ def _render_detail(uid: str) -> None:
     # Task list header with "+ Add Task" button (pre-attached to this project)
     st.subheader("Project Tasks")
     if st.button("+ Add Task", key=f"pd_add_task_{uid}"):
-        open_task_dialog(project_id=uid)
+        task_create_dialog(project_id=uid)
 
     sorted_tasks = sorted(
         tasks, key=lambda t: (t.status.value, -(t.priority or 5))

@@ -1,10 +1,11 @@
 """Shared Streamlit widgets and dialogs for the genesis UI.
 
-Page modules call these to render consistent status pills, project cards,
-and edit dialogs. The dialogs are streamlit-decorated functions: pages
-set a trigger in ``st.session_state`` and call the dialog function on
-the next run; the dialog handles its own Save/Cancel and calls
-``st.rerun()`` to dismiss itself.
+Page modules call these to render consistent status pills and to open
+dialogs. The dialogs are streamlit-decorated functions; pages call them
+directly from a button body (or ``on_click`` callback) — there is no
+session-state flag indirection. ``on_dismiss="rerun"`` makes X-button
+or ESC dismissal trigger an immediate rerun so any widget updates flush
+cleanly.
 """
 
 from __future__ import annotations
@@ -54,22 +55,15 @@ def _form_key(prefix: str, uid: str) -> str:
     return f"{prefix}_{uid or 'new'}"
 
 
-def _close_create_task_dialog() -> None:
-    """Pop the create-dialog flags so the dialog dismisses on the next rerun."""
-    st.session_state.pop("open_task_dialog", None)
-    st.session_state.pop("create_task_project_id", None)
+# -----------------------------------------------------------------------------
+# Task dialogs
+# -----------------------------------------------------------------------------
 
 
-def _close_edit_task_dialog() -> None:
-    st.session_state.pop("open_task_dialog", None)
+@st.dialog("New task", width="large", on_dismiss="rerun")
+def task_create_dialog(*, project_id: str | None = None) -> None:
+    """Open the create-task dialog. Call from a button body.
 
-
-@st.dialog("New task", width="large")
-def _create_task_dialog(*, project_id: str | None = None) -> None:
-    """Internal: create-task dialog body.
-
-    Direct date/datetime inputs replace the previous checkbox gates.
-    A blank/None value for any date field means "leave it unset".
     Pass ``project_id`` to pre-attach the new task to a project.
     """
     facade = get_facade()
@@ -125,7 +119,6 @@ def _create_task_dialog(*, project_id: str | None = None) -> None:
     st.divider()
     action_cols = st.columns([1, 1, 6])
     if action_cols[0].button("Cancel", key="_ntd_cancel"):
-        _close_create_task_dialog()
         st.rerun()
     if action_cols[1].button("Add", type="primary", key="_ntd_add"):
         if not summary.strip():
@@ -151,20 +144,18 @@ def _create_task_dialog(*, project_id: str | None = None) -> None:
                 priority=priority,
             )
         )
-        _close_create_task_dialog()
         st.toast(f"Created task: {summary}")
         st.rerun()
 
 
-@st.dialog("Edit task", width="large")
-def _edit_task_dialog(uid: str) -> None:
-    """Internal: edit-task dialog body."""
+@st.dialog("Edit task", width="large", on_dismiss="rerun")
+def task_edit_dialog(uid: str) -> None:
+    """Open the edit-task dialog for the given task UID."""
     facade = get_facade()
     task = facade.caldav.get_task(uid)
     if task is None:
         st.error("Task not found")
         if st.button("Close"):
-            _close_edit_task_dialog()
             st.rerun()
         return
 
@@ -262,48 +253,14 @@ def _edit_task_dialog(uid: str) -> None:
             update_kwargs["scheduled_start"] = combined_scheduled
             update_kwargs["scheduled_duration"] = scheduled_duration
         facade.caldav.update_task(uid, TaskUpdate(**update_kwargs))
-        _close_edit_task_dialog()
         st.toast("Task updated")
         st.rerun()
     if action_cols[1].button("Cancel", key=f"{kp}_cancel"):
-        _close_edit_task_dialog()
         st.rerun()
     if action_cols[2].button("Delete", key=f"{kp}_del"):
         facade.caldav.delete_task(uid)
-        _close_edit_task_dialog()
         st.toast("Task deleted")
         st.rerun()
-
-
-def open_task_dialog(uid: str | None = None, *, project_id: str | None = None) -> None:
-    """Open the task create-or-edit dialog.
-
-    ``uid``: pass to edit; pass ``None`` (the default) to create.
-    ``project_id``: for create, pre-attach the new task to a project.
-
-    Sets the trigger in session state; streamlit's natural rerun after
-    a button click (or after an on_click callback) is what opens the
-    dialog on the next render. No explicit ``st.rerun()`` here because
-    callers may be inside callbacks where rerun is a no-op.
-    """
-    st.session_state["open_task_dialog"] = uid or ""
-    if project_id is not None:
-        st.session_state["create_task_project_id"] = project_id
-
-
-def maybe_show_task_dialog() -> None:
-    """Call at the top of any page that uses task dialogs.
-
-    Renders the dialog if the trigger is set. Pops the trigger so the
-    dialog closes on the next rerun unless something else opens it.
-    """
-    if "open_task_dialog" in st.session_state:
-        uid = st.session_state.pop("open_task_dialog")
-        if uid:
-            _edit_task_dialog(uid)
-        else:
-            project_id = st.session_state.pop("create_task_project_id", None)
-            _create_task_dialog(project_id=project_id)
 
 
 # -----------------------------------------------------------------------------
@@ -311,8 +268,9 @@ def maybe_show_task_dialog() -> None:
 # -----------------------------------------------------------------------------
 
 
-@st.dialog("New project")
-def _create_project_dialog() -> None:
+@st.dialog("New project", on_dismiss="rerun")
+def project_create_dialog() -> None:
+    """Open the create-project dialog. Call from a button body."""
     facade = get_facade()
     name = st.text_input("Name", key="_cpd_name")
     description = st.text_area("Description", key="_cpd_desc", height=160)
@@ -323,23 +281,23 @@ def _create_project_dialog() -> None:
             return
         from genesis.entities import ProjectCreate
 
-        facade.caldav.create_project(ProjectCreate(name=name, description=description or None))
-        st.session_state.pop("open_project_dialog", None)
+        facade.caldav.create_project(
+            ProjectCreate(name=name, description=description or None)
+        )
         st.toast(f"Created project: {name}")
         st.rerun()
     if cols[1].button("Cancel", key="_cpd_cancel"):
-        st.session_state.pop("open_project_dialog", None)
         st.rerun()
 
 
-@st.dialog("Edit project")
-def _edit_project_dialog(uid: str) -> None:
+@st.dialog("Edit project", on_dismiss="rerun")
+def project_edit_dialog(uid: str) -> None:
+    """Open the edit-project dialog for the given project UID."""
     facade = get_facade()
     project = facade.caldav.get_project(uid)
     if project is None:
         st.error("Project not found")
         if st.button("Close", key="_epd_close"):
-            st.session_state.pop("open_project_dialog", None)
             st.rerun()
         return
 
@@ -356,13 +314,17 @@ def _edit_project_dialog(uid: str) -> None:
         index=[s.value for s in ProjectStatus].index(project.status.value),
         key=f"{kp}_status",
     )
-    has_start = st.checkbox("Set start date", value=project.start_date is not None, key=f"{kp}_has_s")
+    has_start = st.checkbox(
+        "Set start date", value=project.start_date is not None, key=f"{kp}_has_s"
+    )
     start_date = (
         st.date_input("Start", value=project.start_date, key=f"{kp}_sd")
         if has_start
         else None
     )
-    has_deadline = st.checkbox("Set deadline", value=project.deadline is not None, key=f"{kp}_has_d")
+    has_deadline = st.checkbox(
+        "Set deadline", value=project.deadline is not None, key=f"{kp}_has_d"
+    )
     deadline = (
         st.date_input("Deadline", value=project.deadline, key=f"{kp}_dd")
         if has_deadline
@@ -383,37 +345,14 @@ def _edit_project_dialog(uid: str) -> None:
                 deadline=deadline,
             ),
         )
-        st.session_state.pop("open_project_dialog", None)
         st.toast("Project updated")
         st.rerun()
     if cols[1].button("Cancel", key=f"{kp}_cancel"):
-        st.session_state.pop("open_project_dialog", None)
         st.rerun()
     if cols[2].button("Delete", key=f"{kp}_del"):
         facade.caldav.delete_project(uid)
-        st.session_state.pop("open_project_dialog", None)
         st.toast(f"Deleted project: {name}")
         st.rerun()
-
-
-def open_project_dialog(uid: str | None = None) -> None:
-    """Open the project create-or-edit dialog.
-
-    Sets the trigger in session state; streamlit's natural rerun
-    after the click (button body or callback) opens the dialog on the
-    next render. No explicit ``st.rerun()``.
-    """
-    st.session_state["open_project_dialog"] = uid or ""
-
-
-def maybe_show_project_dialog() -> None:
-    """Call at the top of any page that uses project dialogs."""
-    if "open_project_dialog" in st.session_state:
-        uid = st.session_state.pop("open_project_dialog")
-        if uid:
-            _edit_project_dialog(uid)
-        else:
-            _create_project_dialog()
 
 
 # -----------------------------------------------------------------------------
@@ -421,34 +360,17 @@ def maybe_show_project_dialog() -> None:
 # -----------------------------------------------------------------------------
 
 
-@st.dialog("Confirm delete")
-def _delete_confirm_dialog(label: str, kind: str, callback: Callable[[], Any]) -> None:
+@st.dialog("Confirm delete", on_dismiss="rerun")
+def delete_confirm_dialog(label: str, callback: Callable[[], Any]) -> None:
+    """Open the delete-confirmation dialog. Call from a button body.
+
+    ``label`` is the human-readable name of the thing being deleted.
+    ``callback`` runs on confirmation.
+    """
     st.write(f"Delete **{label}**? This cannot be undone.")
     cols = st.columns(2)
-    if cols[0].button("Delete", type="primary", key=f"delcfm_{kind}"):
+    if cols[0].button("Delete", type="primary", key=f"delcfm_{label}"):
         callback()
-        st.session_state.pop("pending_delete", None)
         st.rerun()
-    if cols[1].button("Cancel", key=f"delcn_{kind}"):
-        st.session_state.pop("pending_delete", None)
+    if cols[1].button("Cancel", key=f"delcn_{label}"):
         st.rerun()
-
-
-def request_delete(kind: str, label: str, callback: Callable[[], Any]) -> None:
-    """Stage a delete confirmation. Call from a "Delete" button.
-
-    The dialog opens on the next render and runs ``callback()`` on
-    confirmation. ``kind`` is a short tag used to keep the dialog's
-    widget keys unique across pages. No ``st.rerun()`` here because
-    callers may be inside ``on_click``/``on_change`` callbacks where
-    rerun is a no-op; streamlit's natural rerun after the callback
-    picks up the session-state change.
-    """
-    st.session_state["pending_delete"] = (kind, label, callback)
-
-
-def maybe_show_delete_confirm() -> None:
-    """Call at the top of any page that uses request_delete()."""
-    if "pending_delete" in st.session_state:
-        kind, label, callback = st.session_state["pending_delete"]
-        _delete_confirm_dialog(label, kind, callback)

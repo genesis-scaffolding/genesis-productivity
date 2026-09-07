@@ -12,26 +12,17 @@ from __future__ import annotations
 import streamlit as st
 
 from genesis.entities import TaskStatus
-from genesis.ui._render import (
-    maybe_show_delete_confirm,
-    maybe_show_task_dialog,
-    open_task_dialog,
-)
+from genesis.ui._render import task_create_dialog
 from genesis.ui._state import get_facade
 from genesis.ui._table import render_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
 
-maybe_show_task_dialog()
-maybe_show_delete_confirm()
-
-# --- Header with title and "+ Add Task" button -----------------------------
-
 st.title("Tasks")
 st.caption("Your global backlog and scheduled work.")
 if st.button("+ Add Task", key="global_add_task_btn"):
-    open_task_dialog()
+    task_create_dialog()
 
 st.divider()
 

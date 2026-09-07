@@ -177,6 +177,14 @@ def render_tasks_table(
             if not touched:
                 continue
             caldav.update_task(original.uid, update)
+        # Clear in-flight edits so they are not re-applied to the new
+        # df on the next render. data_editor preserves edited_rows in
+        # widget state and reapplies them to row positions on each
+        # render; if the underlying data reorders between renders
+        # (Radicale's PROPFIND order is not stable across PUTs), the
+        # preserved edits would land on the wrong rows. Clearing here
+        # after we've already dispatched the updates prevents that.
+        state["edited_rows"] = {}
         # No explicit st.rerun() — this is an on_change callback.
         # Streamlit's natural rerun after on_change picks up the updates.
 

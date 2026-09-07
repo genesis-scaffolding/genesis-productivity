@@ -197,6 +197,14 @@ def list_tasks(
                 key=lambda t, k=key: getattr(t, k, "") or "",
                 reverse=(sort_order == "desc"),
             )
+    else:
+        # Default: stable order by (created, uid) so callers get a
+        # deterministic result that does not shift across renders when
+        # the underlying collection is updated. Radicale's PROPFIND
+        # returns items in a non-deterministic order that depends on
+        # file write order, which causes data_editor row indices to
+        # drift between renders.
+        tasks.sort(key=lambda t: (t.created, t.uid))
     return tasks
 
 

@@ -123,6 +123,9 @@ def _render_list() -> None:
                 except ValueError as exc:
                     st.error(str(exc))
                     return
+        # Clear in-flight edits so they are not re-applied to the new
+        # df on the next render (same reason as in _table.py).
+        state["edited_rows"] = {}
 
     st.data_editor(
         df,

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from caldav.lib.error import NotFoundError
+
 from ..entities import TimeLogEntry, TimeLogEntryCreate, TimeLogEntryUpdate
 from .ical import new_uid, now_utc, time_log_from_ical, time_log_to_ical
 
@@ -82,7 +84,10 @@ def list_time_log(
     """List time log entries, optionally filtered by task_id."""
     entries: list[TimeLogEntry] = []
     for obj in _get_calendar(facade).objects():
-        component = obj.icalendar_component
+        try:
+            component = obj.icalendar_component
+        except NotFoundError:
+            continue
         if component.name != "VEVENT":
             continue
         try:

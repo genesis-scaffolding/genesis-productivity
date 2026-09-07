@@ -42,6 +42,8 @@ def info(
 @app.command()
 def ui(
     user: str = _user_option,
+    port: int = typer.Option(3000, "--port", "-p", help="Port for the Streamlit server."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Interface for the Streamlit server to bind to."),
 ) -> None:
     """Start the Streamlit UI."""
     config_path = resolve_config_path(user)
@@ -50,7 +52,17 @@ def ui(
     # Launch streamlit, pointing it at the UI module
     from streamlit.web import cli as stcli
 
-    sys.argv = ["streamlit", "run", "src/genesis/ui/app.py"]
+    sys.argv = [
+        "streamlit",
+        "run",
+        "src/genesis/ui/app.py",
+        "--server.address",
+        host,
+        "--server.port",
+        str(port),
+        "--server.headless",
+        "true",
+    ]
     sys.exit(stcli.main())
 
 

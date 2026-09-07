@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from caldav.lib.error import NotFoundError
+
 from ..entities import Event, EventCreate, EventStatus, EventUpdate
 from .ical import event_from_ical, event_to_ical, new_uid, now_utc
 
@@ -88,7 +90,13 @@ def list_events(
     """List events with optional filters."""
     events: list[Event] = []
     for obj in _get_calendar(facade).objects():
-        component = obj.icalendar_component
+        try:
+            component = obj.icalendar_component
+        except NotFoundError:
+            # The server's object index has a stale entry that no longer
+            # resolves to a real resource. Skip it instead of failing
+            # the entire list.
+            continue
         if component.name != "VEVENT":
             continue
         try:

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from caldav.lib.error import NotFoundError
+
 from ..entities import Project, ProjectCreate, ProjectStatus, ProjectUpdate
 from .ical import new_uid, now_utc, project_from_ical, project_to_ical
 
@@ -90,7 +92,10 @@ def list_projects(
     projects: list[Project] = []
     cal = _get_calendar(facade)
     for obj in cal.objects():
-        component = obj.icalendar_component
+        try:
+            component = obj.icalendar_component
+        except NotFoundError:
+            continue
         if component.name != "VTODO":
             continue
         try:

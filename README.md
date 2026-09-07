@@ -16,6 +16,18 @@ make help          # see available commands
 make test          # run tests
 ```
 
+## UI
+
+The web interface is a multi-page Streamlit app. Start it with:
+
+```
+make ui            # default user on http://127.0.0.1:3000
+genesis ui --user alice   # a named user
+genesis ui --user alice --port 9000   # different port
+```
+
+Pages: Dashboard, Projects, Project, Tasks, Calendar, Journal, Journal Entry. Data scope is per user (see ADR-010); restarting the UI with a different `--user` switches scope.
+
 ## Architecture
 
 - **core**: Facade and shared infrastructure

@@ -43,6 +43,7 @@ typeCheckingMode = "basic"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "responses>=0.26.2",

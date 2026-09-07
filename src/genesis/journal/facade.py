@@ -28,6 +28,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
+from ..tz import to_utc
+
 
 class EntryType(StrEnum):
     """Journal entry type.
@@ -165,8 +167,8 @@ class JournalFacade:
                 title=meta.get("title"),
                 type=EntryType(type_str) if type_str else None,
                 content=body,
-                created=datetime.fromtimestamp(stat.st_ctime),
-                modified=datetime.fromtimestamp(stat.st_mtime),
+                created=to_utc(datetime.fromtimestamp(stat.st_ctime)),
+                modified=to_utc(datetime.fromtimestamp(stat.st_mtime)),
             )
         except (ValueError, KeyError, OSError, TypeError):
             return None

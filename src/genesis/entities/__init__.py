@@ -3,7 +3,13 @@
 from .event import Event, EventCreate, EventStatus, EventUpdate
 from .project import Project, ProjectCreate, ProjectStatus, ProjectUpdate
 from .task import Task, TaskCreate, TaskStatus, TaskUpdate
-from .time_log import TimeLogEntry, TimeLogEntryCreate, TimeLogEntryUpdate
+from .time_log import (
+    TimeLogEntry,
+    TimeLogEntryCreate,
+    TimeLogEntryUpdate,
+    TimeLogMode,
+    TimeLogStatus,
+)
 
 __all__ = [
     "Event",
@@ -21,4 +27,6 @@ __all__ = [
     "TimeLogEntry",
     "TimeLogEntryCreate",
     "TimeLogEntryUpdate",
+    "TimeLogMode",
+    "TimeLogStatus",
 ]

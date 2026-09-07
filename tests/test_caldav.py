@@ -25,6 +25,8 @@ from genesis.entities import (
     TaskStatus,
     TaskUpdate,
     TimeLogEntryCreate,
+    TimeLogMode,
+    TimeLogStatus,
 )
 
 
@@ -641,16 +643,92 @@ class TestTimeLogIntegration:
 
     def test_create_and_list_time_log(self, facade: CalDAVFacade) -> None:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
-        end = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
+        due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
         task = facade.create_task(TaskCreate(summary="Work on"))
 
         entry = facade.create_time_log_entry(
-            TimeLogEntryCreate(start=start, end=end, task_id=task.uid)
+            TimeLogEntryCreate(
+                label="Work on",
+                start=start,
+                due=due,
+                mode=TimeLogMode.COUNTDOWN,
+                status=TimeLogStatus.NEEDS_ACTION,
+                task_id=task.uid,
+            )
         )
         assert entry.task_id == task.uid
+        assert entry.mode == TimeLogMode.COUNTDOWN
+        assert entry.status == TimeLogStatus.NEEDS_ACTION
 
-        entries = facade.list_time_log(task_id=task.uid)
-        assert len(entries) == 1
+        # Default list filters to COMPLETED, so this active entry is invisible.
+        assert facade.list_time_log(task_id=task.uid) == []
+
+        # active_only returns the entry.
+        active = facade.list_time_log(task_id=task.uid, active_only=True)
+        assert len(active) == 1
+        assert active[0].uid == entry.uid
+
+    def test_stop_time_log_entry(self, facade: CalDAVFacade) -> None:
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
+        task = facade.create_task(TaskCreate(summary="Work on"))
+
+        entry = facade.create_time_log_entry(
+            TimeLogEntryCreate(
+                label="Work on",
+                start=start,
+                due=due,
+                mode=TimeLogMode.COUNTDOWN,
+                task_id=task.uid,
+            )
+        )
+
+        completed_at = datetime(2030, 3, 1, 9, 30, tzinfo=UTC)
+        stopped = facade.stop_time_log_entry(
+            entry.uid, actual_due=due, completed_at=completed_at
+        )
+        assert stopped is not None
+        assert stopped.status == TimeLogStatus.COMPLETED
+        assert stopped.due == due
+        assert stopped.completed_at == completed_at
+
+        # No longer in active_only list
+        assert facade.list_time_log(task_id=task.uid, active_only=True) == []
+
+        # Visible in default (completed) list
+        completed = facade.list_time_log(task_id=task.uid)
+        assert len(completed) == 1
+        assert completed[0].uid == entry.uid
+
+    def test_unaligned_time_log(self, facade: CalDAVFacade) -> None:
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        entry = facade.create_time_log_entry(
+            TimeLogEntryCreate(
+                label="Gym",
+                start=start,
+                mode=TimeLogMode.COUNTUP,
+            )
+        )
+        assert entry.task_id is None
+        assert entry.due is None
+
+        completed_at = datetime(2030, 3, 1, 10, 20, tzinfo=UTC)
+        stopped = facade.stop_time_log_entry(
+            entry.uid,
+            actual_due=completed_at,
+            completed_at=completed_at,
+        )
+        assert stopped is not None
+        assert stopped.task_id is None
+        assert stopped.due == completed_at
+
+        unaligned = facade.list_time_log(active_only=True)
+        assert unaligned == []
+
+        history = facade.list_time_log()
+        assert len(history) == 1
+        assert history[0].task_id is None
+        assert history[0].label == "Gym"
 
 
 # =============================================================================
@@ -674,7 +752,13 @@ class TestFourCollectionsIntegration:
             EventCreate(summary="E", start=start, end=end)
         )
         entry = facade.create_time_log_entry(
-            TimeLogEntryCreate(start=start, end=end, task_id=task.uid)
+            TimeLogEntryCreate(
+                label="T",
+                start=start,
+                due=end,
+                mode=TimeLogMode.COUNTDOWN,
+                task_id=task.uid,
+            )
         )
 
         # Each lives in its own collection
@@ -687,5 +771,7 @@ class TestFourCollectionsIntegration:
         assert len(facade.list_projects()) == 1
         assert len(facade.list_tasks()) == 1
         assert len(facade.list_events()) == 1  # standalone only; task has no scheduled_start
-        assert len(facade.list_time_log()) == 1
+        # Active time-log entry; default list filters to COMPLETED.
+        assert len(facade.list_time_log(active_only=True)) == 1
+        assert len(facade.list_time_log()) == 0
 

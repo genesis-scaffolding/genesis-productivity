@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from ..tz import to_utc
 
 
 class ProjectStatus(StrEnum):
@@ -45,6 +47,13 @@ class Project(BaseModel):
     model_config = {
         "extra": "ignore",
     }
+
+    @field_validator("created", "modified", mode="before")
+    @classmethod
+    def _utc_field(cls, v: object) -> object:
+        if isinstance(v, datetime):
+            return to_utc(v)
+        return v
 
 
 class ProjectCreate(BaseModel):

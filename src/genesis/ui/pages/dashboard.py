@@ -18,6 +18,7 @@ from datetime import date, datetime, time, timedelta
 import streamlit as st
 
 from genesis.entities import ProjectStatus, TaskStatus
+from genesis.tz import to_utc
 from genesis.ui._state import get_facade
 from genesis.ui._table import render_tasks_table
 
@@ -30,7 +31,7 @@ st.caption("What's on your plate.")
 # --- Compute today / week window -------------------------------------------
 
 today = date.today()
-today_start = datetime.combine(today, time.min)
+today_start = to_utc(datetime.combine(today, time.min))
 week_end_dt = today_start + timedelta(days=7)
 
 # --- Fetch tasks once, derive both views -----------------------------------

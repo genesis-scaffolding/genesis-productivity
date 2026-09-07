@@ -8,12 +8,14 @@ Edit/Delete actions, and the empty-state message.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import pandas as pd
 import streamlit as st
 
 from genesis.entities import Task, TaskStatus, TaskUpdate
+from genesis.tz import to_local, to_utc
 from genesis.ui._render import delete_confirm_dialog, task_edit_dialog
 
 if TYPE_CHECKING:
@@ -71,12 +73,16 @@ def render_tasks_table(
 
     rows: list[dict] = []
     for t in tasks:
+        # Strip tz for the dataframe; on edit, the value comes back as
+        # naive local and we convert via to_utc before storing.
+        sched = to_local(t.scheduled_start) if t.scheduled_start else None
+        dl = to_local(t.hard_deadline) if t.hard_deadline else None
         row: dict = {
             "uid": t.uid,
             "Summary": t.summary,
             "Priority": t.priority if t.priority is not None else 5,
-            "Scheduled": t.scheduled_start,
-            "Deadline": t.hard_deadline,
+            "Scheduled": sched.replace(tzinfo=None) if sched else None,
+            "Deadline": dl.replace(tzinfo=None) if dl else None,
             "Assigned": t.assigned_date,
             "Status": t.status.value,
         }
@@ -136,20 +142,22 @@ def render_tasks_table(
                 touched = True
             if "Scheduled" in changes:
                 new_val = changes["Scheduled"]
-                scheduled: object = (
-                    None
-                    if pd.isna(new_val)
-                    else pd.Timestamp(new_val).to_pydatetime()
-                )
+                scheduled_ts = pd.Timestamp(new_val)
+                if pd.isna(scheduled_ts):
+                    scheduled: object = None
+                else:
+                    py_dt = scheduled_ts.to_pydatetime()
+                    scheduled = to_utc(py_dt) if isinstance(py_dt, datetime) else None
                 update = update.model_copy(update={"scheduled_start": scheduled})
                 touched = True
             if "Deadline" in changes:
                 new_val = changes["Deadline"]
-                deadline: object = (
-                    None
-                    if pd.isna(new_val)
-                    else pd.Timestamp(new_val).to_pydatetime()
-                )
+                deadline_ts = pd.Timestamp(new_val)
+                if pd.isna(deadline_ts):
+                    deadline: object = None
+                else:
+                    py_dt = deadline_ts.to_pydatetime()
+                    deadline = to_utc(py_dt) if isinstance(py_dt, datetime) else None
                 update = update.model_copy(update={"hard_deadline": deadline})
                 touched = True
             if "Assigned" in changes:

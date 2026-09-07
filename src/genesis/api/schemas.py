@@ -217,6 +217,44 @@ class JournalListOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Time log
+# ---------------------------------------------------------------------------
+
+
+class TimeLogMode(StrEnum):
+    COUNTDOWN = "countdown"
+    COUNTUP = "countup"
+
+
+class TimeLogStatus(StrEnum):
+    NEEDS_ACTION = "needs-action"
+    IN_PROGRESS = "in-progress"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+
+
+class TimeLogEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    uid: str
+    label: str
+    start: UtcDateTime
+    due: UtcDateTime | None
+    completed_at: UtcDateTime | None
+    status: TimeLogStatus
+    mode: TimeLogMode
+    task_id: str | None
+    description: str | None
+    created: UtcDateTime | None
+    modified: UtcDateTime | None
+
+
+class TimeLogListOut(BaseModel):
+    items: list[TimeLogEntryOut]
+    total: int
+
+
+# ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 

@@ -45,6 +45,8 @@ from ..schemas import (
     TaskListOut,
     TaskOut,
     TaskUpdateIn,
+    TimeLogEntryOut,
+    TimeLogListOut,
     wire_to_project_status,
     wire_to_task_status,
 )
@@ -291,12 +293,25 @@ def list_tasks(
         all_tasks = facade.caldav.list_tasks(
             project_id=project_id,
             status=wire_to_task_status(task_status) if task_status is not None else None,
-            search=search_query,
             start=assigned_date_start or hard_deadline_start or scheduled_start_start,
             end=assigned_date_end or hard_deadline_end or scheduled_start_end,
             sort_by=_task_sort_field(sort_by),
             sort_order=order,
         )
+
+        # The CalDAV SUMMARY filter only matches the iCal SUMMARY
+        # field. For a useful full-text search_query we extend the
+        # match to also cover the description. Done client-side here
+        # so the iCal-side SUMMARY filter doesn't pre-truncate the
+        # candidate set.
+        if search_query:
+            needle = search_query.lower()
+            all_tasks = [
+                t
+                for t in all_tasks
+                if needle in t.title.lower()
+                or (t.description is not None and needle in t.description.lower())
+            ]
 
         # Date filters that span multiple fields can't be expressed by
         # a single Facade.list_tasks(start, end) call. Apply those
@@ -335,13 +350,19 @@ def list_tasks(
 
         total = len(all_tasks)
         items = [_task_to_wire(t) for t in all_tasks]
-        if offset is not None and limit is not None:
-            items = items[offset : offset + limit]
-            actual_offset = offset
+        # Pagination: any provided offset/limit is honoured. Missing
+        # offset defaults to 0; missing limit returns everything from
+        # offset to the end. The two cases that produce a true
+        # "everything" response are (offset=None, limit=None) only.
+        effective_offset = offset if offset is not None else 0
+        if limit is not None:
+            items = items[effective_offset : effective_offset + limit]
+            actual_offset = effective_offset
             actual_limit = limit
         else:
-            actual_offset = 0
-            actual_limit = total
+            items = items[effective_offset:]
+            actual_offset = effective_offset
+            actual_limit = total - effective_offset
 
         return TaskListOut(
             items=items,
@@ -462,14 +483,14 @@ def delete_task(
 @router.get("/journals", response_model=JournalListOut)
 def list_journals(
     _: Annotated[str, Depends(current_subject)],
-    entry_type: str | None = None,
-    project_id: str | None = None,
-    search_query: str | None = None,
-    reference_date_start: str | None = None,
-    reference_date_end: str | None = None,
-    sort_by: list[str] | None = None,
-    order: str = "desc",
-    limit: int = 50,
+    entry_type: Annotated[str | None, Query(alias="type")] = None,
+    project_id: Annotated[str | None, Query()] = None,
+    search_query: Annotated[str | None, Query()] = None,
+    reference_date_start: Annotated[str | None, Query(alias="date_start")] = None,
+    reference_date_end: Annotated[str | None, Query(alias="date_end")] = None,
+    sort_by: Annotated[list[str] | None, Query()] = None,
+    order: Annotated[str, Query()] = "desc",
+    limit: Annotated[int, Query()] = 50,
 ) -> JournalListOut:
     facade = _facade()
     try:
@@ -622,5 +643,57 @@ def delete_journal(
     try:
         if not facade.journal.delete_entry(uid):
             raise HTTPException(status_code=404, detail="Journal entry not found")
+    finally:
+        facade.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Time log (read-only)
+# ---------------------------------------------------------------------------
+
+
+def _time_log_to_wire(entry) -> TimeLogEntryOut:
+    return TimeLogEntryOut.model_validate(entry)
+
+
+@router.get("/time_log", response_model=TimeLogListOut)
+def list_time_log(
+    _: Annotated[str, Depends(current_subject)],
+    task_id: Annotated[str | None, Query()] = None,
+    time_log_status: Annotated[Status | None, Query(alias="status")] = None,
+    active_only: Annotated[bool, Query()] = False,
+    sort_by: Annotated[list[str] | None, Query()] = None,
+    order: Annotated[str, Query()] = "asc",
+    limit: Annotated[int, Query()] = 100,
+) -> TimeLogListOut:
+    facade = _facade()
+    try:
+        entity_status = (
+            wire_to_task_status(time_log_status) if time_log_status is not None else None
+        )
+        all_entries = facade.caldav.list_time_log(
+            task_id=task_id,
+            status=entity_status,
+            active_only=active_only,
+            sort_by=sort_by,
+            sort_order=order,
+        )
+        items = [_time_log_to_wire(e) for e in all_entries[:limit]]
+        return TimeLogListOut(items=items, total=len(items))
+    finally:
+        facade.shutdown()
+
+
+@router.get("/time_log/{uid}", response_model=TimeLogEntryOut)
+def read_time_log(
+    uid: str,
+    _: Annotated[str, Depends(current_subject)],
+) -> TimeLogEntryOut:
+    facade = _facade()
+    try:
+        entry = facade.caldav.get_time_log_entry(uid)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Time log entry not found")
+        return _time_log_to_wire(entry)
     finally:
         facade.shutdown()

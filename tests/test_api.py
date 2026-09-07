@@ -10,57 +10,8 @@ Marked ``@pytest.mark.integration`` per project convention.
 
 from __future__ import annotations
 
-import os
-import tempfile
-import time
-from collections.abc import Generator
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
-
-from genesis.api.app import app
-from genesis.configs import DAV
-from genesis.dav.server import ServerManager
-
-
-@pytest.fixture(scope="function")
-def api_server() -> Generator[TestClient, None, None]:
-    """Start Radicale + the FastAPI app, sharing a temp data dir.
-
-    The FastAPI app builds its own ``Facade`` per request. We point
-    the test's ``HOME``-derived config dir at the temp path so the
-    API writes into the same Radicale collection.
-    """
-    with tempfile.TemporaryDirectory() as tmp_home:
-        # Override the per-user config path so the API's Facade
-        # builds Radicale config + collections inside the temp dir.
-        config_dir = Path(tmp_home) / "genesis" / "default"
-        os.environ["GENESIS_USER_DIR"] = str(config_dir)
-        os.environ["GENESIS_API_PASSWORD"] = "test-pw"
-
-        host = "127.0.0.1"
-        port = 39323
-
-        dav_config = DAV(
-            host=host,
-            port=port,
-            username="default",
-            password="default",
-        )
-        manager = ServerManager(
-            dav_config=dav_config,
-            data_path=config_dir / "radicale",
-            startup_timeout=15,
-        )
-        manager.start()
-        time.sleep(1)
-
-        try:
-            with TestClient(app) as client:
-                yield client
-        finally:
-            manager.stop()
 
 
 def _login(client: TestClient) -> str:

@@ -226,6 +226,93 @@ def test_task_404_on_missing_uid(api_server: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_list_tasks_converts_date_query_params_to_datetime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: ISO date query params must reach the CalDAV facade
+    as ``datetime``, not ``str``.
+
+    Without the conversion, caldav's server-side time-range filter
+    raises ``AttributeError: 'str' object has no attribute
+    'strftime'`` and the request 500s. Pinned by spying on
+    ``list_tasks`` directly, since the mock backend ignores
+    ``start``/``end`` and therefore would not catch this bug.
+    """
+    from datetime import datetime as _datetime
+
+    from genesis.api.app import app as _app
+    from genesis.api.routers import productivity as _router
+
+    captured: list[dict] = []
+
+    class _SpyCalDAV:
+        def list_tasks(self, **kwargs: object) -> list[object]:
+            captured.append(kwargs)
+            return []
+
+    class _SpyFacade:
+        def __init__(self) -> None:
+            self.caldav = _SpyCalDAV()
+
+        def shutdown(self) -> None:
+            pass
+
+    monkeypatch.setattr(_router, "_facade", lambda: _SpyFacade())
+    monkeypatch.setenv("GENESIS_API_PASSWORD", "test-pw")
+
+    with TestClient(_app) as client:
+        token = client.post(
+            "/auth/login",
+            data={
+                "username": "default",
+                "password": "test-pw",
+                "grant_type": "password",
+            },
+        ).json()["access_token"]
+
+        resp = client.get(
+            "/productivity/tasks"
+            "?assigned_date_start=2026-09-01"
+            "&assigned_date_end=2026-09-30",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    call = captured[0]
+    assert isinstance(call["start"], _datetime)
+    assert isinstance(call["end"], _datetime)
+    assert call["start"].tzinfo is not None
+    assert call["end"].tzinfo is not None
+
+
+def test_list_tasks_rejects_malformed_date_query_param(
+    api_server: TestClient,
+) -> None:
+    """Boundary check: malformed date input is rejected with 422,
+    not silently passed through to crash the CalDAV facade.
+
+    Pydantic parses the date query param on the API edge; bad
+    input never reaches the facade.
+    """
+    token = _login(api_server)
+
+    resp = api_server.get(
+        "/productivity/tasks?assigned_date_start=not-a-date",
+        headers=_auth(token),
+    )
+    assert resp.status_code == 422
+
+    # Datetime fields reject date-only-ish input. ``hard_deadline_start``
+    # expects the wire format ``YYYY-MM-DDTHH:MM:SS.mmmZ``; garbage
+    # is a 422.
+    resp = api_server.get(
+        "/productivity/tasks?hard_deadline_start=garbage",
+        headers=_auth(token),
+    )
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # Journals
 # ---------------------------------------------------------------------------

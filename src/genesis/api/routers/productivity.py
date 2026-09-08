@@ -15,7 +15,7 @@ The Streamlit frontend does not call this router; it uses
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -60,6 +60,27 @@ def _facade() -> Facade:
     """Build a per-request :class:`Facade` for the default user."""
     config_path = resolve_config_path("default")
     return Facade(config_path)
+
+
+def _to_caldav_datetime(value: date | datetime | None) -> datetime | None:
+    """Coerce a date or datetime query param to a UTC datetime for the
+    CalDAV facade.
+
+    The CalDAV library only accepts ``datetime``; date-only inputs
+    become the start of day in UTC. Naive datetimes are assumed to
+    be UTC (the API wire format is ``YYYY-MM-DDTHH:MM:SS.mmmZ``).
+    None passes through.
+
+    Pydantic parses the query string for us — invalid input returns
+    a 422 before this function runs.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+    return datetime.combine(value, datetime.min.time(), tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -277,12 +298,15 @@ def list_tasks(
     task_status: Annotated[Status | None, Query(alias="status")] = None,
     search_query: Annotated[str | None, Query()] = None,
     project_id: Annotated[str | None, Query()] = None,
-    assigned_date_start: Annotated[str | None, Query()] = None,
-    assigned_date_end: Annotated[str | None, Query()] = None,
-    hard_deadline_start: Annotated[str | None, Query()] = None,
-    hard_deadline_end: Annotated[str | None, Query()] = None,
-    scheduled_start_start: Annotated[str | None, Query()] = None,
-    scheduled_start_end: Annotated[str | None, Query()] = None,
+    # ``assigned_date`` is a calendar-day field on the entity, so the
+    # matching query param is also a date. Pydantic rejects datetime
+    # inputs here with a 422. The other two are full datetimes.
+    assigned_date_start: Annotated[date | None, Query()] = None,
+    assigned_date_end: Annotated[date | None, Query()] = None,
+    hard_deadline_start: Annotated[datetime | None, Query()] = None,
+    hard_deadline_end: Annotated[datetime | None, Query()] = None,
+    scheduled_start_start: Annotated[datetime | None, Query()] = None,
+    scheduled_start_end: Annotated[datetime | None, Query()] = None,
     sort_by: Annotated[list[str] | None, Query()] = None,
     order: Annotated[str, Query()] = "asc",
     offset: Annotated[int | None, Query()] = None,
@@ -293,8 +317,16 @@ def list_tasks(
         all_tasks = facade.caldav.list_tasks(
             project_id=project_id,
             status=wire_to_task_status(task_status) if task_status is not None else None,
-            start=assigned_date_start or hard_deadline_start or scheduled_start_start,
-            end=assigned_date_end or hard_deadline_end or scheduled_start_end,
+            start=_to_caldav_datetime(
+                assigned_date_start
+                or hard_deadline_start
+                or scheduled_start_start
+            ),
+            end=_to_caldav_datetime(
+                assigned_date_end
+                or hard_deadline_end
+                or scheduled_start_end
+            ),
             sort_by=_task_sort_field(sort_by),
             sort_order=order,
         )
@@ -316,12 +348,17 @@ def list_tasks(
         # Date filters that span multiple fields can't be expressed by
         # a single Facade.list_tasks(start, end) call. Apply those
         # client-side here.
-        def in_range(dt: datetime | None, start: str | None, end: str | None) -> bool:
+        def in_range(
+            dt: date | datetime | None,
+            start: date | None,
+            end: date | None,
+        ) -> bool:
             if dt is None:
                 return start is None and end is None
-            if start and dt.date().isoformat() < start:
+            d = dt.date() if isinstance(dt, datetime) else dt
+            if start and d < start:
                 return False
-            if end and dt.date().isoformat() > end:
+            if end and d > end:
                 return False
             return True
 
@@ -335,11 +372,7 @@ def list_tasks(
         ):
             filtered = []
             for t in all_tasks:
-                if not in_range(
-                    datetime.combine(t.assigned_date, datetime.min.time()) if t.assigned_date else None,
-                    assigned_date_start,
-                    assigned_date_end,
-                ):
+                if not in_range(t.assigned_date, assigned_date_start, assigned_date_end):
                     continue
                 if not in_range(t.hard_deadline, hard_deadline_start, hard_deadline_end):
                     continue

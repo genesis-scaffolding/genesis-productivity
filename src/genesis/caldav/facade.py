@@ -123,8 +123,8 @@ class CalDAVFacade:
         project_id: str | None = None,
         status=None,
         search: str | None = None,
-        start=None,
-        end=None,
+        start: datetime | None = None,
+        end: datetime | None = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):
@@ -153,8 +153,8 @@ class CalDAVFacade:
         task_id: str | None = None,
         status=None,
         search: str | None = None,
-        start=None,
-        end=None,
+        start: datetime | None = None,
+        end: datetime | None = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):

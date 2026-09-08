@@ -161,14 +161,17 @@ class MockCalDAVFacade:
         project_id: str | None = None,
         status: TaskStatus | None = None,
         search: str | None = None,
-        start: object = None,
-        end: object = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ) -> list[Task]:
         # ``start`` and ``end`` are accepted for parity with the
         # real facade but not used — the API router applies date
-        # filters client-side after this call returns.
+        # filters client-side after this call returns. The typed
+        # ``datetime | None`` here enforces the contract so callers
+        # passing a raw ``str`` get a static-type error from pyright
+        # (and a TypeError at runtime if the type is somehow bypassed).
         tasks = list(self._tasks.values())
         if project_id is not None:
             tasks = [t for t in tasks if t.project_id == project_id]
@@ -259,9 +262,13 @@ class MockCalDAVFacade:
         task_id: str | None = None,
         status: EventStatus | None = None,
         search: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ) -> list[Event]:
+        # ``start`` and ``end`` mirror the real facade so callers
+        # get the same type contract enforced.
         events = list(self._events.values())
         if task_id is not None:
             events = [e for e in events if e.task_id == task_id]

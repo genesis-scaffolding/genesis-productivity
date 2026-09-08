@@ -137,7 +137,7 @@ class MockCalDAVFacade:
         now = self._now()
         task = Task(
             uid=self._new_uid(),
-            summary=data.summary,
+            title=data.title,
             description=data.description,
             hard_deadline=data.hard_deadline,
             assigned_date=data.assigned_date,
@@ -174,7 +174,7 @@ class MockCalDAVFacade:
             tasks = [
                 t
                 for t in tasks
-                if needle in t.summary.lower()
+                if needle in t.title.lower()
                 or (t.description and needle in t.description.lower())
             ]
         if sort_by:
@@ -415,7 +415,7 @@ class MockCalDAVFacade:
         )
         self._events[task.uid] = Event(
             uid=task.uid,
-            summary=task.summary,
+            summary=task.title,
             start=task.scheduled_start,
             end=task.scheduled_start + timedelta(minutes=duration),
             status=EventStatus.CONFIRMED,

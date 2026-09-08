@@ -171,7 +171,7 @@ def task_from_ical(component: icalendar.Component) -> Task:
     """Build a Task entity from a VTODO ical component."""
     return Task(
         uid=to_str(component.get("uid")) or "",
-        summary=to_str(component.get("summary")) or "",
+        title=to_str(component.get("summary")) or "",
         description=to_str(component.get("description")),
         hard_deadline=to_datetime(component.get("due")),
         assigned_date=to_date(component.get("x-assigned-date")),
@@ -192,7 +192,7 @@ def task_to_ical(task: Task) -> icalendar.Component:
     """Build a VTODO ical component from a Task entity."""
     component = icalendar.Todo()
     component.add("uid", task.uid)
-    component.add("summary", task.summary)
+    component.add("summary", task.title)
     component.add("dtstamp", task.modified or now_utc())
     if task.description:
         component.add("description", task.description)

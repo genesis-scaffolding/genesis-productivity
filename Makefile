@@ -1,4 +1,4 @@
-.PHONY: help install install-dev lint format test typecheck run-cli run-ui clean
+.PHONY: help install install-dev lint format test typecheck run-cli run-ui api serve clean
 
 # -----------------------------------------------------------------------------
 # Meta
@@ -58,6 +58,21 @@ ui:  ## Start the Streamlit UI for the default user
 	uv run streamlit run src/genesis/ui/app.py --server.address 127.0.0.1 --server.port 3000 --server.headless true
 
 run-ui: ui  ## Deprecated alias for `make ui`
+
+api:  ## Start the FastAPI server for the default user (GENESIS_API_PORT, default 8765)
+	uv run genesis-api
+
+# Run UI and API together. The trap chain mirrors the pattern from
+# genesis-agent-backend/Makefile: outer EXIT trap catches normal exit,
+# the inner INT trap kills the whole process group on Ctrl+C and
+# exits with 130 (the conventional SIGINT code).
+serve:  ## Start UI and API together (Ctrl+C to stop both)
+	@echo "Starting UI on $${GENESIS_UI_PORT:-3000} and API on $${GENESIS_API_PORT:-8765} (Ctrl+C to stop both)..."
+	@trap 'kill 0' EXIT; \
+	trap 'kill 0; exit 130' INT; \
+	uv run genesis-api & \
+	uv run genesis-ui & \
+	wait
 
 # -----------------------------------------------------------------------------
 # Utility

@@ -85,7 +85,7 @@ def _render_start_form() -> None:
 
     task_options: list[Task | None] = [None, *tasks]
     task_labels = ["(unaligned)"] + [
-        t.summary for t in tasks
+        t.title for t in tasks
     ]
     cur_label = st.session_state.get("focus_form_task_label", "(unaligned)")
     cur_idx = task_labels.index(cur_label) if cur_label in task_labels else 0
@@ -98,7 +98,7 @@ def _render_start_form() -> None:
     )
     selected_task = task_options[task_labels.index(selected_label)]
 
-    label_default = selected_task.summary if selected_task is not None else DEFAULT_LABEL
+    label_default = selected_task.title if selected_task is not None else DEFAULT_LABEL
     label = st.text_input(
         "Session label",
         value=st.session_state.get("focus_form_label", label_default),

@@ -56,7 +56,7 @@ def _populate_task(component: Component, task: Task) -> None:
             component.add(key, value)
 
     set_or_delete("uid", task.uid)
-    set_or_delete("summary", task.summary)
+    set_or_delete("summary", task.title)
     set_or_delete("status", task.status.value)
     set_or_delete("description", task.description)
     set_or_delete("due", task.hard_deadline)
@@ -125,7 +125,7 @@ def create_task(facade: CalDAVFacade, data: TaskCreate) -> Task:
     now = now_utc()
     task = Task(
         uid=new_uid(),
-        summary=data.summary,
+        title=data.title,
         description=data.description,
         hard_deadline=data.hard_deadline,
         assigned_date=data.assigned_date,
@@ -324,7 +324,7 @@ def _reconcile_shadow(facade: CalDAVFacade, task: Task) -> None:
     )
     shadow_event = Event(
         uid=task.uid,
-        summary=task.summary,
+        summary=task.title,
         start=task.scheduled_start,
         end=task.scheduled_start + timedelta(minutes=duration),
         status=EventStatus.CONFIRMED,

@@ -41,7 +41,7 @@ def render_tasks_table(
             ``False`` on project-detail pages where every row belongs
             to the same project.
 
-    Inline edits to Summary, Priority, Scheduled, Deadline, Assigned,
+    Inline edits to Title, Priority, Scheduled, Deadline, Assigned,
     Status, and Project flow through ``on_change``. The on-change
     handler reads ``st.session_state[key]["edited_rows"]`` and
     dispatches a single ``update_task`` per changed row covering all
@@ -79,7 +79,7 @@ def render_tasks_table(
         dl = to_local(t.hard_deadline) if t.hard_deadline else None
         row: dict = {
             "uid": t.uid,
-            "Summary": t.summary,
+            "Title": t.title,
             "Priority": t.priority if t.priority is not None else 5,
             "Scheduled": sched.replace(tzinfo=None) if sched else None,
             "Deadline": dl.replace(tzinfo=None) if dl else None,
@@ -108,7 +108,7 @@ def render_tasks_table(
             task_edit_dialog(target.uid)
         elif label == "Delete":
             delete_confirm_dialog(
-                f"task '{target.summary}'",
+                f"task '{target.title}'",
                 lambda uid=target.uid: caldav.delete_task(uid),
             )
 
@@ -125,9 +125,9 @@ def render_tasks_table(
 
             update: TaskUpdate = TaskUpdate()
             touched = False
-            if "Summary" in changes:
+            if "Title" in changes:
                 update = update.model_copy(
-                    update={"summary": str(changes["Summary"])}
+                    update={"title": str(changes["Title"])}
                 )
                 touched = True
             if "Priority" in changes:
@@ -197,7 +197,7 @@ def render_tasks_table(
 
     column_config: dict = {
         "uid": None,  # hidden
-        "Summary": st.column_config.TextColumn("Summary", width="large"),
+        "Title": st.column_config.TextColumn("Title", width="large"),
         "Priority": st.column_config.NumberColumn(
             "Priority", min_value=1, max_value=9
         ),

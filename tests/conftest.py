@@ -1,17 +1,21 @@
 """Shared test fixtures for the agent API.
 
-Spins up a fresh Radicale per test via a direct subprocess (not
-``ServerManager``) so we avoid the TIME_WAIT race that hits when
-the test port is reused across tests in one process. The cost is
-~1 second of startup per test, which is acceptable for the suite
-size.
+Two flavors of ``api_server`` fixture:
 
-Each test also gets a clean ``XDG_*_HOME`` so the Facade's
-``resolve_config_path`` and ``paths.data`` point at fresh temp
-dirs — not at the user's real ``~/.local/share/genesis``.
+- ``api_server`` (default) — backed by the in-memory
+  ``MockCalDAVFacade`` and ``InMemoryJournalFacade``. Fast
+  (~10 ms setup per test) and isolated. Use for filter,
+  pagination, sort, auth, error, and Swagger UI contract tests.
 
-The default Radicale port (5232) is avoided: the test Radicale
-binds to a kernel-assigned free port picked at session start.
+- ``api_server_real`` — backed by a real Radicale subprocess and
+  a temp journal directory. ~1 s setup per test but exercises the
+  real iCal + markdown serialization paths. Use only for the
+  handful of tests that prove round-trip persistence (datetime
+  format, journal footer persistence, COMPLETED side effect).
+
+Tests that need the real fixture are marked
+``@pytest.mark.integration`` so the fast ``make test`` run
+excludes them.
 """
 
 from __future__ import annotations
@@ -33,6 +37,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from genesis.api.app import app
+from genesis.api.routers import productivity as _productivity_router
+
+from ._mock_journal import InMemoryJournalFacade
+from .mock_caldav import MockCalDAVFacade
 
 
 def _free_port() -> int:
@@ -42,8 +50,59 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _substitute_facade(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch the API router's ``_facade()`` to return a fresh mock facade.
+
+    Returns an object with the same ``.caldav`` and ``.journal``
+    attributes plus a no-op ``shutdown()`` so the router's
+    ``try/finally facade.shutdown()`` does not error.
+    """
+    state: dict[str, object] = {"mock": _build_mock_facade()}
+
+    def fake_facade() -> object:
+        # The mock keeps state across requests within one test, but
+        # a new mock is built for each test (see fixture body).
+        return state["mock"]
+
+    monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
+
+
+def _build_mock_facade() -> object:
+    class _MockFacade:
+        def __init__(self) -> None:
+            self.caldav = MockCalDAVFacade()
+            self.journal = InMemoryJournalFacade()
+
+        def shutdown(self) -> None:
+            pass
+
+    return _MockFacade()
+
+
+# ---------------------------------------------------------------------------
+# Mock-backed fixture (fast)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def api_server(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+    """Fast fixture: ``MockCalDAVFacade`` + ``InMemoryJournalFacade``.
+
+    No subprocess, no temp dir, no port allocation. Each test gets a
+    fresh mock so isolation is automatic.
+    """
+    os.environ["GENESIS_API_PASSWORD"] = "test-pw"
+    _substitute_facade(monkeypatch)
+    with TestClient(app) as client:
+        yield client
+
+
+# ---------------------------------------------------------------------------
+# Real-Radicale fixture (slow; integration only)
+# ---------------------------------------------------------------------------
+
+
 def _radicale_binary() -> str:
-    """Locate the radicale executable in the project venv."""
     candidate = Path(sys.executable).parent / "radicale"
     if candidate.exists():
         return str(candidate)
@@ -56,12 +115,9 @@ def _radicale_binary() -> str:
 def _spawn_radicale(host: str, port: int, data_path: Path) -> subprocess.Popen:
     """Spawn a Radicale child process with its own config dir.
 
-    We write ``config``, ``users``, ``rights``, ``collections``
-    under ``data_path`` so Radicale's multifilesystem storage can
-    read/write there directly. We do NOT use ``ServerManager``
-    because it caches ``is_running()`` state across calls and
-    briefly returns True against a TIME_WAIT socket, leading to
-    silent hangs.
+    We bypass ``ServerManager`` because it caches ``is_running()``
+    state across calls and briefly returns True against a TIME_WAIT
+    socket, leading to silent hangs.
     """
     data_path.mkdir(parents=True, exist_ok=True)
     cfg = data_path / "config"
@@ -86,7 +142,6 @@ def _spawn_radicale(host: str, port: int, data_path: Path) -> subprocess.Popen:
         stderr=subprocess.DEVNULL,
     )
 
-    # Probe until the server responds (default credentials).
     creds = base64.b64encode(b"default:default").decode()
     deadline = time.time() + 15
     last_err: Exception | None = None
@@ -105,8 +160,6 @@ def _spawn_radicale(host: str, port: int, data_path: Path) -> subprocess.Popen:
 
 
 def _wipe(data_path: Path, config_home: Path) -> None:
-    """Remove every collection under the user root. The directory
-    structure stays so Radicale keeps responding."""
     col_root = data_path / "collections" / "collection-root" / "default"
     if col_root.exists():
         for child in col_root.iterdir():
@@ -120,13 +173,12 @@ def _wipe(data_path: Path, config_home: Path) -> None:
 
 
 @pytest.fixture
-def api_server() -> Generator[TestClient, None, None]:
-    """Per-test FastAPI client with a freshly-spawned Radicale.
+def api_server_real() -> Generator[TestClient, None, None]:
+    """Slow fixture: real Radicale + real journal files.
 
-    Each test gets its own Radicale on a kernel-assigned port.
-    This is slower than a session-scoped server (~1 s startup
-    per test) but eliminates cross-test pollution from Radicale
-    state and TIME_WAIT races on the test port.
+    ~1 s per test for the subprocess startup. Use only for the
+    handful of round-trip tests in ``test_api.py`` that prove
+    iCal/markdown persistence works.
     """
     host = "127.0.0.1"
     port = _free_port()
@@ -142,9 +194,6 @@ def api_server() -> Generator[TestClient, None, None]:
 
         proc = _spawn_radicale(host, port, rad_data)
 
-        # Point the API at this Radicale via env vars. The Facade
-        # reads these on every request, so they take effect
-        # immediately.
         os.environ["XDG_CONFIG_HOME"] = str(config_home)
         os.environ["XDG_DATA_HOME"] = str(data_home)
         os.environ["XDG_STATE_HOME"] = str(root / "state")

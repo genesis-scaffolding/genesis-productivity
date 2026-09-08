@@ -161,9 +161,14 @@ class MockCalDAVFacade:
         project_id: str | None = None,
         status: TaskStatus | None = None,
         search: str | None = None,
+        start: object = None,
+        end: object = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ) -> list[Task]:
+        # ``start`` and ``end`` are accepted for parity with the
+        # real facade but not used — the API router applies date
+        # filters client-side after this call returns.
         tasks = list(self._tasks.values())
         if project_id is not None:
             tasks = [t for t in tasks if t.project_id == project_id]

@@ -122,7 +122,7 @@ class TestTaskCRUD:
 
     def test_get_task_not_found(self, facade: CalDAVFacade) -> None:
         """Getting a non-existent task returns None."""
-        found = facade.get_task("nonexistent@genesis")
+        found = facade.get_task("nonexistent")
         assert found is None
 
     def test_list_tasks(self, facade: CalDAVFacade) -> None:
@@ -177,7 +177,7 @@ class TestTaskCRUD:
 
     def test_delete_task_not_found(self, facade: CalDAVFacade) -> None:
         """Deleting a non-existent task returns False."""
-        result = facade.delete_task("nonexistent@genesis")
+        result = facade.delete_task("nonexistent")
         assert result is False
 
 
@@ -389,7 +389,7 @@ class TestProjectCRUD:
 
     def test_get_project_not_found(self, facade: CalDAVFacade) -> None:
         """Getting a non-existent project returns None."""
-        found = facade.get_project("nonexistent@genesis")
+        found = facade.get_project("nonexistent")
         assert found is None
 
     def test_list_projects(self, facade: CalDAVFacade) -> None:

@@ -66,7 +66,7 @@ def create_time_log_entry(
     """Create a new time log entry (typically a new focus session)."""
     now = now_utc()
     entry = TimeLogEntry(
-        uid=new_uid(),
+        uid=new_uid("l"),
         label=data.label,
         start=data.start,
         due=data.due,

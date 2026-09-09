@@ -156,7 +156,7 @@ No auto-derivation between them. `assigned_date` may exist without `scheduled_st
 
 ## Status
 
-Accepted.
+Superseded by adr-016 with respect to the UID format (section 4, Identity). Other rules remain in effect.
 
 Supersedes parts of ADR-008 with respect to Task and Project storage layout and entity field definitions, including the addition of `priority`, `scheduled_duration`, and the introduction of Event and TimeLogEntry entities. ADR-008's Status Values section remains in effect.
 

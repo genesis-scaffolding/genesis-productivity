@@ -70,7 +70,7 @@ class TestTaskCRUD:
 
     def test_get_task_not_found(self, facade: MockCalDAVFacade) -> None:
         """Getting a non-existent task returns None."""
-        assert facade.get_task("nonexistent@genesis") is None
+        assert facade.get_task("nonexistent") is None
 
     def test_list_tasks(self, facade: MockCalDAVFacade) -> None:
         """Listing tasks returns all tasks."""
@@ -120,7 +120,7 @@ class TestTaskCRUD:
 
     def test_delete_task_not_found(self, facade: MockCalDAVFacade) -> None:
         """Deleting a non-existent task returns False."""
-        assert facade.delete_task("nonexistent@genesis") is False
+        assert facade.delete_task("nonexistent") is False
 
 
 class TestTaskFields:
@@ -373,7 +373,7 @@ class TestProjectCRUD:
 
     def test_get_project_not_found(self, facade: MockCalDAVFacade) -> None:
         """Getting a non-existent project returns None."""
-        assert facade.get_project("nonexistent@genesis") is None
+        assert facade.get_project("nonexistent") is None
 
     def test_list_projects(self, facade: MockCalDAVFacade) -> None:
         """Listing projects returns all projects."""
@@ -713,7 +713,7 @@ class TestStaleObjectResilience:
         from icalendar import Todo
 
         todo = Todo()
-        todo.add("uid", "alive@genesis")
+        todo.add("uid", "alive")
         todo.add("summary", "Alive task")
         todo.add("status", "needs-action")
 
@@ -723,14 +723,14 @@ class TestStaleObjectResilience:
         tasks = list_tasks(facade)  # type: ignore[arg-type]
 
         assert len(tasks) == 1
-        assert tasks[0].uid == "alive@genesis"
+        assert tasks[0].uid == "alive"
         assert tasks[0].title == "Alive task"
 
     def test_list_events_skips_stale_object(self) -> None:
         from icalendar import Event
 
         ev = Event()
-        ev.add("uid", "alive-event@genesis")
+        ev.add("uid", "alive-event")
         ev.add("summary", "Alive event")
         ev.add("dtstart", datetime(2026, 9, 7, 9, 0, tzinfo=UTC))
         ev.add("dtend", datetime(2026, 9, 7, 10, 0, tzinfo=UTC))
@@ -741,13 +741,13 @@ class TestStaleObjectResilience:
         events = list_events(facade)  # type: ignore[arg-type]
 
         assert len(events) == 1
-        assert events[0].uid == "alive-event@genesis"
+        assert events[0].uid == "alive-event"
 
     def test_list_projects_skips_stale_object(self) -> None:
         from icalendar import Todo
 
         proj = Todo()
-        proj.add("uid", "alive-project@genesis")
+        proj.add("uid", "alive-project")
         proj.add("summary", "Alive project")
         proj.add("status", "needs-action")
 
@@ -757,4 +757,4 @@ class TestStaleObjectResilience:
         projects = list_projects(facade)  # type: ignore[arg-type]
 
         assert len(projects) == 1
-        assert projects[0].uid == "alive-project@genesis"
+        assert projects[0].uid == "alive-project"

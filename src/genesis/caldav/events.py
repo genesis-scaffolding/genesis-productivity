@@ -52,7 +52,7 @@ def create_event(facade: CalDAVFacade, data: EventCreate) -> Event:
     """Create a new standalone event (not a shadow)."""
     now = now_utc()
     event = Event(
-        uid=new_uid(),
+        uid=new_uid("e"),
         summary=data.summary,
         start=data.start,
         end=data.end,

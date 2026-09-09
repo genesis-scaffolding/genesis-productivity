@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from datetime import date as date_cls
 from datetime import datetime
 from enum import StrEnum
@@ -29,6 +28,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
+from ..caldav.ical import new_uid
 from ..tz import to_utc
 
 
@@ -63,7 +63,7 @@ class Entry(BaseModel):
         modified: When the file was last modified (from filesystem mtime).
     """
 
-    uid: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    uid: str = Field(default_factory=lambda: new_uid("j"))
     date: date_cls
     title: str | None = None
     type: EntryType | None = None

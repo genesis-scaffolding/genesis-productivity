@@ -54,7 +54,7 @@ def create_project(facade: CalDAVFacade, data: ProjectCreate) -> Project:
     """Create a new project."""
     now = now_utc()
     project = Project(
-        uid=new_uid(),
+        uid=new_uid("p"),
         name=data.name,
         description=data.description,
         start_date=data.start_date,

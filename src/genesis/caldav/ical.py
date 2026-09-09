@@ -13,7 +13,8 @@ the component before calling save().
 
 from __future__ import annotations
 
-import uuid
+import secrets
+import string
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -340,6 +341,19 @@ def time_log_to_ical(entry: TimeLogEntry) -> icalendar.Component:
 # -----------------------------------------------------------------------------
 
 
-def new_uid() -> str:
-    """Generate a new UID for a freshly-created ical object."""
-    return f"{uuid.uuid4()}@genesis"
+_ALPHABET: str = string.ascii_lowercase + string.digits
+_TAIL_LENGTH: int = 6
+
+
+def new_uid(prefix: str) -> str:
+    """Generate a new typed short UID for a freshly-created ical object.
+
+    Format: ``{prefix}-{tail}`` where ``tail`` is ``_TAIL_LENGTH`` chars
+    from ``_ALPHABET``. The prefix encodes the entity kind (``t-`` for
+    task, ``p-`` for project, etc.). Drawn from ``secrets`` for
+    cryptographic strength.
+
+    See ``docs/adr/adr-016-short-typed-uid.md``.
+    """
+    tail = "".join(secrets.choice(_ALPHABET) for _ in range(_TAIL_LENGTH))
+    return f"{prefix}-{tail}"

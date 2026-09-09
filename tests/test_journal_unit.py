@@ -85,7 +85,7 @@ class TestJournalFacade:
         facade = JournalFacade(tmp_path)
         entry = Entry(date=date(2026, 9, 5), content="x")
         assert entry.uid  # factory ran on construction
-        assert re.match(r"^[0-9a-f]{32}$", entry.uid)
+        assert re.match(r"^j-[0-9a-z]{6}$", entry.uid)
         facade.save_entry(entry)
         loaded = facade.get_entry(entry.uid)
         assert loaded is not None

@@ -124,7 +124,7 @@ def create_task(facade: CalDAVFacade, data: TaskCreate) -> Task:
     VEVENT is also created in the events collection."""
     now = now_utc()
     task = Task(
-        uid=new_uid(),
+        uid=new_uid("t"),
         title=data.title,
         description=data.description,
         hard_deadline=data.hard_deadline,

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any
-from uuid import uuid4
 
 from genesis.caldav.constants import DEFAULT_SHADOW_DURATION_MINUTES
+from genesis.caldav.ical import new_uid
 from genesis.entities import (
     Event,
     EventCreate,
@@ -56,8 +56,8 @@ class MockCalDAVFacade:
 
         return datetime.now(UTC)
 
-    def _new_uid(self) -> str:
-        return f"{uuid4()}@genesis"
+    def _new_uid(self, prefix: str) -> str:
+        return new_uid(prefix)
 
     # -------------------------------------------------------------------------
     # Projects
@@ -66,7 +66,7 @@ class MockCalDAVFacade:
     def create_project(self, data: ProjectCreate) -> Project:
         now = self._now()
         project = Project(
-            uid=self._new_uid(),
+            uid=self._new_uid("p"),
             name=data.name,
             description=data.description,
             start_date=data.start_date,
@@ -136,7 +136,7 @@ class MockCalDAVFacade:
     def create_task(self, data: TaskCreate) -> Task:
         now = self._now()
         task = Task(
-            uid=self._new_uid(),
+            uid=self._new_uid("t"),
             title=data.title,
             description=data.description,
             hard_deadline=data.hard_deadline,
@@ -241,7 +241,7 @@ class MockCalDAVFacade:
     def create_event(self, data: EventCreate) -> Event:
         now = self._now()
         event = Event(
-            uid=self._new_uid(),
+            uid=self._new_uid("e"),
             summary=data.summary,
             start=data.start,
             end=data.end,
@@ -325,7 +325,7 @@ class MockCalDAVFacade:
     def create_time_log_entry(self, data: TimeLogEntryCreate) -> TimeLogEntry:
         now = self._now()
         entry = TimeLogEntry(
-            uid=self._new_uid(),
+            uid=self._new_uid("l"),
             label=data.label,
             start=data.start,
             due=data.due,

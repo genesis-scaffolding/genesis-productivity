@@ -285,8 +285,8 @@ def test_project_filter_by_search_query(api_server: TestClient) -> None:
     resp = api_server.get(
         "/productivity/projects?search_query=alp", headers=_auth(token)
     ).json()
-    assert len(resp) == 1
-    assert resp[0]["name"] == "alpha"
+    assert len(resp["items"]) == 1
+    assert resp["items"][0]["name"] == "alpha"
 
 
 @pytest.mark.integration
@@ -306,8 +306,8 @@ def test_project_filter_by_status(api_server: TestClient) -> None:
     resp = api_server.get(
         "/productivity/projects?status=completed", headers=_auth(token)
     ).json()
-    assert len(resp) == 1
-    assert resp[0]["name"] == "done-p"
+    assert len(resp["items"]) == 1
+    assert resp["items"][0]["name"] == "done-p"
 
 
 @pytest.mark.integration

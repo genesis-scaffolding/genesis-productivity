@@ -123,6 +123,13 @@ class ProjectOut(BaseModel):
     modified: UtcDateTime | None
 
 
+class ProjectListOut(BaseModel):
+    items: list[ProjectOut]
+    total: int
+    offset: int
+    limit: int
+
+
 # ---------------------------------------------------------------------------
 # Task
 # ---------------------------------------------------------------------------
@@ -214,6 +221,8 @@ class JournalEntryOut(BaseModel):
 class JournalListOut(BaseModel):
     items: list[JournalEntryOut]
     total: int
+    offset: int
+    limit: int
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +261,8 @@ class TimeLogEntryOut(BaseModel):
 class TimeLogListOut(BaseModel):
     items: list[TimeLogEntryOut]
     total: int
+    offset: int
+    limit: int
 
 
 # ---------------------------------------------------------------------------

@@ -122,7 +122,7 @@ def test_project_crud_round_trip(api_server_real: TestClient) -> None:
     assert patched.json()["status"] == "in-progress"
 
     listing = api_server_real.get("/productivity/projects", headers=_auth(token))
-    uids = [p["uid"] for p in listing.json()]
+    uids = [p["uid"] for p in listing.json()["items"]]
     assert project["uid"] in uids
 
     deleted = api_server_real.delete(

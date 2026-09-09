@@ -38,6 +38,7 @@ from ..schemas import (
     JournalEntryUpdateIn,
     JournalListOut,
     ProjectCreateIn,
+    ProjectListOut,
     ProjectOut,
     ProjectUpdateIn,
     Status,
@@ -86,6 +87,28 @@ def _to_caldav_datetime(value: date | datetime | None) -> datetime | None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _paginate[T](
+    items: list[T],
+    offset: int | None,
+    limit: int | None,
+) -> tuple[list[T], int, int, int]:
+    """Slice ``items`` for the response and return ``(slice, total, offset, limit)``.
+
+    A missing ``offset`` starts at 0. A missing ``limit`` returns
+    everything from ``offset`` to the end. When the wire response
+    reports ``limit`` (the size of the page returned to the client),
+    it is the actual page length even when the caller passed no
+    ``limit``.
+    """
+    effective_offset = offset if offset is not None else 0
+    total = len(items)
+    if limit is not None:
+        page = items[effective_offset : effective_offset + limit]
+        return page, total, effective_offset, limit
+    page = items[effective_offset:]
+    return page, total, effective_offset, total - effective_offset
 
 
 def _project_to_wire(project) -> ProjectOut:
@@ -168,26 +191,35 @@ def _journal_to_wire(entry: Entry, project_names: dict[str, str]) -> JournalEntr
 # ---------------------------------------------------------------------------
 
 
-@router.get("/projects", response_model=list[ProjectOut])
+@router.get("/projects", response_model=ProjectListOut)
 def list_projects(
     _: Annotated[str, Depends(current_subject)],
     search_query: Annotated[str | None, Query()] = None,
     project_status: Annotated[Status | None, Query(alias="status")] = None,
     sort_by: Annotated[list[str] | None, Query()] = None,
     order: Annotated[str, Query()] = "asc",
-) -> list[ProjectOut]:
+    offset: Annotated[int | None, Query()] = None,
+    limit: Annotated[int | None, Query()] = None,
+) -> ProjectListOut:
     facade = _facade()
     try:
         entity_status = (
             wire_to_project_status(project_status) if project_status is not None else None
         )
-        projects = facade.caldav.list_projects(
+        all_projects = facade.caldav.list_projects(
             status=entity_status,
             search=search_query,
             sort_by=sort_by,
             sort_order=order,
         )
-        return [_project_to_wire(p) for p in projects]
+        items = [_project_to_wire(p) for p in all_projects]
+        page, total, offset, limit = _paginate(items, offset, limit)
+        return ProjectListOut(
+            items=page,
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
     finally:
         facade.shutdown()
 
@@ -381,27 +413,14 @@ def list_tasks(
                 filtered.append(t)
             all_tasks = filtered
 
-        total = len(all_tasks)
         items = [_task_to_wire(t) for t in all_tasks]
-        # Pagination: any provided offset/limit is honoured. Missing
-        # offset defaults to 0; missing limit returns everything from
-        # offset to the end. The two cases that produce a true
-        # "everything" response are (offset=None, limit=None) only.
-        effective_offset = offset if offset is not None else 0
-        if limit is not None:
-            items = items[effective_offset : effective_offset + limit]
-            actual_offset = effective_offset
-            actual_limit = limit
-        else:
-            items = items[effective_offset:]
-            actual_offset = effective_offset
-            actual_limit = total - effective_offset
+        page, total, offset, limit = _paginate(items, offset, limit)
 
         return TaskListOut(
-            items=items,
+            items=page,
             total=total,
-            offset=actual_offset,
-            limit=actual_limit,
+            offset=offset,
+            limit=limit,
         )
     finally:
         facade.shutdown()
@@ -523,6 +542,7 @@ def list_journals(
     reference_date_end: Annotated[str | None, Query(alias="date_end")] = None,
     sort_by: Annotated[list[str] | None, Query()] = None,
     order: Annotated[str, Query()] = "desc",
+    offset: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query()] = 50,
 ) -> JournalListOut:
     facade = _facade()
@@ -563,11 +583,16 @@ def list_journals(
                 needle = f"> Project: {name_to_match}"
                 all_entries = [e for e in all_entries if needle in e.content]
 
-        items = [_journal_to_wire(e, project_names) for e in all_entries]
+        all_wire = [_journal_to_wire(e, project_names) for e in all_entries]
         if project_id is not None:
-            items = [i for i in items if i.project_id == project_id]
-        items = items[:limit]
-        return JournalListOut(items=items, total=len(items))
+            all_wire = [i for i in all_wire if i.project_id == project_id]
+        page, total, offset, limit = _paginate(all_wire, offset, limit)
+        return JournalListOut(
+            items=page,
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
     finally:
         facade.shutdown()
 
@@ -697,6 +722,7 @@ def list_time_log(
     active_only: Annotated[bool, Query()] = False,
     sort_by: Annotated[list[str] | None, Query()] = None,
     order: Annotated[str, Query()] = "asc",
+    offset: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query()] = 100,
 ) -> TimeLogListOut:
     facade = _facade()
@@ -711,8 +737,14 @@ def list_time_log(
             sort_by=sort_by,
             sort_order=order,
         )
-        items = [_time_log_to_wire(e) for e in all_entries[:limit]]
-        return TimeLogListOut(items=items, total=len(items))
+        items = [_time_log_to_wire(e) for e in all_entries]
+        page, total, offset, limit = _paginate(items, offset, limit)
+        return TimeLogListOut(
+            items=page,
+            total=total,
+            offset=offset,
+            limit=limit,
+        )
     finally:
         facade.shutdown()
 

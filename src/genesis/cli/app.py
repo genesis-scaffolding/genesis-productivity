@@ -44,7 +44,7 @@ def info(
 def ui(
     user: str = _user_option,
     port: int = typer.Option(3000, "--port", "-p", help="Port for the Streamlit server."),
-    host: str = typer.Option("127.0.0.1", "--host", help="Interface for the Streamlit server to bind to."),
+    host: str = typer.Option("0.0.0.0", "--host", help="Interface for the Streamlit server to bind to."),
 ) -> None:
     """Start the Streamlit UI."""
     config_path = resolve_config_path(user)
@@ -75,7 +75,7 @@ def main_ui() -> int:
     """Console-script entry point for ``genesis-ui``.
 
     Starts Streamlit for the default user. Honors ``GENESIS_UI_PORT``
-    (default 3000) and ``GENESIS_UI_HOST`` (default 127.0.0.1).
+    (default 3000) and ``GENESIS_UI_HOST`` (default 0.0.0.0).
     """
     import subprocess
     import sys
@@ -87,7 +87,7 @@ def main_ui() -> int:
 
     app_path = Path(__file__).resolve().parent.parent / "ui" / "app.py"
     port = os.environ.get("GENESIS_UI_PORT", "3000")
-    host = os.environ.get("GENESIS_UI_HOST", "127.0.0.1")
+    host = os.environ.get("GENESIS_UI_HOST", "0.0.0.0")
     return subprocess.call(
         [
             sys.executable,

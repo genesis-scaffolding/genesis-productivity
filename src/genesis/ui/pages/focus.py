@@ -182,10 +182,14 @@ def _render_active_sessions() -> None:
             and now >= s.due
             and s.status != TimeLogStatus.COMPLETED
         ):
+            category = _resolve_category(s)
             caldav.stop_time_log_entry(
-                s.uid, actual_due=s.due, completed_at=now,
+                s.uid,
+                actual_due=s.due,
+                completed_at=now,
+                category=category,
             )
-            st.toast(f"Auto-stopped: {s.label}")
+            st.toast(f"Auto-stopped: {s.label} ({category.value})")
             st.rerun(scope="app")
             return  # st.rerun() aborts; let next tick handle the rest
 

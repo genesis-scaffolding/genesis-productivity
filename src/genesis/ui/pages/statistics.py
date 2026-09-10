@@ -100,6 +100,15 @@ def _fmt_hms(seconds: float) -> str:
     return f"{m}m {s:02d}s"
 
 
+def _fmt_minutes(minutes: float) -> str:
+    """Render minutes as 'Hh Mm' (rounding to whole minutes)."""
+    minutes = int(round(minutes))
+    h, m = divmod(minutes, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    return f"{m}m"
+
+
 # -----------------------------------------------------------------------------
 # KPI strip
 # -----------------------------------------------------------------------------
@@ -110,7 +119,7 @@ kpi_cols = st.columns(4, gap="medium")
 with kpi_cols[0]:
     with st.container(border=True):
         st.caption("Total time")
-        st.markdown(f"## {_fmt_hms(rollup.kpis.total_seconds)}")
+        st.markdown(f"## {_fmt_minutes(rollup.kpis.total_minutes)}")
         st.caption(f"Across {rollup.kpis.session_count} sessions")
 with kpi_cols[1]:
     with st.container(border=True):
@@ -120,7 +129,7 @@ with kpi_cols[1]:
 with kpi_cols[2]:
     with st.container(border=True):
         st.caption("Avg session")
-        st.markdown(f"## {_fmt_hms(rollup.kpis.avg_seconds)}")
+        st.markdown(f"## {_fmt_minutes(rollup.kpis.avg_minutes)}")
         st.caption("Per session")
 with kpi_cols[3]:
     with st.container(border=True):
@@ -193,7 +202,7 @@ aligned_total = sum(b.count for b in rollup.by_task)
 aligned_seconds = sum(b.total_seconds for b in rollup.by_task)
 unaligned_count = rollup.kpis.session_count - aligned_total
 if unaligned_count:
-    unaligned_seconds = rollup.kpis.total_seconds - aligned_seconds
+    unaligned_seconds = (rollup.kpis.total_minutes * 60) - aligned_seconds
     st.caption(
         f"Unaligned: {unaligned_count} sessions, {_fmt_hms(unaligned_seconds)} "
         f"(gym, reading, and other activities not tied to a task)"

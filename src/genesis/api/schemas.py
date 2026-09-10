@@ -287,11 +287,11 @@ class StatisticsPeriod(StrEnum):
 
 
 class KpisOut(BaseModel):
-    total_seconds: float
+    total_minutes: float
     session_count: int
-    avg_seconds: float
+    avg_minutes: float
     tasks_touched: int
-    seconds_by_category: dict[TimeLogCategory, float]
+    minutes_by_category: dict[TimeLogCategory, float]
 
 
 class DailyPointOut(BaseModel):

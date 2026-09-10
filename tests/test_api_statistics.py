@@ -121,7 +121,7 @@ def test_statistics_with_one_completed_session(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["kpis"]["session_count"] == 1
-    assert body["kpis"]["total_seconds"] == 1500.0
+    assert body["kpis"]["total_minutes"] == 25.0
     assert body["kpis"]["tasks_touched"] == 1
     assert len(body["by_task"]) == 1
     assert body["by_task"][0]["title"] == "Write spec"
@@ -136,8 +136,8 @@ def test_statistics_with_one_completed_session(
     # ISO format from UtcDateTime: trailing Z with 3 decimals.
     assert body["recent"][0]["start"].endswith("Z")
     # Category breakdown surfaces the entry's category.
-    assert body["kpis"]["seconds_by_category"]["work"] == 1500.0
-    assert body["kpis"]["seconds_by_category"]["other"] == 0.0
+    assert body["kpis"]["minutes_by_category"]["work"] == 25.0
+    assert body["kpis"]["minutes_by_category"]["other"] == 0.0
     assert any(b["category"] == "work" and b["total_seconds"] == 1500.0 for b in body["by_category"])
     # Every category is present, with the four unused ones at zero.
     cats = {b["category"] for b in body["by_category"]}
@@ -253,8 +253,8 @@ def test_statistics_empty_when_no_completed_sessions(
     )
     body = resp.json()
     assert body["kpis"]["session_count"] == 0
-    assert body["kpis"]["total_seconds"] == 0.0
-    assert body["kpis"]["avg_seconds"] == 0.0
+    assert body["kpis"]["total_minutes"] == 0.0
+    assert body["kpis"]["avg_minutes"] == 0.0
     assert body["by_task"] == []
     assert body["recent"] == []
     # Daily still spans the period.

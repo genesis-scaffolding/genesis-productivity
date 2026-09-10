@@ -103,11 +103,11 @@ def duration_seconds(entry: TimeLogEntry) -> float:
 
 @dataclass(frozen=True)
 class Kpis:
-    total_seconds: float
+    total_minutes: float
     session_count: int
-    avg_seconds: float
+    avg_minutes: float
     tasks_touched: int
-    seconds_by_category: dict[TimeLogCategory, float]
+    minutes_by_category: dict[TimeLogCategory, float]
 
 
 @dataclass(frozen=True)
@@ -235,16 +235,20 @@ def compute_rollup(
     seconds_by_category: dict[TimeLogCategory, float] = dict.fromkeys(TimeLogCategory, 0.0)
     for e in in_period:
         seconds_by_category[e.category] += duration_seconds(e)
-    total = sum(seconds_by_category.values())
+    total_seconds = sum(seconds_by_category.values())
+    minutes_by_category = {
+        cat: round(secs / 60.0, 1) for cat, secs in seconds_by_category.items()
+    }
+    total_minutes = round(total_seconds / 60.0, 1)
     count = len(in_period)
-    avg = total / count if count else 0.0
+    avg_minutes = round(total_minutes / count, 1) if count else 0.0
     task_ids = {e.task_id for e in in_period if e.task_id is not None}
     kpis = Kpis(
-        total_seconds=total,
+        total_minutes=total_minutes,
         session_count=count,
-        avg_seconds=avg,
+        avg_minutes=avg_minutes,
         tasks_touched=len(task_ids),
-        seconds_by_category=seconds_by_category,
+        minutes_by_category=minutes_by_category,
     )
 
     by_day_minutes: dict[date, dict[TimeLogCategory, float]] = defaultdict(

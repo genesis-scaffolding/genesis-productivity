@@ -816,11 +816,11 @@ def get_statistics(
         return StatisticsOut(
             period=StatisticsPeriod(rollup.period.value),
             kpis=KpisOut(
-                total_seconds=rollup.kpis.total_seconds,
+                total_minutes=rollup.kpis.total_minutes,
                 session_count=rollup.kpis.session_count,
-                avg_seconds=rollup.kpis.avg_seconds,
+                avg_minutes=rollup.kpis.avg_minutes,
                 tasks_touched=rollup.kpis.tasks_touched,
-                seconds_by_category=rollup.kpis.seconds_by_category,
+                minutes_by_category=rollup.kpis.minutes_by_category,
             ),
             daily=[
                 DailyPointOut(

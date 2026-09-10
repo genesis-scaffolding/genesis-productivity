@@ -149,9 +149,9 @@ def test_kpis_sum_total_and_count() -> None:
         today=date(2026, 9, 9),
         task_titles={},
     )
-    assert rollup.kpis.total_seconds == 2700.0
+    assert rollup.kpis.total_minutes == 45.0
     assert rollup.kpis.session_count == 2
-    assert rollup.kpis.avg_seconds == 1350.0
+    assert rollup.kpis.avg_minutes == 22.5
 
 
 def test_kpis_avg_zero_when_no_sessions() -> None:
@@ -162,8 +162,8 @@ def test_kpis_avg_zero_when_no_sessions() -> None:
         task_titles={},
     )
     assert rollup.kpis.session_count == 0
-    assert rollup.kpis.total_seconds == 0.0
-    assert rollup.kpis.avg_seconds == 0.0
+    assert rollup.kpis.total_minutes == 0.0
+    assert rollup.kpis.avg_minutes == 0.0
     assert rollup.kpis.tasks_touched == 0
 
 
@@ -231,7 +231,7 @@ def test_entries_outside_period_are_excluded() -> None:
         task_titles={},
     )
     assert rollup.kpis.session_count == 1
-    assert rollup.kpis.total_seconds == 1800.0
+    assert rollup.kpis.total_minutes == 30.0
 
 
 def test_all_time_has_no_upper_bound() -> None:
@@ -673,7 +673,7 @@ def test_all_time_daily_bounds_to_data_span() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_kpis_seconds_by_category_sums_to_total() -> None:
+def test_kpis_minutes_by_category_sums_to_total() -> None:
     entries = [
         _entry(
             uid="w",
@@ -700,16 +700,16 @@ def test_kpis_seconds_by_category_sums_to_total() -> None:
         today=date(2026, 9, 9),
         task_titles={},
     )
-    secs = rollup.kpis.seconds_by_category
-    assert sum(secs.values()) == rollup.kpis.total_seconds
-    assert secs[TimeLogCategory.WORK] == 30 * 60
-    assert secs[TimeLogCategory.PERSONAL] == 15 * 60
-    assert secs[TimeLogCategory.WORKOUT] == 60 * 60
+    secs = rollup.kpis.minutes_by_category
+    assert sum(secs.values()) == rollup.kpis.total_minutes
+    assert secs[TimeLogCategory.WORK] == 30.0
+    assert secs[TimeLogCategory.PERSONAL] == 15.0
+    assert secs[TimeLogCategory.WORKOUT] == 60.0
     assert secs[TimeLogCategory.PLAY] == 0.0
     assert secs[TimeLogCategory.OTHER] == 0.0
 
 
-def test_kpis_seconds_by_category_includes_zero_entries() -> None:
+def test_kpis_minutes_by_category_includes_zero_entries() -> None:
     """Every category is a key, even if no sessions had that category."""
     rollup = compute_rollup(
         [],
@@ -717,8 +717,8 @@ def test_kpis_seconds_by_category_includes_zero_entries() -> None:
         today=date(2026, 9, 9),
         task_titles={},
     )
-    assert set(rollup.kpis.seconds_by_category) == set(TimeLogCategory)
-    assert all(v == 0.0 for v in rollup.kpis.seconds_by_category.values())
+    assert set(rollup.kpis.minutes_by_category) == set(TimeLogCategory)
+    assert all(v == 0.0 for v in rollup.kpis.minutes_by_category.values())
 
 
 def test_daily_carries_per_category_minutes() -> None:

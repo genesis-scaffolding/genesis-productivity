@@ -141,3 +141,31 @@ def test_project_create_in_default_status_is_needs_action() -> None:
 def test_utc_datetime_alias_is_a_pydantic_annotation() -> None:
     # Smoke test that the alias imports without error.
     assert UtcDateTime is not None
+
+
+def test_time_log_entry_out_category_defaults_to_other() -> None:
+    """Legacy entries without a category default to OTHER on read.
+
+    Matches the Pydantic safeguard: missing X-CATEGORY on the VTODO
+    comes back as OTHER so downstream code never sees a null pointer.
+    """
+    from genesis.api.schemas import TimeLogEntryOut
+    from genesis.category.enums import TimeLogCategory
+
+    spec = TimeLogEntryOut.model_validate(
+        {
+            "uid": "l-abc",
+            "label": "session",
+            "start": "2026-09-08T10:00:00.000Z",
+            "due": "2026-09-08T10:30:00.000Z",
+            "completed_at": None,
+            "status": "completed",
+            "mode": "countdown",
+            "task_id": None,
+            # category omitted on purpose
+            "description": None,
+            "created": None,
+            "modified": None,
+        }
+    )
+    assert spec.category == TimeLogCategory.OTHER

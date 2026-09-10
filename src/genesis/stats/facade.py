@@ -28,6 +28,7 @@ from datetime import UTC, date, datetime, timedelta
 from datetime import time as _time
 from enum import StrEnum
 
+from ..category.enums import TimeLogCategory
 from ..entities import TimeLogEntry
 from ..tz import to_local, to_utc
 
@@ -106,14 +107,21 @@ class Kpis:
     session_count: int
     avg_seconds: float
     tasks_touched: int
+    seconds_by_category: dict[TimeLogCategory, float]
 
 
 @dataclass(frozen=True)
 class DailyPoint:
-    """Minutes of focus for a single local day."""
+    """Minutes of focus for a single local day.
+
+    ``minutes_by_category`` always carries an entry for every
+    :class:`TimeLogCategory` value (zero included), so the UI can
+    stack columns without checking for missing keys.
+    """
 
     day: date
     minutes: float
+    minutes_by_category: dict[TimeLogCategory, float]
 
 
 @dataclass(frozen=True)
@@ -124,6 +132,15 @@ class TaskBucket:
     count: int
     total_seconds: float
     avg_seconds: float
+
+
+@dataclass(frozen=True)
+class ByCategory:
+    """Per-category aggregate. Total time and count for one category."""
+
+    category: TimeLogCategory
+    total_seconds: float
+    count: int
 
 
 @dataclass(frozen=True)
@@ -142,20 +159,25 @@ class RecentSession:
 class Rollup:
     """Aggregated statistics for a single period.
 
-    All four sections are filtered to the period; there is no
+    All sections are filtered to the period; there is no
     period-independent section. To widen the recent-sessions window,
     use ``Period.ALL_TIME``.
 
     Attributes:
         period: Echo of the input period so the wire response carries
             what was asked for.
-        kpis: Top-line totals.
+        kpis: Top-line totals, including a per-category seconds
+            breakdown.
         daily: One :class:`DailyPoint` per local day in the period
             span, including zero days. For ``all-time`` the span runs
             from the earliest entry's local day to the latest entry's
             local day (empty when there are no entries).
         by_task: Top-N buckets by ``total_seconds`` descending. Only
             aligned sessions (with a ``task_id``) appear here.
+        by_category: One :class:`ByCategory` per category in the
+            enum, sorted by ``total_seconds`` descending. Categories
+            with zero time still appear (with ``total_seconds=0``)
+            so the UI list never grows or shrinks unexpectedly.
         recent: Most-recent N sessions **within the period**, newest
             first. Switch to ``Period.ALL_TIME`` to see the longest
             recent-sessions window.
@@ -165,6 +187,7 @@ class Rollup:
     kpis: Kpis
     daily: list[DailyPoint]
     by_task: list[TaskBucket]
+    by_category: list[ByCategory]
     recent: list[RecentSession]
 
 
@@ -209,7 +232,10 @@ def compute_rollup(
     bounds = period_bounds(period, today)
     in_period = [e for e in entries if _in_period(e, bounds)]
 
-    total = sum(duration_seconds(e) for e in in_period)
+    seconds_by_category: dict[TimeLogCategory, float] = dict.fromkeys(TimeLogCategory, 0.0)
+    for e in in_period:
+        seconds_by_category[e.category] += duration_seconds(e)
+    total = sum(seconds_by_category.values())
     count = len(in_period)
     avg = total / count if count else 0.0
     task_ids = {e.task_id for e in in_period if e.task_id is not None}
@@ -218,12 +244,15 @@ def compute_rollup(
         session_count=count,
         avg_seconds=avg,
         tasks_touched=len(task_ids),
+        seconds_by_category=seconds_by_category,
     )
 
-    by_day: dict[date, float] = defaultdict(float)
+    by_day_minutes: dict[date, dict[TimeLogCategory, float]] = defaultdict(
+        lambda: dict.fromkeys(TimeLogCategory, 0.0)
+    )
     for e in in_period:
         local_day = to_local(e.start).date()
-        by_day[local_day] += duration_seconds(e) / 60.0
+        by_day_minutes[local_day][e.category] += duration_seconds(e) / 60.0
     if bounds.end is not None:
         # Fixed-window period: always span the full window (zero days
         # included) so the UI bar chart shows the empty range.
@@ -232,17 +261,31 @@ def compute_rollup(
         cursor = start_day
         daily = []
         while cursor <= end_day:
-            daily.append(DailyPoint(day=cursor, minutes=round(by_day.get(cursor, 0.0), 1)))
+            mins = by_day_minutes.get(cursor, dict.fromkeys(TimeLogCategory, 0.0))
+            daily.append(
+                DailyPoint(
+                    day=cursor,
+                    minutes=round(sum(mins.values()), 1),
+                    minutes_by_category={c: round(mins.get(c, 0.0), 1) for c in TimeLogCategory},
+                )
+            )
             cursor += timedelta(days=1)
-    elif by_day:
+    elif by_day_minutes:
         # All-time: bound by the data span only. With no data, return
         # an empty list (the UI shows the "no sessions yet" info).
-        start_day = min(by_day.keys())
-        end_day = max(by_day.keys())
+        start_day = min(by_day_minutes.keys())
+        end_day = max(by_day_minutes.keys())
         daily = []
         cursor = start_day
         while cursor <= end_day:
-            daily.append(DailyPoint(day=cursor, minutes=round(by_day.get(cursor, 0.0), 1)))
+            mins = by_day_minutes.get(cursor, dict.fromkeys(TimeLogCategory, 0.0))
+            daily.append(
+                DailyPoint(
+                    day=cursor,
+                    minutes=round(sum(mins.values()), 1),
+                    minutes_by_category={c: round(mins.get(c, 0.0), 1) for c in TimeLogCategory},
+                )
+            )
             cursor += timedelta(days=1)
     else:
         daily = []
@@ -285,10 +328,24 @@ def compute_rollup(
         for e in recent_sorted
     ]
 
+    by_category = sorted(
+        (
+            ByCategory(
+                category=cat,
+                total_seconds=round(seconds_by_category[cat], 1),
+                count=sum(1 for e in in_period if e.category == cat),
+            )
+            for cat in TimeLogCategory
+        ),
+        key=lambda b: b.total_seconds,
+        reverse=True,
+    )
+
     return Rollup(
         period=period,
         kpis=kpis,
         daily=daily,
         by_task=ranked,
+        by_category=by_category,
         recent=recent,
     )

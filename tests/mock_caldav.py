@@ -12,6 +12,7 @@ from typing import Any
 
 from genesis.caldav.constants import DEFAULT_SHADOW_DURATION_MINUTES
 from genesis.caldav.ical import new_uid
+from genesis.category.enums import TimeLogCategory
 from genesis.entities import (
     Event,
     EventCreate,
@@ -333,6 +334,7 @@ class MockCalDAVFacade:
             status=data.status,
             mode=data.mode,
             task_id=data.task_id,
+            category=data.category,
             description=data.description,
             created=now,
             modified=now,
@@ -393,6 +395,7 @@ class MockCalDAVFacade:
         *,
         actual_due: datetime | None,
         completed_at: datetime | None,
+        category: TimeLogCategory | None = None,
     ):
         from genesis.tz import to_utc_optional
 
@@ -402,6 +405,8 @@ class MockCalDAVFacade:
         entry.due = to_utc_optional(actual_due)
         entry.completed_at = to_utc_optional(completed_at)
         entry.status = TimeLogStatus.COMPLETED
+        if category is not None:
+            entry.category = category
         entry.modified = self._now()
         return entry
 

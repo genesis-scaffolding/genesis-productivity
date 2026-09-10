@@ -22,16 +22,29 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 from genesis.caldav.ical import now_utc
+from genesis.category.enums import TimeLogCategory
+from genesis.category.facade import CategoryFacade
 from genesis.entities import Task, TimeLogEntryCreate, TimeLogMode, TimeLogStatus
 from genesis.ui._state import get_facade
 
 facade = get_facade()
 caldav = facade.caldav
+category_facade = CategoryFacade(caldav)
 
 # Sync refetch interval (seconds) for active sessions. The fragment
 # reruns every 1s for display; the CalDAV refetch is throttled.
 REFRESH_INTERVAL_S = 30
 DEFAULT_LABEL = "Focus session"
+
+CATEGORY_OPTIONS = ["Auto", *list(TimeLogCategory)]
+CATEGORY_LABEL = {
+    "Auto": "Auto (inferred)",
+    TimeLogCategory.WORK: "Work",
+    TimeLogCategory.PLAY: "Play",
+    TimeLogCategory.WORKOUT: "Workout",
+    TimeLogCategory.PERSONAL: "Personal",
+    TimeLogCategory.OTHER: "Other",
+}
 
 
 # -----------------------------------------------------------------------------
@@ -179,6 +192,25 @@ def _render_active_sessions() -> None:
         _render_session_card(s, now)
 
 
+def _resolve_category(s) -> TimeLogCategory:
+    """Resolve the category the active session will be saved with.
+
+    Returns the explicit pick when the user chose one, otherwise the
+    inference result for the session's label + task alignment. Falls
+    back to ``PERSONAL`` when inference has no confident signal.
+    """
+    pick_key = f"focus_cat_pick_{s.uid}"
+    pick = st.session_state.get(pick_key, "Auto")
+    if pick != "Auto":
+        return TimeLogCategory(pick)
+    inferred_key = f"focus_cat_inferred_{s.uid}"
+    inferred = st.session_state.get(inferred_key)
+    if inferred is None:
+        inferred = category_facade.infer(s.label, s.task_id)
+        st.session_state[inferred_key] = inferred
+    return inferred or TimeLogCategory.PERSONAL
+
+
 def _render_session_card(s, now: datetime) -> None:
     elapsed = now - s.start
     is_countdown = s.mode == TimeLogMode.COUNTDOWN
@@ -211,14 +243,37 @@ def _render_session_card(s, now: datetime) -> None:
         else:
             st.caption(f"Running for {_format_elapsed(elapsed)}")
 
+        pick_key = f"focus_cat_pick_{s.uid}"
+        current_pick = st.session_state.get(pick_key, "Auto")
+        display_options = [CATEGORY_LABEL[o] for o in CATEGORY_OPTIONS]
+        pick_index = CATEGORY_OPTIONS.index(current_pick)
+        st.selectbox(
+            "Category",
+            display_options,
+            index=pick_index,
+            key=pick_key,
+            label_visibility="collapsed",
+            help=(
+                "Auto resolves from inference (history of this label, "
+                "then keyword rules). Pick anything else to override."
+            ),
+        )
+        st.caption(
+            f"Will save as: {_resolve_category(s).value}"
+        )
+
         btn_cols = st.columns(2)
         with btn_cols[0]:
             if st.button("Stop", key=f"focus_stop_{s.uid}", type="primary"):
                 actual_due = now if is_countdown else now
+                category = _resolve_category(s)
                 caldav.stop_time_log_entry(
-                    s.uid, actual_due=actual_due, completed_at=now,
+                    s.uid,
+                    actual_due=actual_due,
+                    completed_at=now,
+                    category=category,
                 )
-                st.toast(f"Stopped: {s.label}")
+                st.toast(f"Stopped: {s.label} ({category.value})")
                 st.rerun(scope="app")
         with btn_cols[1]:
             if st.button("Discard", key=f"focus_discard_{s.uid}"):

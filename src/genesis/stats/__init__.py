@@ -21,6 +21,7 @@ UTC per the project tz convention. Local-day bucketing uses
 """
 
 from .facade import (
+    ByCategory,
     DailyPoint,
     Kpis,
     Period,
@@ -39,6 +40,7 @@ __all__ = [
     "Kpis",
     "DailyPoint",
     "TaskBucket",
+    "ByCategory",
     "RecentSession",
     "Rollup",
     "compute_rollup",

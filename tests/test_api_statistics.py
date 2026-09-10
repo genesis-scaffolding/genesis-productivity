@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from genesis.category.enums import TimeLogCategory
 from genesis.entities import (
     TaskCreate,
     TimeLogEntry,
@@ -52,6 +53,7 @@ def _seed_session(
     start: datetime,
     duration_minutes: int,
     task_id: str | None = None,
+    category: TimeLogCategory = TimeLogCategory.OTHER,
 ) -> TimeLogEntry:
     return mock.create_time_log_entry(
         TimeLogEntryCreate(
@@ -61,6 +63,7 @@ def _seed_session(
             status=TimeLogStatus.COMPLETED,
             mode=TimeLogMode.COUNTDOWN,
             task_id=task_id,
+            category=category,
         )
     )
 
@@ -108,6 +111,7 @@ def test_statistics_with_one_completed_session(
         start=start,
         duration_minutes=25,
         task_id=task.uid,
+        category=TimeLogCategory.WORK,
     )
 
     resp = client.get(
@@ -131,6 +135,13 @@ def test_statistics_with_one_completed_session(
     assert body["recent"][0]["duration_seconds"] == 1500.0
     # ISO format from UtcDateTime: trailing Z with 3 decimals.
     assert body["recent"][0]["start"].endswith("Z")
+    # Category breakdown surfaces the entry's category.
+    assert body["kpis"]["seconds_by_category"]["work"] == 1500.0
+    assert body["kpis"]["seconds_by_category"]["other"] == 0.0
+    assert any(b["category"] == "work" and b["total_seconds"] == 1500.0 for b in body["by_category"])
+    # Every category is present, with the four unused ones at zero.
+    cats = {b["category"] for b in body["by_category"]}
+    assert cats == {c.value for c in TimeLogCategory}
 
 
 # ---------------------------------------------------------------------------

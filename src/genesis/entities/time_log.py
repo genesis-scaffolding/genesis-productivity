@@ -16,6 +16,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, field_validator
 
+from ..category.enums import TimeLogCategory
 from ..tz import to_utc
 
 
@@ -53,6 +54,9 @@ class TimeLogEntry(BaseModel):
         status: Current lifecycle status.
         mode: Whether the session is bounded (countdown) or unbounded (count-up).
         task_id: FK to Task.uid when aligned, None for unaligned sessions.
+        category: Coarse tag for what kind of time the session is. Defaults
+            to ``OTHER`` for legacy entries that predate the feature; the
+            migration CLI backfills via inference.
         description: Optional session notes.
         created: When the entry was created.
         modified: When the entry was last modified.
@@ -66,6 +70,7 @@ class TimeLogEntry(BaseModel):
     status: TimeLogStatus = TimeLogStatus.NEEDS_ACTION
     mode: TimeLogMode
     task_id: str | None = None
+    category: TimeLogCategory = TimeLogCategory.OTHER
     description: str | None = None
     created: datetime | None = None
     modified: datetime | None = None
@@ -83,6 +88,15 @@ class TimeLogEntry(BaseModel):
             return to_utc(v)
         return v
 
+    @field_validator("category", mode="before")
+    @classmethod
+    def _coerce_category(cls, v: object) -> object:
+        if isinstance(v, TimeLogCategory):
+            return v
+        if isinstance(v, str):
+            return TimeLogCategory(v)
+        return v
+
 
 class TimeLogEntryCreate(BaseModel):
     """Data for creating a new time log entry (typically a new session)."""
@@ -93,6 +107,7 @@ class TimeLogEntryCreate(BaseModel):
     due: datetime | None = None
     status: TimeLogStatus = TimeLogStatus.NEEDS_ACTION
     task_id: str | None = None
+    category: TimeLogCategory = TimeLogCategory.OTHER
     description: str | None = None
 
     model_config = {"extra": "ignore"}
@@ -102,6 +117,15 @@ class TimeLogEntryCreate(BaseModel):
     def _utc_field(cls, v: object) -> object:
         if isinstance(v, datetime):
             return to_utc(v)
+        return v
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _coerce_category(cls, v: object) -> object:
+        if isinstance(v, TimeLogCategory):
+            return v
+        if isinstance(v, str):
+            return TimeLogCategory(v)
         return v
 
 
@@ -119,6 +143,7 @@ class TimeLogEntryUpdate(BaseModel):
     status: TimeLogStatus | None = None
     mode: TimeLogMode | None = None
     task_id: str | None = None
+    category: TimeLogCategory | None = None
     description: str | None = None
 
     model_config = {"extra": "ignore"}
@@ -128,4 +153,13 @@ class TimeLogEntryUpdate(BaseModel):
     def _utc_field(cls, v: object) -> object:
         if isinstance(v, datetime):
             return to_utc(v)
+        return v
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _coerce_category(cls, v: object) -> object:
+        if isinstance(v, TimeLogCategory):
+            return v
+        if isinstance(v, str):
+            return TimeLogCategory(v)
         return v

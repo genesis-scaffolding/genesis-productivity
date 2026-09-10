@@ -26,6 +26,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from genesis.category.enums import TimeLogCategory
 from genesis.stats import Period, compute_rollup
 from genesis.tz import format_local
 from genesis.ui._state import get_facade
@@ -127,6 +128,21 @@ with kpi_cols[3]:
         st.markdown(f"## {rollup.kpis.tasks_touched}")
         st.caption("Unique aligned tasks")
 
+st.write("")
+st.subheader("By category")
+st.caption("Total tracked time split by category.")
+if rollup.kpis.session_count == 0:
+    st.info("No completed sessions in this period yet.")
+else:
+    df = pd.DataFrame(
+        {
+            "Category": [b.category.value for b in rollup.by_category],
+            "Time": [_fmt_hms(b.total_seconds) for b in rollup.by_category],
+            "Sessions": [b.count for b in rollup.by_category],
+        }
+    )
+    st.dataframe(df, hide_index=True, width="stretch")
+
 st.divider()
 
 
@@ -136,17 +152,18 @@ st.divider()
 
 
 st.subheader("Daily activity")
-st.caption(f"Minutes per day, in local time, for {period_label.lower()}.")
+st.caption(
+    f"Minutes per day, in local time, stacked by category, for {period_label.lower()}."
+)
 if not rollup.daily:
     st.info("No completed sessions in this period yet.")
 else:
-    df = pd.DataFrame(
-        {
-            "day": [p.day for p in rollup.daily],
-            "minutes": [p.minutes for p in rollup.daily],
-        }
-    ).set_index("day")
-    st.bar_chart(df, height=220, width="stretch")
+    cols = {
+        cat.value: [p.minutes_by_category.get(cat, 0.0) for p in rollup.daily]
+        for cat in TimeLogCategory
+    }
+    df = pd.DataFrame(cols, index=[p.day for p in rollup.daily])
+    st.bar_chart(df, height=240, width="stretch")
 
 st.write("")
 

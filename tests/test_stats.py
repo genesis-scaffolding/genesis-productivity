@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+from genesis.category.enums import TimeLogCategory
 from genesis.entities import TimeLogEntry, TimeLogMode, TimeLogStatus
 from genesis.stats import (
     DailyPoint,
@@ -35,6 +36,7 @@ def _entry(
     task_id: str | None = None,
     mode: TimeLogMode = TimeLogMode.COUNTDOWN,
     status: TimeLogStatus = TimeLogStatus.COMPLETED,
+    category: TimeLogCategory = TimeLogCategory.OTHER,
 ) -> TimeLogEntry:
     return TimeLogEntry(
         uid=uid,
@@ -45,6 +47,7 @@ def _entry(
         status=status,
         mode=mode,
         task_id=task_id,
+        category=category,
     )
 
 
@@ -663,3 +666,122 @@ def test_all_time_daily_bounds_to_data_span() -> None:
     assert days[0] == date(2024, 1, 5)
     assert days[-1] == date(2024, 1, 8)
     assert len(rollup.daily) == 4
+
+
+# ---------------------------------------------------------------------------
+# Category breakdown
+# ---------------------------------------------------------------------------
+
+
+def test_kpis_seconds_by_category_sums_to_total() -> None:
+    entries = [
+        _entry(
+            uid="w",
+            start=datetime(2026, 9, 8, 10, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 8, 10, 30, tzinfo=UTC),
+            category=TimeLogCategory.WORK,
+        ),
+        _entry(
+            uid="p",
+            start=datetime(2026, 9, 8, 11, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 8, 11, 15, tzinfo=UTC),
+            category=TimeLogCategory.PERSONAL,
+        ),
+        _entry(
+            uid="x",
+            start=datetime(2026, 9, 8, 12, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 8, 13, 0, tzinfo=UTC),
+            category=TimeLogCategory.WORKOUT,
+        ),
+    ]
+    rollup = compute_rollup(
+        entries,
+        period=Period.THIS_WEEK,
+        today=date(2026, 9, 9),
+        task_titles={},
+    )
+    secs = rollup.kpis.seconds_by_category
+    assert sum(secs.values()) == rollup.kpis.total_seconds
+    assert secs[TimeLogCategory.WORK] == 30 * 60
+    assert secs[TimeLogCategory.PERSONAL] == 15 * 60
+    assert secs[TimeLogCategory.WORKOUT] == 60 * 60
+    assert secs[TimeLogCategory.PLAY] == 0.0
+    assert secs[TimeLogCategory.OTHER] == 0.0
+
+
+def test_kpis_seconds_by_category_includes_zero_entries() -> None:
+    """Every category is a key, even if no sessions had that category."""
+    rollup = compute_rollup(
+        [],
+        period=Period.THIS_WEEK,
+        today=date(2026, 9, 9),
+        task_titles={},
+    )
+    assert set(rollup.kpis.seconds_by_category) == set(TimeLogCategory)
+    assert all(v == 0.0 for v in rollup.kpis.seconds_by_category.values())
+
+
+def test_daily_carries_per_category_minutes() -> None:
+    entries = [
+        _entry(
+            uid="w1",
+            start=datetime(2026, 9, 8, 10, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 8, 10, 30, tzinfo=UTC),
+            category=TimeLogCategory.WORK,
+        ),
+        _entry(
+            uid="x1",
+            start=datetime(2026, 9, 8, 12, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 8, 12, 30, tzinfo=UTC),
+            category=TimeLogCategory.WORKOUT,
+        ),
+    ]
+    rollup = compute_rollup(
+        entries,
+        period=Period.THIS_WEEK,
+        today=date(2026, 9, 9),
+        task_titles={},
+    )
+    by_day = {p.day: p for p in rollup.daily}
+    day = date(2026, 9, 8)
+    assert day in by_day
+    mins = by_day[day].minutes_by_category
+    assert mins[TimeLogCategory.WORK] == 30.0
+    assert mins[TimeLogCategory.WORKOUT] == 30.0
+    assert mins[TimeLogCategory.PERSONAL] == 0.0
+    assert by_day[day].minutes == sum(mins.values())
+
+
+def test_by_category_sorts_descending_and_includes_all_categories() -> None:
+    entries = [
+        _entry(
+            uid="w",
+            start=datetime(2026, 9, 8, 10, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 8, 10, 30, tzinfo=UTC),
+            category=TimeLogCategory.WORK,
+        ),
+        _entry(
+            uid="x",
+            start=datetime(2026, 9, 8, 12, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 8, 13, 0, tzinfo=UTC),
+            category=TimeLogCategory.WORKOUT,
+        ),
+    ]
+    rollup = compute_rollup(
+        entries,
+        period=Period.THIS_WEEK,
+        today=date(2026, 9, 9),
+        task_titles={},
+    )
+    by_cat = rollup.by_category
+    assert isinstance(by_cat, list)
+    assert len(by_cat) == len(list(TimeLogCategory))
+    totals = [b.total_seconds for b in by_cat]
+    assert totals == sorted(totals, reverse=True)
+    assert by_cat[0].category == TimeLogCategory.WORKOUT  # 3600s > 1800s
+    assert by_cat[1].category == TimeLogCategory.WORK
+    # Categories with zero time still appear, just at the tail.
+    zeros = {b.category for b in by_cat if b.total_seconds == 0}
+    assert TimeLogCategory.PLAY in zeros
+    assert TimeLogCategory.PERSONAL in zeros
+    assert TimeLogCategory.OTHER in zeros

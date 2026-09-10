@@ -23,6 +23,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, PlainSerializer
 
+from ..category.enums import TimeLogCategory
 from ..entities import ProjectStatus, TaskStatus
 from ..journal.facade import EntryType
 
@@ -253,6 +254,7 @@ class TimeLogEntryOut(BaseModel):
     status: TimeLogStatus
     mode: TimeLogMode
     task_id: str | None
+    category: TimeLogCategory = TimeLogCategory.OTHER
     description: str | None
     created: UtcDateTime | None
     modified: UtcDateTime | None
@@ -289,11 +291,13 @@ class KpisOut(BaseModel):
     session_count: int
     avg_seconds: float
     tasks_touched: int
+    seconds_by_category: dict[TimeLogCategory, float]
 
 
 class DailyPointOut(BaseModel):
     day: datetime.date
     minutes: float
+    minutes_by_category: dict[TimeLogCategory, float]
 
 
 class ByTaskOut(BaseModel):
@@ -301,6 +305,12 @@ class ByTaskOut(BaseModel):
     count: int
     total_seconds: float
     avg_seconds: float
+
+
+class ByCategoryOut(BaseModel):
+    category: TimeLogCategory
+    total_seconds: float
+    count: int
 
 
 class RecentSessionOut(BaseModel):
@@ -317,6 +327,7 @@ class StatisticsOut(BaseModel):
     kpis: KpisOut
     daily: list[DailyPointOut]
     by_task: list[ByTaskOut]
+    by_category: list[ByCategoryOut]
     recent: list[RecentSessionOut]
 
 

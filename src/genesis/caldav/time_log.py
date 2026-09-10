@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from caldav.lib import error as caldav_error
 from caldav.lib.error import NotFoundError
 
+from ..category.enums import TimeLogCategory
 from ..entities import (
     TimeLogEntry,
     TimeLogEntryCreate,
@@ -53,6 +54,7 @@ def _populate(component: Component, entry: TimeLogEntry) -> None:
     set_or_delete("status", entry.status.value)
     set_or_delete("x-mode", entry.mode.value)
     set_or_delete("x-task-id", entry.task_id)
+    set_or_delete("x-category", entry.category.value)
     set_or_delete("description", entry.description)
 
 
@@ -74,6 +76,7 @@ def create_time_log_entry(
         status=data.status,
         mode=data.mode,
         task_id=data.task_id,
+        category=data.category,
         description=data.description,
         created=now,
         modified=now,
@@ -200,6 +203,7 @@ def stop_time_log_entry(
     *,
     actual_due: datetime | None,
     completed_at: datetime | None,
+    category: TimeLogCategory | None = None,
 ) -> TimeLogEntry | None:
     """Mark a time log entry as COMPLETED with the canonical end times.
 
@@ -211,7 +215,9 @@ def stop_time_log_entry(
 
     ``actual_due`` is the value written to DUE: ``start + duration`` for
     countdown auto-stop, ``now`` for manual stop. ``completed_at`` is
-    written to COMPLETED (usually ``now``).
+    written to COMPLETED (usually ``now``). ``category``, when given,
+    overrides whatever the entry currently has (the focus page sends
+    the resolved category the user accepted).
 
     Returns the updated entry, or None on 404 (already gone) or 412
     (concurrent stop won).
@@ -231,6 +237,8 @@ def stop_time_log_entry(
     entry.due = to_utc_optional(actual_due)
     entry.completed_at = to_utc_optional(completed_at)
     entry.status = TimeLogStatus.COMPLETED
+    if category is not None:
+        entry.category = category
     entry.modified = now_utc()
 
     _populate(obj.icalendar_component, entry)

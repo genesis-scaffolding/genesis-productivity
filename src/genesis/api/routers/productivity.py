@@ -35,6 +35,7 @@ from ..auth import current_subject
 from ..schemas import (
     PROJECT_STATUS_TO_WIRE,
     TASK_STATUS_TO_WIRE,
+    ByCategoryOut,
     ByTaskOut,
     DailyPointOut,
     JournalEntryCreateIn,
@@ -54,6 +55,7 @@ from ..schemas import (
     TaskListOut,
     TaskOut,
     TaskUpdateIn,
+    TimeLogCategory,
     TimeLogEntryOut,
     TimeLogListOut,
     TimeLogMode,
@@ -818,8 +820,16 @@ def get_statistics(
                 session_count=rollup.kpis.session_count,
                 avg_seconds=rollup.kpis.avg_seconds,
                 tasks_touched=rollup.kpis.tasks_touched,
+                seconds_by_category=rollup.kpis.seconds_by_category,
             ),
-            daily=[DailyPointOut(day=p.day, minutes=p.minutes) for p in rollup.daily],
+            daily=[
+                DailyPointOut(
+                    day=p.day,
+                    minutes=p.minutes,
+                    minutes_by_category=p.minutes_by_category,
+                )
+                for p in rollup.daily
+            ],
             by_task=[
                 ByTaskOut(
                     title=b.title,
@@ -828,6 +838,14 @@ def get_statistics(
                     avg_seconds=b.avg_seconds,
                 )
                 for b in rollup.by_task
+            ],
+            by_category=[
+                ByCategoryOut(
+                    category=TimeLogCategory(b.category.value),
+                    total_seconds=b.total_seconds,
+                    count=b.count,
+                )
+                for b in rollup.by_category
             ],
             recent=[
                 RecentSessionOut(

@@ -29,18 +29,26 @@ from ...entities import (
     TaskUpdate,
 )
 from ...journal.facade import Entry, EntryType
+from ...stats import Period as StatsPeriod
+from ...stats import compute_rollup
 from ..auth import current_subject
 from ..schemas import (
     PROJECT_STATUS_TO_WIRE,
     TASK_STATUS_TO_WIRE,
+    ByTaskOut,
+    DailyPointOut,
     JournalEntryCreateIn,
     JournalEntryOut,
     JournalEntryUpdateIn,
     JournalListOut,
+    KpisOut,
     ProjectCreateIn,
     ProjectListOut,
     ProjectOut,
     ProjectUpdateIn,
+    RecentSessionOut,
+    StatisticsOut,
+    StatisticsPeriod,
     Status,
     TaskCreateIn,
     TaskListOut,
@@ -48,6 +56,7 @@ from ..schemas import (
     TaskUpdateIn,
     TimeLogEntryOut,
     TimeLogListOut,
+    TimeLogMode,
     wire_to_project_status,
     wire_to_task_status,
 )
@@ -760,5 +769,75 @@ def read_time_log(
         if entry is None:
             raise HTTPException(status_code=404, detail="Time log entry not found")
         return _time_log_to_wire(entry)
+    finally:
+        facade.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Statistics (read-only)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/statistics", response_model=StatisticsOut)
+def get_statistics(
+    _: Annotated[str, Depends(current_subject)],
+    period: Annotated[StatisticsPeriod, Query()] = StatisticsPeriod.THIS_WEEK,
+    top_n: Annotated[int, Query(ge=1, le=100)] = 10,
+    recent_limit: Annotated[int, Query(ge=1, le=200)] = 20,
+) -> StatisticsOut:
+    """Pre-computed statistics rollup for completed focus sessions.
+
+    Mirrors the Statistics page (KPIs, daily activity, by-task,
+    recent sessions). Period defaults to ``this-week`` to match the
+    UI. ``top_n`` and ``recent_limit`` override the default 10/20
+    caps for the by-task and recent-sessions lists.
+    """
+    facade = _facade()
+    try:
+        completed = facade.caldav.list_time_log()
+        task_ids = {e.task_id for e in completed if e.task_id is not None}
+        task_titles: dict[str, str] = {}
+        for tid in task_ids:
+            task = facade.caldav.get_task(tid)
+            task_titles[tid] = task.title if task else "(deleted)"
+
+        rollup = compute_rollup(
+            entries=completed,
+            period=StatsPeriod(period.value),
+            today=date.today(),
+            task_titles=task_titles,
+            top_n=top_n,
+            recent_n=recent_limit,
+        )
+        return StatisticsOut(
+            period=StatisticsPeriod(rollup.period.value),
+            kpis=KpisOut(
+                total_seconds=rollup.kpis.total_seconds,
+                session_count=rollup.kpis.session_count,
+                avg_seconds=rollup.kpis.avg_seconds,
+                tasks_touched=rollup.kpis.tasks_touched,
+            ),
+            daily=[DailyPointOut(day=p.day, minutes=p.minutes) for p in rollup.daily],
+            by_task=[
+                ByTaskOut(
+                    title=b.title,
+                    count=b.count,
+                    total_seconds=b.total_seconds,
+                    avg_seconds=b.avg_seconds,
+                )
+                for b in rollup.by_task
+            ],
+            recent=[
+                RecentSessionOut(
+                    uid=s.uid,
+                    start=s.start,
+                    label=s.label,
+                    task_title=s.task_title,
+                    mode=TimeLogMode(s.mode),
+                    duration_seconds=s.duration_seconds,
+                )
+                for s in rollup.recent
+            ],
+        )
     finally:
         facade.shutdown()

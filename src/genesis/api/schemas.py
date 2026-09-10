@@ -266,6 +266,61 @@ class TimeLogListOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Statistics
+# ---------------------------------------------------------------------------
+
+
+class StatisticsPeriod(StrEnum):
+    """Period selector for the statistics rollup.
+
+    Values match :class:`genesis.stats.Period` exactly. Keeping a
+    wire-side enum means the contract is self-describing in OpenAPI
+    and decoupled from internal renames.
+    """
+
+    THIS_WEEK = "this-week"
+    THIS_MONTH = "this-month"
+    LAST_30_DAYS = "last-30-days"
+    ALL_TIME = "all-time"
+
+
+class KpisOut(BaseModel):
+    total_seconds: float
+    session_count: int
+    avg_seconds: float
+    tasks_touched: int
+
+
+class DailyPointOut(BaseModel):
+    day: datetime.date
+    minutes: float
+
+
+class ByTaskOut(BaseModel):
+    title: str
+    count: int
+    total_seconds: float
+    avg_seconds: float
+
+
+class RecentSessionOut(BaseModel):
+    uid: str
+    start: UtcDateTime
+    label: str
+    task_title: str
+    mode: TimeLogMode
+    duration_seconds: float
+
+
+class StatisticsOut(BaseModel):
+    period: StatisticsPeriod
+    kpis: KpisOut
+    daily: list[DailyPointOut]
+    by_task: list[ByTaskOut]
+    recent: list[RecentSessionOut]
+
+
+# ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 

@@ -42,6 +42,14 @@ from genesis.api.routers import productivity as _productivity_router
 from ._mock_journal import InMemoryJournalFacade
 from .mock_caldav import MockCalDAVFacade
 
+# Pin the local timezone to UTC so tests that exercise
+# ``genesis.tz.to_utc`` (which treats naive datetimes as local time)
+# are deterministic regardless of the developer's machine. ``time.tzset``
+# reads ``$TZ``; it must be called explicitly on CPython.
+os.environ.setdefault("TZ", "UTC")
+if hasattr(time, "tzset"):
+    time.tzset()
+
 
 def _free_port() -> int:
     """Bind port 0 to let the kernel pick a free port, then release."""
@@ -95,6 +103,27 @@ def api_server(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, N
     _substitute_facade(monkeypatch)
     with TestClient(app) as client:
         yield client
+
+
+@pytest.fixture
+def api_server_with_mock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[tuple[TestClient, MockCalDAVFacade], None, None]:
+    """Like :func:`api_server` but also yields the underlying mock facade.
+
+    Use when a test needs to seed time log entries (no POST endpoint
+    exists for them) or otherwise mutate backend state directly.
+    """
+    os.environ["GENESIS_API_PASSWORD"] = "test-pw"
+    mock = _build_mock_facade()
+    state: dict[str, object] = {"mock": mock}
+
+    def fake_facade() -> object:
+        return state["mock"]
+
+    monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
+    with TestClient(app) as client:
+        yield client, mock.caldav  # type: ignore[1]
 
 
 # ---------------------------------------------------------------------------

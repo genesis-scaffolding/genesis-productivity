@@ -189,6 +189,7 @@ def _journal_to_wire(entry: Entry, project_names: dict[str, str]) -> JournalEntr
         uid=entry.uid,
         type=entry.type,
         date=entry.date,
+        reference_date=entry.reference_date,
         title=entry.title,
         content=content,
         project_id=project_uid,
@@ -580,10 +581,20 @@ def list_journals(
 
         if reference_date_start:
             start = datetime.fromisoformat(reference_date_start).date()
-            all_entries = [e for e in all_entries if e.date >= start]
+            all_entries = [
+                e
+                for e in all_entries
+                if (e.reference_date if e.reference_date is not None else e.date)
+                >= start
+            ]
         if reference_date_end:
             end = datetime.fromisoformat(reference_date_end).date()
-            all_entries = [e for e in all_entries if e.date <= end]
+            all_entries = [
+                e
+                for e in all_entries
+                if (e.reference_date if e.reference_date is not None else e.date)
+                <= end
+            ]
 
         if search_query:
             needle = search_query.lower()
@@ -635,11 +646,16 @@ def create_journal(
 
         entry = Entry(
             date=body.date,
+            reference_date=body.reference_date,
             title=body.title,
             type=body.type,
             content=content,
         )
-        facade.journal.save_entry(entry)
+        try:
+            facade.journal.save_entry(entry)
+        except ValueError as exc:
+            # Periodic uniqueness (or explicit reference_date mismatch).
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         saved = facade.journal.get_entry(entry.uid)
         if saved is None:
             raise HTTPException(status_code=500, detail="Failed to read back created entry")
@@ -679,7 +695,9 @@ def update_journal(
 
         title = body.title if body.title is not None else existing.title
         content = body.content if body.content is not None else existing.content
-        date = body.date if body.date is not None else existing.date
+        # ``date`` and ``reference_date`` are creation-time only. The
+        # update wire model intentionally does not accept them; using
+        # ``existing`` keeps the period anchor stable across edits.
         type_ = existing.type
 
         if body.project_id is not None or body.clear_project_id:
@@ -697,12 +715,16 @@ def update_journal(
 
         entry = Entry(
             uid=uid,
-            date=date,
+            date=existing.date,
+            reference_date=existing.reference_date,
             title=title,
             type=type_,
             content=content,
         )
-        facade.journal.save_entry(entry)
+        try:
+            facade.journal.save_entry(entry)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         saved = facade.journal.get_entry(uid)
         if saved is None:
             raise HTTPException(status_code=500, detail="Failed to read back updated entry")

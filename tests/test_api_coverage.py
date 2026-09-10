@@ -531,6 +531,78 @@ def test_patch_missing_journal_404(api_server: TestClient) -> None:
 
 
 @pytest.mark.integration
+def test_journal_create_normalises_reference_date(api_server: TestClient) -> None:
+    """Server stores the period anchor on the wire (ADR-017).
+
+    A weekly filed under a Saturday (2026-09-05) gets reference_date
+    set to the Monday of that ISO week (2026-08-31). Daily and
+    misc/project reference the input date or stay ``None``.
+    """
+    token = _login(api_server)
+    weekly = api_server.post(
+        "/productivity/journals",
+        json={"type": "weekly", "date": "2026-09-05", "content": "w"},
+        headers=_auth(token),
+    ).json()
+    assert weekly["reference_date"] == "2026-08-31"
+
+    daily = api_server.post(
+        "/productivity/journals",
+        json={"type": "daily", "date": "2026-09-05", "content": "d"},
+        headers=_auth(token),
+    ).json()
+    assert daily["reference_date"] == "2026-09-05"
+
+    misc = api_server.post(
+        "/productivity/journals",
+        json={"type": "misc", "date": "2026-09-05", "content": "m"},
+        headers=_auth(token),
+    ).json()
+    assert misc["reference_date"] is None
+
+
+@pytest.mark.integration
+def test_journal_weekly_duplicate_period_rejected(api_server: TestClient) -> None:
+    """Two weeklies for the same ISO week are rejected by the server."""
+    token = _login(api_server)
+    api_server.post(
+        "/productivity/journals",
+        json={"type": "weekly", "date": "2026-09-05", "content": "first"},
+        headers=_auth(token),
+    )
+    resp = api_server.post(
+        "/productivity/journals",
+        json={"type": "weekly", "date": "2026-09-06", "content": "second"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 400
+    assert "weekly entry for 2026-08-31" in resp.json()["detail"]
+
+
+@pytest.mark.integration
+def test_journal_patch_cannot_change_date(api_server: TestClient) -> None:
+    """PATCH ignores ``date`` (dropped from the update model)."""
+    token = _login(api_server)
+    created = api_server.post(
+        "/productivity/journals",
+        json={"type": "weekly", "date": "2026-09-05", "content": "x"},
+        headers=_auth(token),
+    ).json()
+    original_date = created["date"]
+    original_ref = created["reference_date"]
+
+    patched = api_server.patch(
+        f"/productivity/journals/{created['uid']}",
+        json={"title": "new", "date": "2030-01-01"},
+        headers=_auth(token),
+    ).json()
+
+    assert patched["title"] == "new"
+    assert patched["date"] == original_date
+    assert patched["reference_date"] == original_ref
+
+
+@pytest.mark.integration
 def test_health_endpoint_open(api_server: TestClient) -> None:
     resp = api_server.get("/health")
     assert resp.status_code == 200

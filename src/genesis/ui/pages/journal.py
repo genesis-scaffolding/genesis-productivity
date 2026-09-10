@@ -31,12 +31,21 @@ def _render_list() -> None:
     st.caption("Reflect on your progress and plan your future.")
 
     today = date.today()
-    existing_daily = journal.find_daily_for_date(today)
+    existing_daily = journal.find_for_period(EntryType.DAILY, today)
+    existing_weekly = journal.find_for_period(EntryType.WEEKLY, today)
+    existing_monthly = journal.find_for_period(EntryType.MONTHLY, today)
+    existing_yearly = journal.find_for_period(EntryType.YEARLY, today)
 
     # Top-right action row. "+ New Entry" is always available so the
-    # user can add any entry type on any day. When today's daily
-    # already exists, a second button opens it for editing.
+    # user can add any entry type on any day. When the periodic
+    # entry for the current period exists, a button opens it for
+    # editing.
     import uuid as _uuid
+
+    def _open(existing) -> None:
+        st.query_params["uid"] = existing.uid
+        st.query_params["edit"] = "1"
+        st.rerun()
 
     with st.container(horizontal=True, horizontal_alignment="right"):
         if st.button("+ New Entry", key="new_entry_btn"):
@@ -45,9 +54,16 @@ def _render_list() -> None:
             st.rerun()
         if existing_daily is not None:
             if st.button("Open daily", key="open_today_daily_btn"):
-                st.query_params["uid"] = existing_daily.uid
-                st.query_params["edit"] = "1"
-                st.rerun()
+                _open(existing_daily)
+        if existing_weekly is not None:
+            if st.button("Open weekly", key="open_this_week_btn"):
+                _open(existing_weekly)
+        if existing_monthly is not None:
+            if st.button("Open monthly", key="open_this_month_btn"):
+                _open(existing_monthly)
+        if existing_yearly is not None:
+            if st.button("Open yearly", key="open_this_year_btn"):
+                _open(existing_yearly)
 
     type_options = [t.value for t in EntryType]
     type_filter = st.session_state.get("journal_type_filter", list(type_options))
@@ -265,13 +281,15 @@ def _render_create(uid: str) -> None:
         cols = st.columns([1, 1, 6])
         if cols[0].form_submit_button("Create"):
             new_type = EntryType(ftype) if ftype != "(none)" else None
-            if (
-                new_type == EntryType.DAILY
-                and journal.find_daily_for_date(today) is not None
-            ):
+            existing = (
+                journal.find_for_period(new_type, today)
+                if new_type is not None
+                else None
+            )
+            if existing is not None and new_type is not None:
                 st.error(
-                    f"A daily entry for {today.isoformat()} already exists; "
-                    "edit it instead"
+                    f"A {new_type.value} entry for this period already exists; "
+                    "edit it instead",
                 )
             else:
                 entry = Entry(

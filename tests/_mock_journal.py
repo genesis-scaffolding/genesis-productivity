@@ -10,10 +10,12 @@ entries in a ``dict[uid, Entry]`` instead of writing files. The
 public surface mirrors the real facade:
 
 - ``get_entry(uid) -> Entry | None``
-- ``save_entry(entry)`` (raises ``ValueError`` on daily-collision)
+- ``save_entry(entry)`` (raises ``ValueError`` on periodic-collision)
 - ``delete_entry(uid) -> bool``
 - ``list_entries() -> list[Entry]``
 - ``find_daily_for_date(target_date) -> Entry | None``
+- ``find_for_period(entry_type, on_or_in) -> Entry | None``
+- ``repair_reference_dates() -> RepairReport``
 
 It does NOT round-trip content through YAML frontmatter; the API
 router applies the ``> Project: {name}`` footer to the body before
@@ -26,7 +28,12 @@ from __future__ import annotations
 
 from datetime import date as date_cls
 
-from genesis.journal.facade import Entry, EntryType
+from genesis.journal.facade import (
+    Entry,
+    EntryType,
+    RepairReport,
+    _normalize_reference_date,
+)
 
 
 class InMemoryJournalFacade:
@@ -51,14 +58,39 @@ class InMemoryJournalFacade:
         return self._entries.get(uid)
 
     def save_entry(self, entry: Entry) -> None:
-        """Save the entry. Raises on daily-collision (matches real)."""
-        if entry.type == EntryType.DAILY:
-            existing = self.find_daily_for_date(entry.date)
-            if existing is not None and existing.uid != entry.uid:
+        """Save the entry. Raises on periodic-collision (matches real)."""
+        normalized_ref = _normalize_reference_date(entry.type, entry.date)
+        if entry.type in _PERIODIC_TYPES:
+            assert entry.type is not None  # for type checker
+            assert normalized_ref is not None  # periodic types always have an anchor
+            if (
+                entry.reference_date is not None
+                and entry.reference_date != normalized_ref
+            ):
                 raise ValueError(
-                    f"A daily entry for {entry.date.isoformat()} already exists; "
-                    "edit it instead"
+                    f"reference_date {entry.reference_date.isoformat()} does not "
+                    f"match the normalised anchor {normalized_ref.isoformat()} "
+                    f"for type {entry.type.value}",
                 )
+            effective_ref = (
+                entry.reference_date
+                if entry.reference_date is not None
+                else normalized_ref
+            )
+            if effective_ref is not None:
+                existing = self.find_for_period(entry.type, effective_ref)
+                if existing is not None and existing.uid != entry.uid:
+                    raise ValueError(
+                        f"A {entry.type.value} entry for "
+                        f"{effective_ref.isoformat()} already exists; "
+                        "edit it instead",
+                    )
+        else:
+            effective_ref = entry.reference_date
+        # Persist the normalised reference_date alongside the caller's
+        # input so list_entries can filter on it like the real facade.
+        if entry.reference_date is None and normalized_ref is not None:
+            entry = entry.model_copy(update={"reference_date": normalized_ref})
         if entry.uid not in self._entries:
             self._saved_order.append(entry.uid)
         self._entries[entry.uid] = entry
@@ -75,10 +107,37 @@ class InMemoryJournalFacade:
         return [self._entries[uid] for uid in reversed(self._saved_order)]
 
     def find_daily_for_date(self, target_date: date_cls) -> Entry | None:
+        return self.find_for_period(EntryType.DAILY, target_date)
+
+    def find_for_period(
+        self, entry_type: EntryType, on_or_in: date_cls
+    ) -> Entry | None:
+        normalized = _normalize_reference_date(entry_type, on_or_in)
+        if normalized is None:
+            return None
         for entry in self.list_entries():
-            if entry.type == EntryType.DAILY and entry.date == target_date:
+            if entry.type == entry_type and entry.reference_date == normalized:
                 return entry
         return None
+
+    def repair_reference_dates(self) -> RepairReport:
+        report = RepairReport()
+        for entry in list(self.list_entries()):
+            if entry.type not in _PERIODIC_TYPES:
+                continue
+            if entry.reference_date is not None:
+                continue
+            try:
+                self.save_entry(entry)
+                report.repaired += 1
+            except ValueError as exc:
+                report.failures.append((entry.uid, str(exc)))
+        return report
+
+
+_PERIODIC_TYPES = frozenset(
+    {EntryType.DAILY, EntryType.WEEKLY, EntryType.MONTHLY, EntryType.YEARLY}
+)
 
 
 __all__ = ["InMemoryJournalFacade"]

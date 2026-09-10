@@ -195,6 +195,7 @@ class TaskListOut(BaseModel):
 class JournalEntryCreateIn(BaseModel):
     type: JournalWireType
     date: datetime.date
+    reference_date: datetime.date | None = None
     title: str | None = None
     content: str
     project_id: str | None = None
@@ -203,7 +204,6 @@ class JournalEntryCreateIn(BaseModel):
 class JournalEntryUpdateIn(BaseModel):
     title: str | None = None
     content: str | None = None
-    date: datetime.date | None = None
     project_id: str | None = None
     clear_project_id: bool = False
 
@@ -212,6 +212,7 @@ class JournalEntryOut(BaseModel):
     uid: str
     type: JournalWireType | None
     date: datetime.date
+    reference_date: datetime.date | None
     title: str | None
     content: str
     project_id: str | None

@@ -5,9 +5,11 @@ period selector widget, the display formatting, and the chart glue.
 
 Period selector
 ---------------
-A single-select segmented control drives the window for the KPI
-strip, the daily chart, the by-task table, and the recent-sessions
-list. The values are the same as the API's ``StatisticsPeriod`` enum.
+A single-select segmented control drives the window for **every**
+section of the rollup: the KPI strip, the daily chart, the by-task
+table, and the recent-sessions list. There is no period-independent
+section. Switch to "All time" to widen the recent-sessions window.
+The values are the same as the API's ``StatisticsPeriod`` enum.
 
 Duration convention
 -------------------
@@ -189,7 +191,10 @@ st.write("")
 
 
 st.subheader("Recent sessions")
-st.caption(f"Last {len(rollup.recent)} completed sessions in period, newest first.")
+st.caption(
+    f"Up to {rollup.recent.__len__()} most recent completed sessions within "
+    f"{period_label.lower()}, newest first."
+)
 
 if not rollup.recent:
     st.info("No completed sessions in this period.")

@@ -788,9 +788,11 @@ def get_statistics(
     """Pre-computed statistics rollup for completed focus sessions.
 
     Mirrors the Statistics page (KPIs, daily activity, by-task,
-    recent sessions). Period defaults to ``this-week`` to match the
-    UI. ``top_n`` and ``recent_limit`` override the default 10/20
-    caps for the by-task and recent-sessions lists.
+    recent sessions). ``period`` filters every section of the
+    response; there is no period-independent section. Default is
+    ``this-week`` to match the UI. ``top_n`` and ``recent_limit``
+    override the default 10/20 caps for the by-task and
+    recent-sessions lists.
     """
     facade = _facade()
     try:

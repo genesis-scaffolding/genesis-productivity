@@ -5,6 +5,13 @@ Streamlit Statistics page and the FastAPI ``/productivity/statistics``
 endpoint. No imports from the UI or the API package — those modules
 are callers, not dependencies.
 
+Period scope
+------------
+``period`` filters every section of the rollup: KPIs, the daily
+activity series, the by-task table, and the recent-sessions list.
+There is no "always show the last N regardless of period" mode; pick
+``all-time`` to see the longest recent-sessions window.
+
 Duration convention
 -------------------
 The recorded duration for a completed session is ``due - start``
@@ -135,6 +142,10 @@ class RecentSession:
 class Rollup:
     """Aggregated statistics for a single period.
 
+    All four sections are filtered to the period; there is no
+    period-independent section. To widen the recent-sessions window,
+    use ``Period.ALL_TIME``.
+
     Attributes:
         period: Echo of the input period so the wire response carries
             what was asked for.
@@ -142,10 +153,12 @@ class Rollup:
         daily: One :class:`DailyPoint` per local day in the period
             span, including zero days. For ``all-time`` the span runs
             from the earliest entry's local day to the latest entry's
-            local day.
+            local day (empty when there are no entries).
         by_task: Top-N buckets by ``total_seconds`` descending. Only
             aligned sessions (with a ``task_id``) appear here.
-        recent: Most-recent N sessions in the period, newest first.
+        recent: Most-recent N sessions **within the period**, newest
+            first. Switch to ``Period.ALL_TIME`` to see the longest
+            recent-sessions window.
     """
 
     period: Period
@@ -174,11 +187,15 @@ def compute_rollup(
 ) -> Rollup:
     """Compute KPIs, daily, by-task, and recent sessions for ``period``.
 
+    ``period`` filters every section of the returned rollup; there is
+    no period-independent section.
+
     Args:
         entries: Completed-history time log entries. The caller is
             responsible for passing the right set (typically
             ``caldav.list_time_log()`` which defaults to COMPLETED).
-        period: Which window to roll up.
+        period: Which window to roll up. Affects KPIs, daily, by-task,
+            and recent sessions.
         today: Reference date for the period bounds. Pass
             ``date.today()`` at the call site.
         task_titles: ``task_id`` -> ``title``. The UI/API caller

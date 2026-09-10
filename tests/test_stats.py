@@ -517,6 +517,12 @@ def test_recent_session_task_title_resolved_via_lookup() -> None:
 
 
 def test_recent_respects_period_filter() -> None:
+    """Lock in the contract: ``recent`` is filtered to the period.
+
+    There is no period-independent mode; pick ``ALL_TIME`` to widen
+    the window. If a future change reintroduces a "recent ignores
+    period" path, this test will fail.
+    """
     entries = [
         _entry(
             uid="old",
@@ -537,6 +543,35 @@ def test_recent_respects_period_filter() -> None:
         recent_n=20,
     )
     assert [s.uid for s in rollup.recent] == ["new"]
+
+
+def test_recent_includes_only_in_period_even_when_window_is_small() -> None:
+    """Cross-section sanity: KPIs, recent, and by-task all use the
+    same period filter. Counts must agree."""
+    entries = [
+        # In this-week window.
+        _entry(
+            uid="in",
+            start=datetime(2026, 9, 8, 10, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 8, 10, 30, tzinfo=UTC),
+        ),
+        # Out of this-week window.
+        _entry(
+            uid="out",
+            start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
+        ),
+    ]
+    rollup = compute_rollup(
+        entries,
+        period=Period.THIS_WEEK,
+        today=date(2026, 9, 9),
+        task_titles={},
+        recent_n=20,
+    )
+    assert rollup.kpis.session_count == 1
+    assert [s.uid for s in rollup.recent] == ["in"]
+    assert rollup.by_task == []  # unaligned
 
 
 # ---------------------------------------------------------------------------

@@ -393,16 +393,24 @@ def list_tasks(
         # client-side here.
         def in_range(
             dt: date | datetime | None,
-            start: date | None,
-            end: date | None,
+            start: date | datetime | None,
+            end: date | datetime | None,
         ) -> bool:
             if dt is None:
                 return start is None and end is None
+            # Normalize all three to ``date`` so a calendar-day bound
+            # on one side compares cleanly against either a ``date``
+            # field (assigned_date) or a ``datetime`` field
+            # (hard_deadline / scheduled_start) on the other.
             d = dt.date() if isinstance(dt, datetime) else dt
-            if start and d < start:
-                return False
-            if end and d > end:
-                return False
+            if start:
+                s = start.date() if isinstance(start, datetime) else start
+                if d < s:
+                    return False
+            if end:
+                e = end.date() if isinstance(end, datetime) else end
+                if d > e:
+                    return False
             return True
 
         if (

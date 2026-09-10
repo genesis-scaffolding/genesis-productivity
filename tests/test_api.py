@@ -13,6 +13,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from .mock_caldav import MockCalDAVFacade
+
 
 def _login(client: TestClient) -> str:
     resp = client.post(
@@ -311,6 +313,47 @@ def test_list_tasks_rejects_malformed_date_query_param(
         headers=_auth(token),
     )
     assert resp.status_code == 422
+
+
+def test_list_tasks_with_datetime_deadline_filter_does_not_500(
+    api_server_with_mock: tuple[TestClient, MockCalDAVFacade],
+) -> None:
+    """Regression: querying by ``hard_deadline_*`` with a populated
+    task must not raise ``TypeError: can't compare datetime.datetime
+    to datetime.date``.
+
+    The router's ``in_range`` helper used to coerce the task-side
+    field to a ``date`` but pass the query-side datetime through
+    unchanged, so the comparison crashed with a 500. The fix
+    normalises both sides to ``date`` so calendar-day bounds apply
+    uniformly regardless of which field is filtered.
+    """
+    from datetime import UTC, datetime
+
+    from genesis.entities import TaskCreate
+
+    client, mock = api_server_with_mock
+    token = _login(client)
+    headers = _auth(token)
+
+    mock.create_task(
+        TaskCreate(
+            title="Ship the thing",
+            hard_deadline=datetime(2026, 9, 15, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    resp = client.get(
+        "/productivity/tasks"
+        "?hard_deadline_start=2026-09-01T00:00:00.000Z"
+        "&hard_deadline_end=2026-09-30T23:59:59.999Z",
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["title"] == "Ship the thing"
 
 
 # ---------------------------------------------------------------------------

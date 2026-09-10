@@ -37,14 +37,19 @@ REFRESH_INTERVAL_S = 30
 DEFAULT_LABEL = "Focus session"
 
 CATEGORY_OPTIONS = ["Auto", *list(TimeLogCategory)]
-CATEGORY_LABEL = {
-    "Auto": "Auto (inferred)",
-    TimeLogCategory.WORK: "Work",
-    TimeLogCategory.PLAY: "Play",
-    TimeLogCategory.WORKOUT: "Workout",
-    TimeLogCategory.PERSONAL: "Personal",
-    TimeLogCategory.OTHER: "Other",
-}
+
+
+def _category_label(opt) -> str:
+    """Render a category option for the selectbox. ``Auto`` becomes
+    ``"Auto (inferred)"``; enum members are capitalised.
+
+    Used with ``format_func`` on ``st.selectbox`` so the underlying
+    option (the enum member or the literal string ``"Auto"``) is
+    what lands in ``st.session_state``, not the displayed label.
+    """
+    if opt == "Auto":
+        return "Auto (inferred)"
+    return opt.value.capitalize()
 
 
 # -----------------------------------------------------------------------------
@@ -245,11 +250,11 @@ def _render_session_card(s, now: datetime) -> None:
 
         pick_key = f"focus_cat_pick_{s.uid}"
         current_pick = st.session_state.get(pick_key, "Auto")
-        display_options = [CATEGORY_LABEL[o] for o in CATEGORY_OPTIONS]
         pick_index = CATEGORY_OPTIONS.index(current_pick)
         st.selectbox(
             "Category",
-            display_options,
+            options=CATEGORY_OPTIONS,
+            format_func=_category_label,
             index=pick_index,
             key=pick_key,
             label_visibility="collapsed",

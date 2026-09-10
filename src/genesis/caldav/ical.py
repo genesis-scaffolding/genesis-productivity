@@ -20,6 +20,7 @@ from typing import Any
 
 import icalendar
 
+from ..category.enums import TimeLogCategory
 from ..entities import (
     Event,
     EventStatus,
@@ -297,6 +298,11 @@ def time_log_from_ical(component: icalendar.Component) -> TimeLogEntry:
         if status_str in {s.value for s in TimeLogStatus}
         else TimeLogStatus.NEEDS_ACTION
     )
+    cat_str = to_str(component.get("x-category"))
+    try:
+        category = TimeLogCategory(cat_str) if cat_str else TimeLogCategory.OTHER
+    except ValueError:
+        category = TimeLogCategory.OTHER
     return TimeLogEntry(
         uid=to_str(component.get("uid")) or "",
         label=to_str(component.get("summary")) or "",
@@ -306,6 +312,7 @@ def time_log_from_ical(component: icalendar.Component) -> TimeLogEntry:
         status=status,
         mode=TimeLogMode(mode_str),
         task_id=to_str(component.get("x-task-id")) or None,
+        category=category,
         description=to_str(component.get("description")),
         created=to_datetime(component.get("created")),
         modified=to_datetime(component.get("last-modified")),
@@ -326,6 +333,8 @@ def time_log_to_ical(entry: TimeLogEntry) -> icalendar.Component:
         component.add("completed", entry.completed_at)
     if entry.task_id:
         component.add("x-task-id", entry.task_id)
+    if entry.category != TimeLogCategory.OTHER:
+        component.add("x-category", entry.category.value)
     if entry.description:
         component.add("description", entry.description)
     component.add("dtstamp", entry.modified or now_utc())

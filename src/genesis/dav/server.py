@@ -9,7 +9,9 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -85,6 +87,7 @@ class ServerManager:
         dav_config: DAV,
         data_path: Path,
         startup_timeout: float = DEFAULT_STARTUP_TIMEOUT,
+        log_buffer_size: int = 5000,
     ) -> None:
         """Initialize the server manager.
 
@@ -92,11 +95,14 @@ class ServerManager:
             dav_config: DAV configuration with host, port, username, password.
             data_path: Root path for Radicale data storage.
             startup_timeout: Maximum seconds to wait for server to be ready.
+            log_buffer_size: Maximum number of recent log lines kept in memory for diagnostics.
         """
         self._config = dav_config
         self._data_path = Path(data_path)
         self._startup_timeout = startup_timeout
-        self._process: subprocess.Popen[bytes] | None = None
+        self._process: subprocess.Popen[str] | None = None
+        self._log_buffer: deque[str] = deque(maxlen=log_buffer_size)
+        self._reader_thread: threading.Thread | None = None
 
     @property
     def host(self) -> str:
@@ -192,42 +198,139 @@ permissions = RrWw
 
         Raises:
             TimeoutError: If server does not become ready within timeout.
-            RuntimeError: If radicale executable is not found.
+            RuntimeError: If radicale executable is not found, or it exited during startup.
         """
         if self.is_running():
             return  # Already running
 
-        # Ensure data directory exists
-        self._data_path.mkdir(parents=True, exist_ok=True)
+        try:
+            # Ensure data directory exists
+            self._data_path.mkdir(parents=True, exist_ok=True)
 
-        # Write config files (includes initial htpasswd with default user)
-        self._write_config()
+            # Write config files (includes initial htpasswd with default user)
+            self._write_config()
 
-        # Find radicale executable
-        radicale = find_radicale_binary()
+            # Find radicale executable
+            radicale = find_radicale_binary()
 
-        # Start radicale as subprocess
-        self._process = subprocess.Popen(  # type: ignore[assignment]
-            [
-                sys.executable,
-                str(radicale),
-                "-C", str(self._data_path / "config"),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            # Start radicale. stderr is merged into stdout so a single drain thread
+            # handles both streams. text=True gives str lines; bufsize=1 line-buffers
+            # so the drain thread receives complete lines as soon as they arrive.
+            #
+            # We deliberately avoid subprocess.PIPE-without-drain, which is the bug
+            # that caused the previous deadlock: a pipe has a fixed 64KB kernel buffer,
+            # and once it fills, every thread that tries to log via stderr blocks on
+            # the logging lock. The drain thread below consumes continuously, so the
+            # pipe never has a chance to back up.
+            self._process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(radicale),
+                    "-C", str(self._data_path / "config"),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+
+            # Background drain into an in-memory ring buffer (no disk, no deadlock).
+            self._start_log_drain()
+
+            # Wait for server to be ready
+            self._wait_for_ready()
+
+            # Ensure the configured user exists in htpasswd
+            self.ensure_user(self._config.username)
+        except BaseException:
+            # Any failure path (TimeoutError, RuntimeError, KeyboardInterrupt, etc.)
+            # must terminate the subprocess. Otherwise a half-started radicale leaks
+            # holding port 5232, and the next start() call hits "Address already in use"
+            # and bails out via is_running().
+            self._terminate_and_cleanup()
+            raise
+
+    def _start_log_drain(self) -> None:
+        """Spawn a daemon thread that drains the subprocess stdout into the log buffer.
+
+        The thread reads one line at a time and appends to a bounded deque. Writes
+        to a deque are O(1) and never block under normal conditions, so this fully
+        replaces the diskless-but-blockable PIPE pattern.
+        """
+        proc = self._process
+        if proc is None or proc.stdout is None:
+            return
+
+        def _drain() -> None:
+            try:
+                stream = proc.stdout
+                assert stream is not None  # for type checkers
+                for line in stream:
+                    self._log_buffer.append(line)
+            except (ValueError, OSError):
+                # Stream closed because the subprocess exited; that's expected.
+                pass
+            except Exception:
+                # Anything else is a bug, but the thread must not propagate it.
+                pass
+
+        self._reader_thread = threading.Thread(
+            target=_drain,
+            name="radicale-log-drain",
+            daemon=True,
         )
+        self._reader_thread.start()
 
-        # Wait for server to be ready
-        self._wait_for_ready()
+    def recent_logs(self, n: int = 200) -> str:
+        """Return the last n lines of captured subprocess output.
 
-        # Ensure the configured user exists in htpasswd
-        self.ensure_user(self._config.username)
+        Useful for surfacing diagnostics in the UI when something goes wrong.
+        Returns an empty string if no output has been captured or n <= 0.
+
+        Args:
+            n: Maximum number of recent lines to return.
+
+        Returns:
+            Concatenated log lines, no trailing newline.
+        """
+        if n <= 0:
+            return ""
+        # Snapshot via list() so a concurrent append during iteration can't corrupt
+        # the result. The snapshot may include a partial final line; that's fine for
+        # debug display.
+        snapshot = list(self._log_buffer)
+        return "".join(snapshot[-n:])
+
+    def _terminate_and_cleanup(self) -> None:
+        """Terminate the subprocess, force-killing if needed, and clear state.
+
+        Best-effort: never raises. Use from both stop() and the start() failure
+        path so the subprocess is always reaped.
+        """
+        proc = self._process
+        if proc is None:
+            return
+        self._process = None
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
+        except Exception:
+            # Don't mask whatever called us.
+            pass
 
     def _wait_for_ready(self) -> None:
         """Wait for server to become ready.
 
         Raises:
-            TimeoutError: If server does not become ready within timeout.
+            TimeoutError: If server does not become ready within timeout (with recent
+                log lines appended for diagnostics).
+            RuntimeError: If radicale process exited during startup (with recent log
+                lines appended for diagnostics).
         """
         start = time.monotonic()
         while time.monotonic() - start < self._startup_timeout:
@@ -235,15 +338,19 @@ permissions = RrWw
                 return
             time.sleep(POLL_INTERVAL)
 
-        # If we started the process, check if it died
+        # Build a tail of recent log output to embed in the error message.
+        recent = self.recent_logs(50).strip()
+        tail = f"\n\nRecent log output:\n{recent}" if recent else ""
+
+        # If the process exited, surface its return code.
         if self._process is not None and self._process.poll() is not None:
-            stdout, stderr = self._process.communicate()
+            rc = self._process.returncode
             raise RuntimeError(
-                f"Radicale failed to start:\nstdout: {stdout.decode()}\nstderr: {stderr.decode()}"
+                f"Radicale failed to start (exit code {rc}).{tail}"
             )
 
         raise TimeoutError(
-            f"Server did not become ready within {self._startup_timeout} seconds"
+            f"Server did not become ready within {self._startup_timeout} seconds.{tail}"
         )
 
     def stop(self) -> None:
@@ -253,14 +360,7 @@ permissions = RrWw
         """
         if self._process is None:
             return  # Not started by us
-
-        self._process.terminate()
-        try:
-            self._process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait()
-        self._process = None
+        self._terminate_and_cleanup()
 
     def __enter__(self) -> ServerManager:
         """Context manager entry."""

@@ -97,14 +97,10 @@ def _start_session(
 
 
 def _render_start_form() -> None:
-    tasks = caldav.list_tasks(
-        status=st.session_state.get("focus_task_status_filter")
-    )
+    tasks = caldav.list_tasks(status=st.session_state.get("focus_task_status_filter"))
 
     task_options: list[Task | None] = [None, *tasks]
-    task_labels = ["(unaligned)"] + [
-        t.title for t in tasks
-    ]
+    task_labels = ["(unaligned)"] + [t.title for t in tasks]
     cur_label = st.session_state.get("focus_form_task_label", "(unaligned)")
     cur_idx = task_labels.index(cur_label) if cur_label in task_labels else 0
 
@@ -238,13 +234,8 @@ def _render_session_card(s, now: datetime) -> None:
         if is_countdown and s.due is not None:
             remaining = s.due - now
             if remaining.total_seconds() > 0:
-                st.progress(
-                    min(1.0, elapsed.total_seconds() / (s.due - s.start).total_seconds())
-                )
-                st.caption(
-                    f"{_format_elapsed(remaining)} remaining "
-                    f"of {_format_elapsed(s.due - s.start)}"
-                )
+                st.progress(min(1.0, elapsed.total_seconds() / (s.due - s.start).total_seconds()))
+                st.caption(f"{_format_elapsed(remaining)} remaining of {_format_elapsed(s.due - s.start)}")
             else:
                 over = -remaining
                 st.progress(1.0)
@@ -267,9 +258,7 @@ def _render_session_card(s, now: datetime) -> None:
                 "then keyword rules). Pick anything else to override."
             ),
         )
-        st.caption(
-            f"Will save as: {_resolve_category(s).value}"
-        )
+        st.caption(f"Will save as: {_resolve_category(s).value}")
 
         btn_cols = st.columns(2)
         with btn_cols[0]:

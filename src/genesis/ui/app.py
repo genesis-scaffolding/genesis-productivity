@@ -1,8 +1,14 @@
 """Streamlit entry script for the genesis productivity UI.
 
-Sets the page config and runs ``st.navigation`` with one Productivity
-section containing the seven page modules. Pages are wired in
-``st.Page(...)`` so each gets a sidebar entry and a stable URL path.
+Sets the page config, configures the sidebar navigation, and runs
+the selected page. Authentication is not gated in this script;
+``genesis.ui._state.get_facade`` is the single source of truth and
+self-heals when called without an authenticated user (it shows
+the login form inline and stops the page module). Doing it this
+way keeps the sidebar styled correctly on first load — if we
+called ``st.stop()`` here, Streamlit would fall back to its
+auto-discovered file list and render the sidebar as plain text
+instead of our configured nav with icons and section grouping.
 """
 
 from __future__ import annotations
@@ -19,15 +25,8 @@ def _page(path: Path, title: str, icon: str, url_path: str) -> st.Page:
     return st.Page(str(path), title=title, icon=icon, url_path=url_path)
 
 
-# Eagerly initialize the Facade so Radicale is up before the first
-# page tries to use it. cache_resource on get_facade() guarantees
-# one instance for the session.
-from genesis.ui._state import get_facade  # noqa: E402
-
-facade = get_facade()
-st.session_state["facade"] = facade
-st.session_state["user"] = facade.configs.user
-
+# ``st.set_page_config`` must be the first Streamlit call in the
+# script.
 st.set_page_config(
     page_title="genesis",
     layout="wide",
@@ -45,5 +44,9 @@ nav: dict[str, list[st.Page]] = {
         _page(_PAGES / "statistics.py", "Statistics", ":material/analytics:", "statistics"),
     ],
 }
+
+from genesis.ui._auth import render_logout_button  # noqa: E402
+
+render_logout_button()
 
 st.navigation(nav).run()

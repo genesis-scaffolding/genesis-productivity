@@ -63,27 +63,18 @@ class InMemoryJournalFacade:
         if entry.type in _PERIODIC_TYPES:
             assert entry.type is not None  # for type checker
             assert normalized_ref is not None  # periodic types always have an anchor
-            if (
-                entry.reference_date is not None
-                and entry.reference_date != normalized_ref
-            ):
+            if entry.reference_date is not None and entry.reference_date != normalized_ref:
                 raise ValueError(
                     f"reference_date {entry.reference_date.isoformat()} does not "
                     f"match the normalised anchor {normalized_ref.isoformat()} "
                     f"for type {entry.type.value}",
                 )
-            effective_ref = (
-                entry.reference_date
-                if entry.reference_date is not None
-                else normalized_ref
-            )
+            effective_ref = entry.reference_date if entry.reference_date is not None else normalized_ref
             if effective_ref is not None:
                 existing = self.find_for_period(entry.type, effective_ref)
                 if existing is not None and existing.uid != entry.uid:
                     raise ValueError(
-                        f"A {entry.type.value} entry for "
-                        f"{effective_ref.isoformat()} already exists; "
-                        "edit it instead",
+                        f"A {entry.type.value} entry for {effective_ref.isoformat()} already exists; edit it instead",
                     )
         else:
             effective_ref = entry.reference_date
@@ -109,9 +100,7 @@ class InMemoryJournalFacade:
     def find_daily_for_date(self, target_date: date_cls) -> Entry | None:
         return self.find_for_period(EntryType.DAILY, target_date)
 
-    def find_for_period(
-        self, entry_type: EntryType, on_or_in: date_cls
-    ) -> Entry | None:
+    def find_for_period(self, entry_type: EntryType, on_or_in: date_cls) -> Entry | None:
         normalized = _normalize_reference_date(entry_type, on_or_in)
         if normalized is None:
             return None
@@ -135,9 +124,7 @@ class InMemoryJournalFacade:
         return report
 
 
-_PERIODIC_TYPES = frozenset(
-    {EntryType.DAILY, EntryType.WEEKLY, EntryType.MONTHLY, EntryType.YEARLY}
-)
+_PERIODIC_TYPES = frozenset({EntryType.DAILY, EntryType.WEEKLY, EntryType.MONTHLY, EntryType.YEARLY})
 
 
 __all__ = ["InMemoryJournalFacade"]

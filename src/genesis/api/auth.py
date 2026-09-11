@@ -1,4 +1,4 @@
-"""Authentication endpoints: ``/auth/login`` and ``/auth/refresh``."""
+"""Authentication endpoints: ``/auth/login``, ``/auth/refresh``, ``/auth/me``."""
 
 from __future__ import annotations
 
@@ -37,22 +37,20 @@ def login(
 
     Accepts the standard form-encoded body (username, password,
     grant_type). Returns an access + refresh token pair.
+
+    The username must exist in the users table
+    (``genesis.users``); both missing-user and wrong-password
+    return the same 401 to avoid leaking which usernames exist.
     """
-    if form_data.username != security.DEFAULT_USERNAME:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    if not security.verify_password(form_data.password):
+    if not security.verify_user_credentials(form_data.username, form_data.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return TokenOut(
-        access_token=security.create_access_token(security.DEFAULT_USERNAME),
-        refresh_token=security.create_refresh_token(security.DEFAULT_USERNAME),
+        access_token=security.create_access_token(form_data.username),
+        refresh_token=security.create_refresh_token(form_data.username),
         expires_in=security.ACCESS_TOKEN_TTL_SECONDS,
     )
 
@@ -74,3 +72,9 @@ def refresh(body: Annotated[RefreshIn, Body()]) -> TokenOut:
         refresh_token=security.create_refresh_token(subject),
         expires_in=security.ACCESS_TOKEN_TTL_SECONDS,
     )
+
+
+@router.get("/me")
+def me(subject: Annotated[str, Depends(current_subject)]) -> dict[str, str]:
+    """Return the username embedded in the bearer token."""
+    return {"username": subject}

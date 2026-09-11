@@ -135,9 +135,7 @@ def list_projects(
     return projects
 
 
-def update_project(
-    facade: CalDAVFacade, uid: str, data: ProjectUpdate
-) -> Project | None:
+def update_project(facade: CalDAVFacade, uid: str, data: ProjectUpdate) -> Project | None:
     """Update an existing project.
 
     Loads the project, mutates the icalendar component in place, and

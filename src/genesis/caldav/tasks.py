@@ -231,9 +231,7 @@ def list_tasks(
     return tasks
 
 
-def update_task(
-    facade: CalDAVFacade, uid: str, data: TaskUpdate
-) -> Task | None:
+def update_task(facade: CalDAVFacade, uid: str, data: TaskUpdate) -> Task | None:
     """Update an existing task.
 
     Loads the task, mutates the icalendar component in place, and saves.
@@ -264,16 +262,9 @@ def update_task(
     if clear_project:
         task.project_id = None
 
-    if (
-        update_data.get("status") == TaskStatus.COMPLETED
-        and task.completed_at is None
-    ):
+    if update_data.get("status") == TaskStatus.COMPLETED and task.completed_at is None:
         task.completed_at = now_utc()
-    elif (
-        "status" in update_data
-        and task.status != TaskStatus.COMPLETED
-        and task.completed_at is not None
-    ):
+    elif "status" in update_data and task.status != TaskStatus.COMPLETED and task.completed_at is not None:
         task.completed_at = None
 
     task.modified = now_utc()
@@ -317,11 +308,7 @@ def _reconcile_shadow(facade: CalDAVFacade, task: Task) -> None:
             shadow.delete()
         return
 
-    duration = (
-        task.scheduled_duration
-        if task.scheduled_duration is not None
-        else DEFAULT_SHADOW_DURATION_MINUTES
-    )
+    duration = task.scheduled_duration if task.scheduled_duration is not None else DEFAULT_SHADOW_DURATION_MINUTES
     shadow_event = Event(
         uid=task.uid,
         summary=task.title,

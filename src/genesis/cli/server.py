@@ -27,15 +27,18 @@ _user_option = typer.Option(
 
 
 def _build_manager(user: str) -> tuple[ServerManager, Configs]:
-    """Build a ServerManager for the given user's config.
+    """Build a ServerManager pointing at the shared Radicale root.
 
-    Returns the manager and the resolved Configs object.
+    The ``user`` argument only matters for resolving the per-user
+    configs.yaml; the Radicale data path is shared across all
+    users (ADR-019 option A). The returned Configs is included
+    for callers that want to print the server URL.
     """
     config_path = resolve_config_path(user)
     configs = Configs(yaml_path=config_path)
     manager = ServerManager(
         dav_config=configs.dav,
-        data_path=configs.paths.data / "radicale",
+        data_path=configs.paths.radicale_root,
     )
     return manager, configs
 

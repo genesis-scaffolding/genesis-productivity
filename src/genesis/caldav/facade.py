@@ -129,9 +129,7 @@ class CalDAVFacade:
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):
-        return tasks.list_tasks(
-            self, project_id, status, search, start, end, sort_by, sort_order
-        )
+        return tasks.list_tasks(self, project_id, status, search, start, end, sort_by, sort_order)
 
     def update_task(self, uid: str, data):
         return tasks.update_task(self, uid, data)
@@ -159,9 +157,7 @@ class CalDAVFacade:
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):
-        return events.list_events(
-            self, task_id, status, search, start, end, sort_by, sort_order
-        )
+        return events.list_events(self, task_id, status, search, start, end, sort_by, sort_order)
 
     def update_event(self, uid: str, data):
         return events.update_event(self, uid, data)
@@ -187,9 +183,7 @@ class CalDAVFacade:
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):
-        return time_log.list_time_log(
-            self, task_id, status, active_only, sort_by, sort_order
-        )
+        return time_log.list_time_log(self, task_id, status, active_only, sort_by, sort_order)
 
     def update_time_log_entry(self, uid: str, data):
         return time_log.update_time_log_entry(self, uid, data)

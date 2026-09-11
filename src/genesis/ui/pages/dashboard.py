@@ -41,11 +41,7 @@ done_statuses = {TaskStatus.COMPLETED, TaskStatus.CANCELED}
 
 # Active assignments: assigned_date <= today, not done/canceled.
 active_assignments = [
-    t
-    for t in all_tasks
-    if t.assigned_date is not None
-    and t.assigned_date <= today
-    and t.status not in done_statuses
+    t for t in all_tasks if t.assigned_date is not None and t.assigned_date <= today and t.status not in done_statuses
 ]
 active_assignments.sort(key=lambda t: t.assigned_date or date.min)
 
@@ -53,9 +49,7 @@ active_assignments.sort(key=lambda t: t.assigned_date or date.min)
 deadlines = [
     t
     for t in all_tasks
-    if t.hard_deadline is not None
-    and t.hard_deadline <= week_end_dt
-    and t.status not in done_statuses
+    if t.hard_deadline is not None and t.hard_deadline <= week_end_dt and t.status not in done_statuses
 ]
 deadlines.sort(key=lambda t: t.hard_deadline or today_start)
 

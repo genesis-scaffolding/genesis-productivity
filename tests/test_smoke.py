@@ -17,7 +17,7 @@ class TestConfigs:
 
     def test_facade_defaults_without_yaml(self) -> None:
         """Facade loads internal defaults when no yaml exists."""
-        facade = Facade()
+        facade = Facade(ensure_server=False)
         cfg = facade.configs
 
         assert cfg.app_name == DEFAULT_APP_NAME
@@ -47,7 +47,10 @@ class TestConfigs:
                 )
             )
 
-            facade = Facade(yaml_path)
+            # ``ensure_server=False`` because this test only checks
+            # config loading. The full server lifecycle (Radicale
+            # start, htpasswd lazy-create) is covered elsewhere.
+            facade = Facade(yaml_path, ensure_server=False)
             cfg = facade.configs
 
             assert cfg.app_name == "testapp"
@@ -55,7 +58,7 @@ class TestConfigs:
 
     def test_facade_loads_defaults_for_nonexistent_explicit_yaml(self) -> None:
         """Facade loads defaults when explicit yaml path doesn't exist."""
-        facade = Facade("/nonexistent/path/configs.yaml")
+        facade = Facade("/nonexistent/path/configs.yaml", ensure_server=False)
         cfg = facade.configs
 
         assert cfg.user == "default"
@@ -77,9 +80,7 @@ class TestResolveConfigPath:
         assert path.exists()
         assert path.read_text() == ""
 
-    def test_default_user_seeds_empty_config_file(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_default_user_seeds_empty_config_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Default user gets an empty configs.yaml created if missing."""
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
@@ -102,9 +103,7 @@ class TestResolveConfigPath:
         assert resolved == target
         assert resolved.read_text() == "app_name: keepme"
 
-    def test_named_user_creates_dir_only(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_named_user_creates_dir_only(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Named users get the parent dir but no configs.yaml file."""
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
@@ -114,9 +113,7 @@ class TestResolveConfigPath:
         assert path.parent.exists()
         assert not path.exists()
 
-    def test_none_and_empty_user_resolve_to_default(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_none_and_empty_user_resolve_to_default(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """None and empty user names both resolve to the default user."""
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 

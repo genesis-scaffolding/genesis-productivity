@@ -110,12 +110,7 @@ def to_int(val: Any) -> int | None:
 
 def escape_text(text: str) -> str:
     """Escape special characters in an iCal text value."""
-    return (
-        text.replace("\\", "\\\\")
-        .replace("\n", "\\n")
-        .replace(",", "\\,")
-        .replace(";", "\\;")
-    )
+    return text.replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
 
 
 def now_utc() -> datetime:
@@ -136,9 +131,7 @@ def project_from_ical(component: icalendar.Component) -> Project:
         description=to_str(component.get("description")),
         start_date=to_date(component.get("dtstart")),
         deadline=to_date(component.get("due")),
-        status=ProjectStatus(
-            to_str(component.get("status")) or ProjectStatus.NEEDS_ACTION.value
-        ),
+        status=ProjectStatus(to_str(component.get("status")) or ProjectStatus.NEEDS_ACTION.value),
         created=to_datetime(component.get("created")),
         modified=to_datetime(component.get("last-modified")),
     )
@@ -180,9 +173,7 @@ def task_from_ical(component: icalendar.Component) -> Task:
         scheduled_start=to_datetime(component.get("dtstart")),
         scheduled_duration=to_int(component.get("x-scheduled-duration")),
         priority=to_int(component.get("priority")),
-        status=TaskStatus(
-            to_str(component.get("status")) or TaskStatus.NEEDS_ACTION.value
-        ),
+        status=TaskStatus(to_str(component.get("status")) or TaskStatus.NEEDS_ACTION.value),
         project_id=to_str(component.get("x-project-id")) or None,
         completed_at=to_datetime(component.get("completed")),
         created=to_datetime(component.get("created")),
@@ -230,9 +221,7 @@ def event_from_ical(component: icalendar.Component) -> Event:
     start = to_datetime(component.get("dtstart"))
     end = to_datetime(component.get("dtend"))
     if start is None or end is None:
-        raise ValueError(
-            f"VEVENT {component.get('uid')} is missing DTSTART or DTEND"
-        )
+        raise ValueError(f"VEVENT {component.get('uid')} is missing DTSTART or DTEND")
     return Event(
         uid=to_str(component.get("uid")) or "",
         summary=to_str(component.get("summary")) or "",
@@ -240,9 +229,7 @@ def event_from_ical(component: icalendar.Component) -> Event:
         end=end,
         location=to_str(component.get("location")),
         description=to_str(component.get("description")),
-        status=EventStatus(
-            to_str(component.get("status")) or EventStatus.CONFIRMED.value
-        ),
+        status=EventStatus(to_str(component.get("status")) or EventStatus.CONFIRMED.value),
         task_id=to_str(component.get("x-task-id")) or None,
         created=to_datetime(component.get("created")),
         modified=to_datetime(component.get("last-modified")),
@@ -285,19 +272,11 @@ def time_log_from_ical(component: icalendar.Component) -> TimeLogEntry:
     start = to_datetime(component.get("dtstart"))
     mode_str = to_str(component.get("x-mode"))
     if start is None:
-        raise ValueError(
-            f"time_log VTODO {component.get('uid')} is missing DTSTART"
-        )
+        raise ValueError(f"time_log VTODO {component.get('uid')} is missing DTSTART")
     if mode_str is None:
-        raise ValueError(
-            f"time_log VTODO {component.get('uid')} is missing X-MODE"
-        )
+        raise ValueError(f"time_log VTODO {component.get('uid')} is missing X-MODE")
     status_str = to_str(component.get("status"))
-    status = (
-        TimeLogStatus(status_str)
-        if status_str in {s.value for s in TimeLogStatus}
-        else TimeLogStatus.NEEDS_ACTION
-    )
+    status = TimeLogStatus(status_str) if status_str in {s.value for s in TimeLogStatus} else TimeLogStatus.NEEDS_ACTION
     cat_str = to_str(component.get("x-category"))
     try:
         category = TimeLogCategory(cat_str) if cat_str else TimeLogCategory.OTHER

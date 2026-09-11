@@ -153,9 +153,7 @@ def test_statistics_with_one_completed_session(
     "period",
     ["this-week", "this-month", "last-30-days", "all-time"],
 )
-def test_statistics_accepts_each_period_label(
-    api_server: TestClient, period: str
-) -> None:
+def test_statistics_accepts_each_period_label(api_server: TestClient, period: str) -> None:
     token = _login(api_server)
     resp = api_server.get(
         f"/productivity/statistics?period={period}",

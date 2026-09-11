@@ -62,9 +62,7 @@ def _get_calendar(facade: CalDAVFacade):
     return facade._get_calendar(facade.TIME_LOG_COLLECTION)
 
 
-def create_time_log_entry(
-    facade: CalDAVFacade, data: TimeLogEntryCreate
-) -> TimeLogEntry:
+def create_time_log_entry(facade: CalDAVFacade, data: TimeLogEntryCreate) -> TimeLogEntry:
     """Create a new time log entry (typically a new focus session)."""
     now = now_utc()
     entry = TimeLogEntry(
@@ -166,9 +164,7 @@ def list_time_log(
     return entries
 
 
-def update_time_log_entry(
-    facade: CalDAVFacade, uid: str, data: TimeLogEntryUpdate
-) -> TimeLogEntry | None:
+def update_time_log_entry(facade: CalDAVFacade, uid: str, data: TimeLogEntryUpdate) -> TimeLogEntry | None:
     """Update an existing time log entry in place. All fields optional.
 
     Prefer ``stop_time_log_entry`` for the stop flow because it

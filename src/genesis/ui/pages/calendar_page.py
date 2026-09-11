@@ -79,9 +79,7 @@ for i, c in enumerate(day_cols):
     day = week_start + timedelta(days=i)
     with c:
         if day == today:
-            st.markdown(
-                f":blue[**{day.strftime('%a')}**]  \n:blue[{day.day}]"
-            )
+            st.markdown(f":blue[**{day.strftime('%a')}**]  \n:blue[{day.day}]")
         else:
             st.markdown(f"**{day.strftime('%a')}**  \n{day.day}")
 
@@ -120,12 +118,14 @@ with st.expander("This week in detail", expanded=True):
     # tasks whose scheduled_start is strictly in the window.
     week_tasks = caldav.list_tasks(start=week_window_start, end=week_window_end)
     week_tasks = [
-        t for t in week_tasks
-        if t.scheduled_start is not None
-        and week_window_start <= t.scheduled_start < week_window_end
+        t
+        for t in week_tasks
+        if t.scheduled_start is not None and week_window_start <= t.scheduled_start < week_window_end
     ]
     week_tasks.sort(key=lambda t: t.scheduled_start or datetime.min)
     render_tasks_table(
-        week_tasks, caldav=caldav, key="cal_this_week_tasks",
+        week_tasks,
+        caldav=caldav,
+        key="cal_this_week_tasks",
         show_project_column=False,
     )

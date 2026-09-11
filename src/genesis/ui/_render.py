@@ -75,7 +75,9 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
 
     title = st.text_input("Title", key="_ntd_title")
     description = st.text_area(
-        "Description", key="_ntd_desc", height=100,
+        "Description",
+        key="_ntd_desc",
+        height=100,
         placeholder="Optional details…",
     )
 
@@ -84,38 +86,44 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
         st.caption(f"Project: **{project_labels[proj_idx]}**")
         selected_project_uid: str | None = project_id
     else:
-        selected_label = st.selectbox(
-            "Project", project_labels, index=0, key="_ntd_proj"
-        )
+        selected_label = st.selectbox("Project", project_labels, index=0, key="_ntd_proj")
         selected_project_uid = project_uids[project_labels.index(selected_label)]
 
     sched_cols = st.columns(2)
     with sched_cols[0]:
         st.caption("Schedule on calendar")
         scheduled_start = st.datetime_input(
-            "scheduled_start", key="_ntd_sched", value=None,
+            "scheduled_start",
+            key="_ntd_sched",
+            value=None,
             label_visibility="collapsed",
         )
         scheduled_duration = st.number_input(
             "Duration (min)",
-            min_value=5, max_value=480, value=30,
+            min_value=5,
+            max_value=480,
+            value=30,
             key="_ntd_dur",
         )
     with sched_cols[1]:
         st.caption("Hard deadline")
         hard_deadline_date: date | None = st.date_input(
-            "hard_deadline", key="_ntd_dl", value=None,
-            label_visibility="collapsed", format="YYYY-MM-DD",
+            "hard_deadline",
+            key="_ntd_dl",
+            value=None,
+            label_visibility="collapsed",
+            format="YYYY-MM-DD",
         )
         st.caption("Assigned")
         assigned_date = st.date_input(
-            "assigned_date", key="_ntd_assigned", value=None,
-            label_visibility="collapsed", format="YYYY-MM-DD",
+            "assigned_date",
+            key="_ntd_assigned",
+            value=None,
+            label_visibility="collapsed",
+            format="YYYY-MM-DD",
         )
 
-    priority = st.number_input(
-        "Priority", min_value=1, max_value=9, value=5, key="_ntd_prio"
-    )
+    priority = st.number_input("Priority", min_value=1, max_value=9, value=5, key="_ntd_prio")
 
     st.divider()
     action_cols = st.columns([1, 1, 6])
@@ -129,9 +137,7 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
 
         # Build UTC datetimes from local-naive streamlit widgets.
         scheduled_start_utc = to_utc(scheduled_start) if scheduled_start else None
-        hard_deadline_dt = (
-            datetime.combine(hard_deadline_date, time.min) if hard_deadline_date else None
-        )
+        hard_deadline_dt = datetime.combine(hard_deadline_date, time.min) if hard_deadline_date else None
         hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
 
         facade.caldav.create_task(
@@ -140,9 +146,7 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
                 description=description or None,
                 project_id=selected_project_uid,
                 scheduled_start=scheduled_start_utc,
-                scheduled_duration=(
-                    scheduled_duration if scheduled_start_utc is not None else None
-                ),
+                scheduled_duration=(scheduled_duration if scheduled_start_utc is not None else None),
                 hard_deadline=hard_deadline_utc,
                 assigned_date=assigned_date,
                 priority=priority,
@@ -168,20 +172,16 @@ def task_edit_dialog(uid: str) -> None:
     project_options = [(p.uid, p.name) for p in projects]
     project_labels = ["(none)"] + [name for _, name in project_options]
     project_uids: list[str | None] = [None] + [uid for _, uid in project_options]
-    cur_idx = (
-        project_uids.index(task.project_id)
-        if task.project_id in project_uids
-        else 0
-    )
+    cur_idx = project_uids.index(task.project_id) if task.project_id in project_uids else 0
 
     title = st.text_input("Title", value=task.title, key=f"{kp}_title")
     description = st.text_area(
-        "Description", value=task.description or "", key=f"{kp}_desc",
+        "Description",
+        value=task.description or "",
+        key=f"{kp}_desc",
         height=100,
     )
-    project_label = st.selectbox(
-        "Project", project_labels, key=f"{kp}_proj", index=cur_idx
-    )
+    project_label = st.selectbox("Project", project_labels, key=f"{kp}_proj", index=cur_idx)
     project_uid = project_uids[project_labels.index(project_label)]
     from genesis.entities import TaskStatus
 
@@ -192,8 +192,11 @@ def task_edit_dialog(uid: str) -> None:
         key=f"{kp}_status",
     )
     priority = st.number_input(
-        "Priority", min_value=1, max_value=9,
-        value=task.priority or 5, key=f"{kp}_prio",
+        "Priority",
+        min_value=1,
+        max_value=9,
+        value=task.priority or 5,
+        key=f"{kp}_prio",
     )
 
     sched_cols = st.columns(2)
@@ -201,25 +204,20 @@ def task_edit_dialog(uid: str) -> None:
         st.caption("Schedule on calendar")
         scheduled_start_date: date | None = st.date_input(
             "scheduled_start_date",
-            value=(
-                task.scheduled_start.astimezone().date()
-                if task.scheduled_start
-                else None
-            ),
-            key=f"{kp}_sch_d", label_visibility="collapsed",
+            value=(task.scheduled_start.astimezone().date() if task.scheduled_start else None),
+            key=f"{kp}_sch_d",
+            label_visibility="collapsed",
             format="YYYY-MM-DD",
         )
         schedule_time = st.time_input(
             "schedule_time",
-            value=(
-                task.scheduled_start.astimezone().time()
-                if task.scheduled_start
-                else None
-            ),
+            value=(task.scheduled_start.astimezone().time() if task.scheduled_start else None),
             key=f"{kp}_sch_t",
         )
         scheduled_duration = st.number_input(
-            "Duration (min)", min_value=5, max_value=480,
+            "Duration (min)",
+            min_value=5,
+            max_value=480,
             value=task.scheduled_duration or 30,
             key=f"{kp}_dur",
         )
@@ -227,19 +225,17 @@ def task_edit_dialog(uid: str) -> None:
         st.caption("Hard deadline")
         hard_deadline_date: date | None = st.date_input(
             "hard_deadline",
-            value=(
-                task.hard_deadline.astimezone().date()
-                if task.hard_deadline
-                else None
-            ),
-            key=f"{kp}_dl", label_visibility="collapsed",
+            value=(task.hard_deadline.astimezone().date() if task.hard_deadline else None),
+            key=f"{kp}_dl",
+            label_visibility="collapsed",
             format="YYYY-MM-DD",
         )
         st.caption("Assigned")
         assigned_date = st.date_input(
             "assigned_date",
             value=task.assigned_date,
-            key=f"{kp}_assigned", label_visibility="collapsed",
+            key=f"{kp}_assigned",
+            label_visibility="collapsed",
             format="YYYY-MM-DD",
         )
 
@@ -254,14 +250,8 @@ def task_edit_dialog(uid: str) -> None:
 
         new_status = TaskStatus(status_label)
         # Build UTC datetimes from local-naive streamlit widgets.
-        combined_scheduled_utc = (
-            to_utc(combined_scheduled) if combined_scheduled else None
-        )
-        hard_deadline_dt = (
-            datetime.combine(hard_deadline_date, time.min)
-            if hard_deadline_date
-            else None
-        )
+        combined_scheduled_utc = to_utc(combined_scheduled) if combined_scheduled else None
+        hard_deadline_dt = datetime.combine(hard_deadline_date, time.min) if hard_deadline_date else None
         hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
 
         update_kwargs: dict = {
@@ -308,9 +298,7 @@ def project_create_dialog() -> None:
             return
         from genesis.entities import ProjectCreate
 
-        facade.caldav.create_project(
-            ProjectCreate(name=name, description=description or None)
-        )
+        facade.caldav.create_project(ProjectCreate(name=name, description=description or None))
         st.toast(f"Created project: {name}")
         st.rerun()
     if cols[1].button("Cancel", key="_cpd_cancel"):
@@ -330,9 +318,7 @@ def project_edit_dialog(uid: str) -> None:
 
     kp = _form_key("epd", uid)
     name = st.text_input("Name", value=project.name, key=f"{kp}_name")
-    description = st.text_area(
-        "Description", value=project.description or "", key=f"{kp}_desc", height=160
-    )
+    description = st.text_area("Description", value=project.description or "", key=f"{kp}_desc", height=160)
     from genesis.entities import ProjectStatus
 
     status_label = st.selectbox(
@@ -341,22 +327,10 @@ def project_edit_dialog(uid: str) -> None:
         index=[s.value for s in ProjectStatus].index(project.status.value),
         key=f"{kp}_status",
     )
-    has_start = st.checkbox(
-        "Set start date", value=project.start_date is not None, key=f"{kp}_has_s"
-    )
-    start_date = (
-        st.date_input("Start", value=project.start_date, key=f"{kp}_sd")
-        if has_start
-        else None
-    )
-    has_deadline = st.checkbox(
-        "Set deadline", value=project.deadline is not None, key=f"{kp}_has_d"
-    )
-    deadline = (
-        st.date_input("Deadline", value=project.deadline, key=f"{kp}_dd")
-        if has_deadline
-        else None
-    )
+    has_start = st.checkbox("Set start date", value=project.start_date is not None, key=f"{kp}_has_s")
+    start_date = st.date_input("Start", value=project.start_date, key=f"{kp}_sd") if has_start else None
+    has_deadline = st.checkbox("Set deadline", value=project.deadline is not None, key=f"{kp}_has_d")
+    deadline = st.date_input("Deadline", value=project.deadline, key=f"{kp}_dd") if has_deadline else None
 
     cols = st.columns([1, 1, 1])
     if cols[0].button("Save", type="primary", key=f"{kp}_save"):

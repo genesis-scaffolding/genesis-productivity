@@ -95,10 +95,7 @@ class MockCalDAVFacade:
         if search:
             needle = search.lower()
             projects = [
-                p
-                for p in projects
-                if needle in p.name.lower()
-                or (p.description and needle in p.description.lower())
+                p for p in projects if needle in p.name.lower() or (p.description and needle in p.description.lower())
             ]
         if sort_by:
             for key in reversed(sort_by):
@@ -181,10 +178,7 @@ class MockCalDAVFacade:
         if search:
             needle = search.lower()
             tasks = [
-                t
-                for t in tasks
-                if needle in t.title.lower()
-                or (t.description and needle in t.description.lower())
+                t for t in tasks if needle in t.title.lower() or (t.description and needle in t.description.lower())
             ]
         if sort_by:
             for key in reversed(sort_by):
@@ -210,17 +204,9 @@ class MockCalDAVFacade:
         if clear_project:
             task.project_id = None
 
-        if (
-            "status" in update_data
-            and task.status == TaskStatus.COMPLETED
-            and task.completed_at is None
-        ):
+        if "status" in update_data and task.status == TaskStatus.COMPLETED and task.completed_at is None:
             task.completed_at = self._now()
-        elif (
-            "status" in update_data
-            and task.status != TaskStatus.COMPLETED
-            and task.completed_at is not None
-        ):
+        elif "status" in update_data and task.status != TaskStatus.COMPLETED and task.completed_at is not None:
             task.completed_at = None
 
         task.modified = self._now()
@@ -278,10 +264,7 @@ class MockCalDAVFacade:
         if search:
             needle = search.lower()
             events = [
-                e
-                for e in events
-                if needle in e.summary.lower()
-                or (e.description and needle in e.description.lower())
+                e for e in events if needle in e.summary.lower() or (e.description and needle in e.description.lower())
             ]
         if sort_by:
             for key in reversed(sort_by):
@@ -297,8 +280,7 @@ class MockCalDAVFacade:
             return None
         if event.task_id is not None:
             raise ValueError(
-                f"Event {uid} is a shadow event owned by task {event.task_id}; "
-                "update via update_task instead"
+                f"Event {uid} is a shadow event owned by task {event.task_id}; update via update_task instead"
             )
         update_data = data.model_dump(exclude_unset=True)
         for key, value in update_data.items():
@@ -312,10 +294,7 @@ class MockCalDAVFacade:
         if event is None:
             return False
         if event.task_id is not None:
-            raise ValueError(
-                f"Event {uid} is a shadow event; clear scheduled_start on "
-                "its source task to remove it"
-            )
+            raise ValueError(f"Event {uid} is a shadow event; clear scheduled_start on its source task to remove it")
         del self._events[uid]
         return True
 
@@ -377,9 +356,7 @@ class MockCalDAVFacade:
             entries.sort(key=lambda e: (e.start, e.uid), reverse=True)
         return entries
 
-    def update_time_log_entry(
-        self, uid: str, data: TimeLogEntryUpdate
-    ) -> TimeLogEntry | None:
+    def update_time_log_entry(self, uid: str, data: TimeLogEntryUpdate) -> TimeLogEntry | None:
         entry = self._time_log.get(uid)
         if entry is None:
             return None
@@ -425,11 +402,7 @@ class MockCalDAVFacade:
             self._events.pop(task.uid, None)
             return
 
-        duration = (
-            task.scheduled_duration
-            if task.scheduled_duration is not None
-            else DEFAULT_SHADOW_DURATION_MINUTES
-        )
+        duration = task.scheduled_duration if task.scheduled_duration is not None else DEFAULT_SHADOW_DURATION_MINUTES
         self._events[task.uid] = Event(
             uid=task.uid,
             summary=task.title,

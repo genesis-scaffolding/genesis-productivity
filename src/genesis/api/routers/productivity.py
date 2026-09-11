@@ -68,9 +68,15 @@ router = APIRouter(prefix="/productivity", tags=["productivity"])
 _PROJECT_FOOTER_RE = re.compile(r"^> Project: (.+)$", re.MULTILINE)
 
 
-def _facade() -> Facade:
-    """Build a per-request :class:`Facade` for the default user."""
-    config_path = resolve_config_path("default")
+def _facade(subject: str) -> Facade:
+    """Build a per-request :class:`Facade` for ``subject``.
+
+    The subject is the username embedded in the JWT. Each user's
+    Facade points at their own config + data directory, so a
+    valid token for ``alice`` reads ``alice``'s data, never
+    anyone else's.
+    """
+    config_path = resolve_config_path(subject)
     return Facade(config_path)
 
 
@@ -205,7 +211,7 @@ def _journal_to_wire(entry: Entry, project_names: dict[str, str]) -> JournalEntr
 
 @router.get("/projects", response_model=ProjectListOut)
 def list_projects(
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
     search_query: Annotated[str | None, Query()] = None,
     project_status: Annotated[Status | None, Query(alias="status")] = None,
     sort_by: Annotated[list[str] | None, Query()] = None,
@@ -213,11 +219,9 @@ def list_projects(
     offset: Annotated[int | None, Query()] = None,
     limit: Annotated[int | None, Query()] = None,
 ) -> ProjectListOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
-        entity_status = (
-            wire_to_project_status(project_status) if project_status is not None else None
-        )
+        entity_status = wire_to_project_status(project_status) if project_status is not None else None
         all_projects = facade.caldav.list_projects(
             status=entity_status,
             search=search_query,
@@ -239,9 +243,9 @@ def list_projects(
 @router.post("/projects", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 def create_project(
     body: ProjectCreateIn,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> ProjectOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         project = facade.caldav.create_project(
             ProjectCreate(
@@ -265,9 +269,9 @@ def create_project(
 @router.get("/projects/{uid}", response_model=ProjectOut)
 def read_project(
     uid: str,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> ProjectOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         project = facade.caldav.get_project(uid)
         if project is None:
@@ -281,9 +285,9 @@ def read_project(
 def update_project(
     uid: str,
     body: ProjectUpdateIn,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> ProjectOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         project = facade.caldav.get_project(uid)
         if project is None:
@@ -311,9 +315,9 @@ def update_project(
 @router.delete("/projects/{uid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(
     uid: str,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> None:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         if not facade.caldav.delete_project(uid):
             raise HTTPException(status_code=404, detail="Project not found")
@@ -338,7 +342,7 @@ def _task_sort_field(sort_by: list[str] | None) -> list[str] | None:
 
 @router.get("/tasks", response_model=TaskListOut)
 def list_tasks(
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
     task_status: Annotated[Status | None, Query(alias="status")] = None,
     search_query: Annotated[str | None, Query()] = None,
     project_id: Annotated[str | None, Query()] = None,
@@ -356,21 +360,13 @@ def list_tasks(
     offset: Annotated[int | None, Query()] = None,
     limit: Annotated[int | None, Query()] = None,
 ) -> TaskListOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         all_tasks = facade.caldav.list_tasks(
             project_id=project_id,
             status=wire_to_task_status(task_status) if task_status is not None else None,
-            start=_to_caldav_datetime(
-                assigned_date_start
-                or hard_deadline_start
-                or scheduled_start_start
-            ),
-            end=_to_caldav_datetime(
-                assigned_date_end
-                or hard_deadline_end
-                or scheduled_start_end
-            ),
+            start=_to_caldav_datetime(assigned_date_start or hard_deadline_start or scheduled_start_start),
+            end=_to_caldav_datetime(assigned_date_end or hard_deadline_end or scheduled_start_end),
             sort_by=_task_sort_field(sort_by),
             sort_order=order,
         )
@@ -385,8 +381,7 @@ def list_tasks(
             all_tasks = [
                 t
                 for t in all_tasks
-                if needle in t.title.lower()
-                or (t.description is not None and needle in t.description.lower())
+                if needle in t.title.lower() or (t.description is not None and needle in t.description.lower())
             ]
 
         # Date filters that span multiple fields can't be expressed by
@@ -449,9 +444,9 @@ def list_tasks(
 @router.post("/tasks", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
 def create_task(
     body: TaskCreateIn,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> TaskOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         data = TaskCreate(
             title=body.title,
@@ -477,9 +472,9 @@ def create_task(
 @router.get("/tasks/{uid}", response_model=TaskOut)
 def read_task(
     uid: str,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> TaskOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         task = facade.caldav.get_task(uid)
         if task is None:
@@ -493,9 +488,9 @@ def read_task(
 def update_task(
     uid: str,
     body: TaskUpdateIn,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> TaskOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         existing = facade.caldav.get_task(uid)
         if existing is None:
@@ -537,9 +532,9 @@ def update_task(
 @router.delete("/tasks/{uid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_task(
     uid: str,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> None:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         if not facade.caldav.delete_task(uid):
             raise HTTPException(status_code=404, detail="Task not found")
@@ -554,7 +549,7 @@ def delete_task(
 
 @router.get("/journals", response_model=JournalListOut)
 def list_journals(
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
     entry_type: Annotated[str | None, Query(alias="type")] = None,
     project_id: Annotated[str | None, Query()] = None,
     search_query: Annotated[str | None, Query()] = None,
@@ -565,7 +560,7 @@ def list_journals(
     offset: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query()] = 50,
 ) -> JournalListOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         project_names = _project_name_lookup(facade)
         all_entries = facade.journal.list_entries()
@@ -574,35 +569,24 @@ def list_journals(
             try:
                 wanted = EntryType(entry_type)
             except ValueError as e:
-                raise HTTPException(
-                    status_code=400, detail=f"unknown entry_type: {entry_type}"
-                ) from e
+                raise HTTPException(status_code=400, detail=f"unknown entry_type: {entry_type}") from e
             all_entries = [e for e in all_entries if e.type == wanted]
 
         if reference_date_start:
             start = datetime.fromisoformat(reference_date_start).date()
             all_entries = [
-                e
-                for e in all_entries
-                if (e.reference_date if e.reference_date is not None else e.date)
-                >= start
+                e for e in all_entries if (e.reference_date if e.reference_date is not None else e.date) >= start
             ]
         if reference_date_end:
             end = datetime.fromisoformat(reference_date_end).date()
             all_entries = [
-                e
-                for e in all_entries
-                if (e.reference_date if e.reference_date is not None else e.date)
-                <= end
+                e for e in all_entries if (e.reference_date if e.reference_date is not None else e.date) <= end
             ]
 
         if search_query:
             needle = search_query.lower()
             all_entries = [
-                e
-                for e in all_entries
-                if (e.title and needle in e.title.lower())
-                or needle in e.content.lower()
+                e for e in all_entries if (e.title and needle in e.title.lower()) or needle in e.content.lower()
             ]
 
         if project_id:
@@ -630,9 +614,9 @@ def list_journals(
 @router.post("/journals", response_model=JournalEntryOut, status_code=status.HTTP_201_CREATED)
 def create_journal(
     body: JournalEntryCreateIn,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> JournalEntryOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         project_names = _project_name_lookup(facade)
         content = body.content
@@ -667,9 +651,9 @@ def create_journal(
 @router.get("/journals/{uid}", response_model=JournalEntryOut)
 def read_journal(
     uid: str,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> JournalEntryOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         entry = facade.journal.get_entry(uid)
         if entry is None:
@@ -683,9 +667,9 @@ def read_journal(
 def update_journal(
     uid: str,
     body: JournalEntryUpdateIn,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> JournalEntryOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         existing = facade.journal.get_entry(uid)
         if existing is None:
@@ -736,9 +720,9 @@ def update_journal(
 @router.delete("/journals/{uid}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_journal(
     uid: str,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> None:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         if not facade.journal.delete_entry(uid):
             raise HTTPException(status_code=404, detail="Journal entry not found")
@@ -757,7 +741,7 @@ def _time_log_to_wire(entry) -> TimeLogEntryOut:
 
 @router.get("/time_log", response_model=TimeLogListOut)
 def list_time_log(
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
     task_id: Annotated[str | None, Query()] = None,
     time_log_status: Annotated[Status | None, Query(alias="status")] = None,
     active_only: Annotated[bool, Query()] = False,
@@ -766,11 +750,9 @@ def list_time_log(
     offset: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query()] = 100,
 ) -> TimeLogListOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
-        entity_status = (
-            wire_to_task_status(time_log_status) if time_log_status is not None else None
-        )
+        entity_status = wire_to_task_status(time_log_status) if time_log_status is not None else None
         all_entries = facade.caldav.list_time_log(
             task_id=task_id,
             status=entity_status,
@@ -793,9 +775,9 @@ def list_time_log(
 @router.get("/time_log/{uid}", response_model=TimeLogEntryOut)
 def read_time_log(
     uid: str,
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
 ) -> TimeLogEntryOut:
-    facade = _facade()
+    facade = _facade(subject)
     try:
         entry = facade.caldav.get_time_log_entry(uid)
         if entry is None:
@@ -812,7 +794,7 @@ def read_time_log(
 
 @router.get("/statistics", response_model=StatisticsOut)
 def get_statistics(
-    _: Annotated[str, Depends(current_subject)],
+    subject: Annotated[str, Depends(current_subject)],
     period: Annotated[StatisticsPeriod, Query()] = StatisticsPeriod.THIS_WEEK,
     top_n: Annotated[int, Query(ge=1, le=100)] = 10,
     recent_limit: Annotated[int, Query(ge=1, le=200)] = 20,
@@ -826,7 +808,7 @@ def get_statistics(
     override the default 10/20 caps for the by-task and
     recent-sessions lists.
     """
-    facade = _facade()
+    facade = _facade(subject)
     try:
         completed = facade.caldav.list_time_log()
         task_ids = {e.task_id for e in completed if e.task_id is not None}

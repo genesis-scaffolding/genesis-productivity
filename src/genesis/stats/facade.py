@@ -236,9 +236,7 @@ def compute_rollup(
     for e in in_period:
         seconds_by_category[e.category] += duration_seconds(e)
     total_seconds = sum(seconds_by_category.values())
-    minutes_by_category = {
-        cat: round(secs / 60.0, 1) for cat, secs in seconds_by_category.items()
-    }
+    minutes_by_category = {cat: round(secs / 60.0, 1) for cat, secs in seconds_by_category.items()}
     total_minutes = round(total_seconds / 60.0, 1)
     count = len(in_period)
     avg_minutes = round(total_minutes / count, 1) if count else 0.0
@@ -251,9 +249,7 @@ def compute_rollup(
         minutes_by_category=minutes_by_category,
     )
 
-    by_day_minutes: dict[date, dict[TimeLogCategory, float]] = defaultdict(
-        lambda: dict.fromkeys(TimeLogCategory, 0.0)
-    )
+    by_day_minutes: dict[date, dict[TimeLogCategory, float]] = defaultdict(lambda: dict.fromkeys(TimeLogCategory, 0.0))
     for e in in_period:
         local_day = to_local(e.start).date()
         by_day_minutes[local_day][e.category] += duration_seconds(e) / 60.0

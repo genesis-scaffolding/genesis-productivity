@@ -11,9 +11,11 @@ import typer
 from ..configs import CONFIG_PATH_ENV, DEFAULT_USER, resolve_config_path
 from ..core.facade import Facade
 from .server import server_app
+from .user import user_app
 
 app = typer.Typer(help="CLI for genesis productivity system.")
 app.add_typer(server_app, name="server")
+app.add_typer(user_app, name="user")
 
 _user_option = typer.Option(
     DEFAULT_USER,
@@ -76,10 +78,19 @@ def main_ui() -> int:
 
     Starts Streamlit for the default user. Honors ``GENESIS_UI_PORT``
     (default 3000) and ``GENESIS_UI_HOST`` (default 0.0.0.0).
-    """
-    import subprocess
-    import sys
 
+    Implementation note: this entry point ``execvp``s into ``streamlit
+    run`` rather than spawning it as a subprocess. The previous
+    ``subprocess.call`` approach added a Python wrapper layer between
+    the shell and streamlit; when the shell sent SIGINT to its
+    process group (``kill 0``), the wrapper died but the streamlit
+    process was reparented to PID 1 and stopped responding to the
+    signal, leaving bash's ``wait`` blocked. Replacing the wrapper
+    with streamlit keeps the process tree flat, so signals reach
+    streamlit directly and Radicale (started by the streamlit
+    worker) gets torn down via the signal handler in
+    :mod:`genesis.ui._state`.
+    """
     from ..configs import CONFIG_PATH_ENV, DEFAULT_USER, resolve_config_path
 
     config_path = resolve_config_path(DEFAULT_USER)
@@ -88,21 +99,26 @@ def main_ui() -> int:
     app_path = Path(__file__).resolve().parent.parent / "ui" / "app.py"
     port = os.environ.get("GENESIS_UI_PORT", "3000")
     host = os.environ.get("GENESIS_UI_HOST", "0.0.0.0")
-    return subprocess.call(
-        [
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            str(app_path),
-            "--server.address",
-            host,
-            "--server.port",
-            port,
-            "--server.headless",
-            "true",
-        ]
-    )
+
+    argv = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.address",
+        host,
+        "--server.port",
+        port,
+        "--server.headless",
+        "true",
+    ]
+    # ``execvp`` replaces this Python process with streamlit. PID
+    # stays the same, so the shell's process-group signal still
+    # reaches streamlit directly.
+    os.execvp(sys.executable, argv)
+    # Unreachable: execvp only returns on failure.
+    return 1
 
 
 if __name__ == "__main__":

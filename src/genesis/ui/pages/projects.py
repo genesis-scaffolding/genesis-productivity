@@ -76,17 +76,11 @@ def _render_list() -> None:
                             st.caption(f"Deadline: {project.deadline}")
                         btn_cols = st.columns(2)
                         with btn_cols[0]:
-                            if st.button(
-                                "Open",
-                                key=f"proj_open_{project.uid}"
-                            ):
+                            if st.button("Open", key=f"proj_open_{project.uid}"):
                                 st.query_params["project"] = project.uid
                                 st.rerun()
                         with btn_cols[1]:
-                            if st.button(
-                                "Delete",
-                                key=f"proj_del_{project.uid}"
-                            ):
+                            if st.button("Delete", key=f"proj_del_{project.uid}"):
                                 delete_confirm_dialog(
                                     f"project '{project.name}'",
                                     lambda uid=project.uid: caldav.delete_project(uid),
@@ -172,11 +166,11 @@ def _render_detail(uid: str) -> None:
     if st.button("+ Add Task", key=f"pd_add_task_{uid}"):
         task_create_dialog(project_id=uid)
 
-    sorted_tasks = sorted(
-        tasks, key=lambda t: (t.status.value, -(t.priority or 5))
-    )
+    sorted_tasks = sorted(tasks, key=lambda t: (t.status.value, -(t.priority or 5)))
     render_tasks_table(
-        sorted_tasks, caldav=caldav, key=f"project_tasks_{uid}",
+        sorted_tasks,
+        caldav=caldav,
+        key=f"project_tasks_{uid}",
         show_project_column=False,
     )
 

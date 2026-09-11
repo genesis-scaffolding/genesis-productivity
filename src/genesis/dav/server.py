@@ -1,6 +1,11 @@
 """Radicale server management.
 
-Handles starting, stopping, and checking the status of the Radicale server.
+Handles starting, stopping, and checking the status of the
+single shared Radicale server that serves every user (ADR-019,
+option A). The server reads its config, htpasswd, and rights
+files from one shared ``radicale_root`` directory; per-user
+data lives under ``<radicale_root>/collections/collection-root/<user>/``
+and is namespaced by the rights file.
 """
 
 from __future__ import annotations
@@ -70,9 +75,7 @@ def find_radicale_binary() -> Path:
     if found:
         return Path(found)
 
-    raise FileNotFoundError(
-        "Radicale executable not found. Install with: pip install radicale"
-    )
+    raise FileNotFoundError("Radicale executable not found. Install with: pip install radicale")
 
 
 class ServerManager:
@@ -93,7 +96,9 @@ class ServerManager:
 
         Args:
             dav_config: DAV configuration with host, port, username, password.
-            data_path: Root path for Radicale data storage.
+            data_path: Shared Radicale root. One Radicale process serves every
+                user; the htpasswd, rights file, and per-user collection
+                trees all live under this directory.
             startup_timeout: Maximum seconds to wait for server to be ready.
             log_buffer_size: Maximum number of recent log lines kept in memory for diagnostics.
         """
@@ -123,17 +128,27 @@ class ServerManager:
         return is_server_running(self._config.host, self._config.port)
 
     def _write_config(self) -> None:
-        """Write Radicale config file with authentication settings."""
+        """Write Radicale config file with authentication settings.
+
+        The htpasswd is owned by :mod:`genesis.users.htpasswd` and
+        is NOT created here — a fresh shared radicale_root starts
+        with an empty users file, which Radicale treats as "no
+        accounts". The rights file IS regenerated here from the
+        current htpasswd contents so per-user restrictions are
+        active the moment Radicale starts.
+        """
         config_path = self._data_path / "config"
         htpasswd_path = self._data_path / "users"
         collections_path = self._data_path / "collections"
+        rights_path = self._data_path / "rights"
 
-        # Create initial htpasswd file with the configured user
-        # ensure_user() will add more users later
-        with open(htpasswd_path, "w") as f:
-            f.write(f"{self._config.username}:{self._config.password}\n")
+        # Ensure the htpasswd file exists (it is created empty if
+        # absent) so the config below points at a real file even
+        # on a fresh radicale_root. ``RadicaleHtpasswd`` is the
+        # only writer; this just materialises the path.
+        htpasswd_path.parent.mkdir(parents=True, exist_ok=True)
+        htpasswd_path.touch(exist_ok=True)
 
-        # Write config file
         config_content = f"""[server]
 hosts = {self._config.host}:{self._config.port}
 
@@ -148,48 +163,33 @@ htpasswd_encryption = plain
 
 [rights]
 type = from_file
-file = {str(self._data_path / "rights")}
-"""
-
-        # Write rights file allowing all access
-        rights_content = """[base]
-user = .+
-collection = .*
-permissions = RrWw
+file = {str(rights_path)}
 """
 
         with open(config_path, "w") as f:
             f.write(config_content)
 
-        with open(self._data_path / "rights", "w") as f:
-            f.write(rights_content)
+        # Regenerate the rights file from the current htpasswd
+        # contents. ``write_radicale_rights_from_htpasswd`` reads
+        # only the htpasswd so the rights file can never disagree
+        # with which users Radicale knows about.
+        from genesis.users.rights import write_radicale_rights_from_htpasswd
+
+        write_radicale_rights_from_htpasswd(self._data_path)
 
     def ensure_user(self, username: str) -> None:
-        """Ensure user exists in Radicale htpasswd file.
+        """Ensure ``username`` has an htpasswd entry.
 
-        If the user already exists, does nothing.
-        If the user does not exist, adds them with the default password.
-
-        Args:
-            username: The username to ensure exists.
+        Thin wrapper that delegates to
+        :class:`genesis.users.htpasswd.RadicaleHtpasswd`. Kept on
+        ``ServerManager`` so existing callers (notably
+        :class:`genesis.core.facade.Facade`) continue to work
+        unchanged after the move to a shared Radicale.
         """
-        htpasswd_path = self._data_path / "users"
+        from genesis.users.htpasswd import RadicaleHtpasswd
 
-        # Read existing users
-        existing_users: set[str] = set()
-        if htpasswd_path.exists():
-            with open(htpasswd_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if ":" in line:
-                        existing_users.add(line.split(":")[0])
-
-        # Add user if not present
-        if username not in existing_users:
-            # Ensure parent directory exists
-            htpasswd_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(htpasswd_path, "a") as f:
-                f.write(f"{username}:{self._config.password}\n")
+        htpasswd = RadicaleHtpasswd(path=self._data_path / "users")
+        htpasswd.add(username, self._config.password)
 
     def start(self) -> None:
         """Start the server if not already running.
@@ -207,7 +207,15 @@ permissions = RrWw
             # Ensure data directory exists
             self._data_path.mkdir(parents=True, exist_ok=True)
 
-            # Write config files (includes initial htpasswd with default user)
+            # Ensure the configured user has an htpasswd entry
+            # BEFORE we write the Radicale config. The rights file
+            # is regenerated from the htpasswd in ``_write_config``,
+            # so this guarantees the per-user rights section exists
+            # at the moment Radicale reads it on startup.
+            self.ensure_user(self._config.username)
+
+            # Write config files (now the htpasswd already has the
+            # configured user, so the rights file is correct).
             self._write_config()
 
             # Find radicale executable
@@ -226,7 +234,8 @@ permissions = RrWw
                 [
                     sys.executable,
                     str(radicale),
-                    "-C", str(self._data_path / "config"),
+                    "-C",
+                    str(self._data_path / "config"),
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -239,9 +248,6 @@ permissions = RrWw
 
             # Wait for server to be ready
             self._wait_for_ready()
-
-            # Ensure the configured user exists in htpasswd
-            self.ensure_user(self._config.username)
         except BaseException:
             # Any failure path (TimeoutError, RuntimeError, KeyboardInterrupt, etc.)
             # must terminate the subprocess. Otherwise a half-started radicale leaks
@@ -345,13 +351,9 @@ permissions = RrWw
         # If the process exited, surface its return code.
         if self._process is not None and self._process.poll() is not None:
             rc = self._process.returncode
-            raise RuntimeError(
-                f"Radicale failed to start (exit code {rc}).{tail}"
-            )
+            raise RuntimeError(f"Radicale failed to start (exit code {rc}).{tail}")
 
-        raise TimeoutError(
-            f"Server did not become ready within {self._startup_timeout} seconds.{tail}"
-        )
+        raise TimeoutError(f"Server did not become ready within {self._startup_timeout} seconds.{tail}")
 
     def stop(self) -> None:
         """Stop the server if it was started by this manager.

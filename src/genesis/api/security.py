@@ -1,11 +1,16 @@
-"""JWT and password helpers for the agent API.
+"""JWT helpers for the agent API.
 
-Single-account, single-secret design (see ADR-015). Tokens are HS256
-JWTs signed with a per-user secret persisted to
-``~/.local/share/genesis/default/api_secret.key``.
+Shared signing key (ADR-019). One Radicale serves every user and
+one JWT signing key signs every token. Rotating the key
+(deleting ``<XDG_DATA_HOME>/genesis/api_secret.key``) invalidates
+every user's tokens at once, forcing a coordinated re-login.
 
-We use ``hmac`` and ``hashlib`` from the standard library instead of
-PyJWT — HS256 only needs these primitives.
+Tokens are HS256 JWTs signed with a secret persisted to
+``~/.local/share/genesis/api_secret.key`` (mode 0600, generated
+on first call).
+
+We use ``hmac`` and ``hashlib`` from the standard library instead
+of PyJWT — HS256 only needs these primitives.
 """
 
 from __future__ import annotations
@@ -18,14 +23,26 @@ import os
 import time
 from pathlib import Path
 
-DEFAULT_API_PASSWORD_ENV = "GENESIS_API_PASSWORD"
-DEFAULT_API_PASSWORD = "genesis-local"
-DEFAULT_USERNAME = "default"
+from ..configs import DEFAULT_APP_NAME, DEFAULT_DATA_HOME
+from ..users import verify_credentials
 
 ACCESS_TOKEN_TTL_SECONDS = 10 * 60 * 60  # 10 hours
 REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
 
-SECRET_PATH = Path.home() / ".local" / "share" / "genesis" / "default" / "api_secret.key"
+
+def secret_path_for(username: str) -> Path:
+    """Return the path to the (single, shared) JWT signing secret.
+
+    The ``username`` argument is kept for backward compatibility
+    with call sites that pass the JWT subject; the value is
+    ignored. The shared secret lives at
+    ``<XDG_DATA_HOME>/<app_name>/api_secret.key`` and signing a
+    token with it means "this token is valid for whichever user
+    is in the ``sub`` claim". Rotating the file invalidates every
+    outstanding token at once.
+    """
+    data_home = Path(os.environ.get("XDG_DATA_HOME", str(DEFAULT_DATA_HOME)))
+    return data_home / DEFAULT_APP_NAME / "api_secret.key"
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -56,6 +73,18 @@ def _load_or_create_secret(path: Path) -> bytes:
     return secret
 
 
+def _load_secret(path: Path) -> bytes | None:
+    """Return the per-user secret key, or ``None`` if it does not exist.
+
+    Used on the decode path so a forged token claiming a
+    non-existent subject cannot trigger creation of an empty secret
+    file.
+    """
+    if not path.exists():
+        return None
+    return path.read_bytes()
+
+
 def _sign(secret: bytes, signing_input: bytes) -> bytes:
     """Return HMAC-SHA256 digest for the JWT signing input."""
     return hmac.new(secret, signing_input, hashlib.sha256).digest()
@@ -66,14 +95,9 @@ class InvalidTokenError(Exception):
     the wrong type for the requested operation."""
 
 
-def _expected_password() -> str:
-    return os.environ.get(DEFAULT_API_PASSWORD_ENV, DEFAULT_API_PASSWORD)
-
-
-def verify_password(plain: str) -> bool:
-    """Constant-time compare against the configured password."""
-    expected = _expected_password()
-    return hmac.compare_digest(plain.encode("utf-8"), expected.encode("utf-8"))
+def verify_user_credentials(username: str, password: str) -> bool:
+    """Thin wrapper that keeps the API module's call sites readable."""
+    return verify_credentials(username, password)
 
 
 def _make_token(
@@ -82,7 +106,7 @@ def _make_token(
     token_type: str,
     expires_in: int,
 ) -> str:
-    secret = _load_or_create_secret(SECRET_PATH)
+    secret = _load_or_create_secret(secret_path_for(subject))
     header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
     payload = {
@@ -140,7 +164,13 @@ def decode_token(token: str, *, expected_type: str) -> str:
     if header.get("alg") != "HS256":
         raise InvalidTokenError(f"unsupported alg: {header.get('alg')}")
 
-    secret = _load_or_create_secret(SECRET_PATH)
+    sub = payload.get("sub")
+    if not isinstance(sub, str):
+        raise InvalidTokenError("missing or invalid sub")
+
+    secret = _load_secret(secret_path_for(sub))
+    if secret is None:
+        raise InvalidTokenError("no signing key for subject")
     expected_sig = _sign(secret, signing_input)
     if not hmac.compare_digest(sig, expected_sig):
         raise InvalidTokenError("bad signature")
@@ -152,7 +182,4 @@ def decode_token(token: str, *, expected_type: str) -> str:
     if not isinstance(exp, int) or exp <= int(time.time()):
         raise InvalidTokenError("token expired")
 
-    sub = payload.get("sub")
-    if not isinstance(sub, str):
-        raise InvalidTokenError("missing or invalid sub")
     return sub

@@ -35,7 +35,5 @@ class CategoryFacade:
         fall back to ``TimeLogCategory.PERSONAL`` on ``None``.
         """
         entries = self._caldav.list_time_log()
-        history: list[tuple[str, TimeLogCategory]] = [
-            (e.label, e.category) for e in entries
-        ]
+        history: list[tuple[str, TimeLogCategory]] = [(e.label, e.category) for e in entries]
         return infer_category(label, task_id, history)

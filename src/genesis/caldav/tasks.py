@@ -157,6 +157,25 @@ def get_task(facade: CalDAVFacade, uid: str) -> Task | None:
         return None
 
 
+def _in_completed_window(
+    task: Task,
+    start: datetime | None,
+    end: datetime | None,
+) -> bool:
+    """Return True iff task.completed_at is set and falls in [start, end).
+
+    Half-open interval matches the existing facade convention.
+    """
+    completed = task.completed_at
+    if completed is None:
+        return False
+    if start is not None and completed < start:
+        return False
+    if end is not None and completed >= end:
+        return False
+    return True
+
+
 def list_tasks(
     facade: CalDAVFacade,
     project_id: str | None = None,
@@ -164,6 +183,8 @@ def list_tasks(
     search: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
+    completed_at_start: datetime | None = None,
+    completed_at_end: datetime | None = None,
     sort_by: list[str] | None = None,
     sort_order: str = "asc",
 ) -> list[Task]:
@@ -180,11 +201,27 @@ def list_tasks(
           strict DTSTART-only matching should additionally client-side
           filter by ``task.scheduled_start in [start, end)``.
 
+    Filters applied client-side:
+        - completed_at_start/completed_at_end -> tasks whose
+          ``completed_at`` is set and falls in
+          ``[completed_at_start, completed_at_end)``. RFC 4791 §9.9
+          does not include the COMPLETED property in the time-range
+          match, so this filter cannot be pushed server-side. When
+          either bound is set, ``status=COMPLETED`` is also pushed to
+          the REPORT to bound the candidate set, regardless of the
+          caller's ``status`` argument (only COMPLETED tasks have a
+          non-null ``completed_at``).
+
     DESCRIPTION substring search is not exposed; see list_events.
 
     ``include_completed=True`` is set because the previous full-collection
     walk returned both active and completed tasks.
     """
+    completed_window = (
+        completed_at_start is not None or completed_at_end is not None
+    )
+    effective_status = TaskStatus.COMPLETED if completed_window else status
+
     cal = _get_tasks_calendar(facade)
     searcher = cal.searcher(
         todo=True,
@@ -194,8 +231,8 @@ def list_tasks(
     )
     if project_id is not None:
         searcher.add_property_filter("X-PROJECT-ID", project_id, operator="==")
-    if status is not None:
-        searcher.add_property_filter("STATUS", status.value, operator="==")
+    if effective_status is not None:
+        searcher.add_property_filter("STATUS", effective_status.value, operator="==")
     if search:
         searcher.add_property_filter("SUMMARY", search, operator="contains")
 
@@ -213,6 +250,11 @@ def list_tasks(
             tasks.append(task_from_ical(component))
         except Exception:
             continue
+
+    if completed_window:
+        tasks = [
+            t for t in tasks if _in_completed_window(t, completed_at_start, completed_at_end)
+        ]
 
     if sort_by:
         for key in reversed(sort_by):

@@ -161,6 +161,8 @@ class MockCalDAVFacade:
         search: str | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
+        completed_at_start: datetime | None = None,
+        completed_at_end: datetime | None = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ) -> list[Task]:
@@ -170,11 +172,21 @@ class MockCalDAVFacade:
         # ``datetime | None`` here enforces the contract so callers
         # passing a raw ``str`` get a static-type error from pyright
         # (and a TypeError at runtime if the type is somehow bypassed).
+        # ``completed_at_start``/``completed_at_end`` mirror the
+        # real facade's client-side filter on ``task.completed_at``.
         tasks = list(self._tasks.values())
         if project_id is not None:
             tasks = [t for t in tasks if t.project_id == project_id]
         if status is not None:
             tasks = [t for t in tasks if t.status == status]
+        if completed_at_start is not None or completed_at_end is not None:
+            tasks = [
+                t
+                for t in tasks
+                if t.completed_at is not None
+                and (completed_at_start is None or t.completed_at >= completed_at_start)
+                and (completed_at_end is None or t.completed_at < completed_at_end)
+            ]
         if search:
             needle = search.lower()
             tasks = [

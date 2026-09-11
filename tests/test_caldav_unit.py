@@ -20,6 +20,7 @@ from genesis.entities import (
     ProjectCreate,
     ProjectStatus,
     ProjectUpdate,
+    Task,
     TaskCreate,
     TaskStatus,
     TaskUpdate,
@@ -165,6 +166,142 @@ class TestTaskFilters:
 
         results = facade.list_tasks(search="bug")
         assert len(results) == 1
+
+
+class TestListTasksCompletedAtRange:
+    """Test the completed_at_start / completed_at_end filter."""
+
+    def _complete_at(
+        self,
+        facade: MockCalDAVFacade,
+        title: str,
+        when: datetime,
+        project_id: str | None = None,
+    ) -> Task:
+        """Create a task and stamp completed_at to a fixed instant.
+
+        ``update_task`` would set ``completed_at`` to wall-clock now,
+        which is non-deterministic. We construct the Task directly
+        with the desired ``completed_at`` and stash it in the mock's
+        internal store.
+        """
+        created = facade.create_task(TaskCreate(title=title))
+        completed = Task(
+            uid=created.uid,
+            title=title,
+            status=TaskStatus.COMPLETED,
+            completed_at=when,
+            project_id=project_id,
+            created=created.created,
+            modified=created.modified,
+        )
+        facade._tasks[created.uid] = completed
+        return completed
+
+    def test_in_window(self, facade: MockCalDAVFacade) -> None:
+        """Returns tasks whose completed_at is in [start, end)."""
+        in_window = self._complete_at(
+            facade, "In", datetime(2026, 3, 15, 10, 0, tzinfo=UTC)
+        )
+        self._complete_at(
+            facade, "Out", datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+        )
+
+        results = facade.list_tasks(
+            completed_at_start=datetime(2026, 3, 1, tzinfo=UTC),
+            completed_at_end=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        uids = [t.uid for t in results]
+        assert in_window.uid in uids
+        assert len(results) == 1
+
+    def test_only_start(self, facade: MockCalDAVFacade) -> None:
+        """Only completed_at_start set: returns tasks with completed_at >= start."""
+        old = self._complete_at(
+            facade, "Old", datetime(2025, 1, 1, tzinfo=UTC)
+        )
+        recent = self._complete_at(
+            facade, "Recent", datetime(2026, 6, 1, tzinfo=UTC)
+        )
+
+        results = facade.list_tasks(
+            completed_at_start=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        uids = [t.uid for t in results]
+        assert recent.uid in uids
+        assert old.uid not in uids
+
+    def test_only_end(self, facade: MockCalDAVFacade) -> None:
+        """Only completed_at_end set: returns tasks with completed_at < end."""
+        before = self._complete_at(
+            facade, "Before", datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        after = self._complete_at(
+            facade, "After", datetime(2026, 12, 1, tzinfo=UTC)
+        )
+
+        results = facade.list_tasks(
+            completed_at_end=datetime(2026, 6, 1, tzinfo=UTC),
+        )
+        uids = [t.uid for t in results]
+        assert before.uid in uids
+        assert after.uid not in uids
+
+    def test_excludes_uncompleted(self, facade: MockCalDAVFacade) -> None:
+        """A NEEDS_ACTION task is never returned even when its
+        hard_deadline is in the window. Only completed_at matters."""
+        facade.create_task(TaskCreate(
+            title="Unfinished",
+            hard_deadline=datetime(2026, 3, 15, tzinfo=UTC),
+        ))
+        self._complete_at(
+            facade, "Done", datetime(2026, 3, 15, tzinfo=UTC)
+        )
+
+        results = facade.list_tasks(
+            completed_at_start=datetime(2026, 3, 1, tzinfo=UTC),
+            completed_at_end=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        assert len(results) == 1
+        assert results[0].title == "Done"
+
+    def test_empty_window(self, facade: MockCalDAVFacade) -> None:
+        """A window that excludes every completed task returns []."""
+        self._complete_at(
+            facade, "Old", datetime(2025, 1, 1, tzinfo=UTC)
+        )
+
+        results = facade.list_tasks(
+            completed_at_start=datetime(2026, 3, 1, tzinfo=UTC),
+            completed_at_end=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        assert results == []
+
+    def test_combines_with_project_id(self, facade: MockCalDAVFacade) -> None:
+        """project_id filter still applies alongside the completed_at range."""
+        project = facade.create_project(ProjectCreate(name="Work"))
+        other_project = facade.create_project(ProjectCreate(name="Personal"))
+
+        in_project = self._complete_at(
+            facade,
+            "In work",
+            datetime(2026, 3, 15, tzinfo=UTC),
+            project_id=project.uid,
+        )
+        self._complete_at(
+            facade,
+            "In personal",
+            datetime(2026, 3, 15, tzinfo=UTC),
+            project_id=other_project.uid,
+        )
+
+        results = facade.list_tasks(
+            project_id=project.uid,
+            completed_at_start=datetime(2026, 3, 1, tzinfo=UTC),
+            completed_at_end=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        assert len(results) == 1
+        assert results[0].uid == in_project.uid
 
 
 class TestTaskSorting:

@@ -126,10 +126,23 @@ class CalDAVFacade:
         search: str | None = None,
         start: datetime | None = None,
         end: datetime | None = None,
+        completed_at_start: datetime | None = None,
+        completed_at_end: datetime | None = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):
-        return tasks.list_tasks(self, project_id, status, search, start, end, sort_by, sort_order)
+        return tasks.list_tasks(
+            self,
+            project_id,
+            status,
+            search,
+            start,
+            end,
+            completed_at_start,
+            completed_at_end,
+            sort_by,
+            sort_order,
+        )
 
     def update_task(self, uid: str, data):
         return tasks.update_task(self, uid, data)

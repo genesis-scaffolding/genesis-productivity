@@ -21,12 +21,52 @@ make test          # run tests
 The web interface is a multi-page Streamlit app. Start it with:
 
 ```
-make ui            # default user on http://127.0.0.1:3000
-genesis ui --user alice   # a named user
-genesis ui --user alice --port 9000   # different port
+make ui            # http://127.0.0.1:3000
+genesis ui --port 9000   # different port
 ```
 
-Pages: Dashboard, Projects, Project, Tasks, Calendar, Journal, Journal Entry. Data scope is per user (see ADR-010); restarting the UI with a different `--user` switches scope.
+The UI shows a login screen on first visit. Sign in with an existing
+account or use the Create Account tab to add a new one. Each user
+sees only their own data; switching accounts is a logout + sign-in.
+
+Headless account management:
+
+```
+genesis user create alice          # prompts for password
+genesis user list
+genesis user change-password alice
+genesis user delete alice
+```
+
+Pages: Dashboard, Projects, Tasks, Calendar, Journal, Statistics.
+Data scope is per user (see ADR-010, ADR-019).
+
+### Migrating an existing single-user setup
+
+If you have live data under the legacy ``default`` user
+(``~/.local/share/genesis/default/`` etc.), move it to a named
+account before first login:
+
+```
+genesis user migrate-default alice
+genesis user create alice
+```
+
+After the legacy migration, take one extra step to re-home the
+per-user state into the shared Radicale layout
+(``~/.local/share/genesis/radicale/``, ``.../journals/``, and
+``.../api_secret.key``) so one Radicale serves every account:
+
+```
+genesis user migrate-shared alice
+```
+
+Run ``migrate-shared`` once per user. After all users are
+migrated, restart Radicale so it picks up the merged htpasswd
+(htpasswd is live-read so this is just for housekeeping) and
+the freshly-written rights file.
+
+See ADR-019 for the full story.
 
 ## Architecture
 

@@ -106,7 +106,10 @@ class TestEntityValidators:
 
         naive = datetime(2026, 9, 7, 14, 0)
         entry = TimeLogEntry(
-            uid="test", label="x", start=naive, mode=TimeLogMode.COUNTUP,
+            uid="test",
+            label="x",
+            start=naive,
+            mode=TimeLogMode.COUNTUP,
         )
         assert entry.start.tzinfo is UTC
 
@@ -124,8 +127,11 @@ class TestEntityValidators:
         naive_start = datetime(2026, 9, 7, 14, 0)
         naive_end = datetime(2026, 9, 7, 15, 0)
         event = Event(
-            uid="e", summary="x",
-            start=naive_start, end=naive_end, status=EventStatus.CONFIRMED,
+            uid="e",
+            summary="x",
+            start=naive_start,
+            end=naive_end,
+            status=EventStatus.CONFIRMED,
         )
         assert event.start.tzinfo is UTC
         assert event.end.tzinfo is UTC
@@ -137,7 +143,10 @@ class TestEntityValidators:
         tokyo = timezone(timedelta(hours=9))
         aware = datetime(2026, 9, 7, 14, 0, tzinfo=tokyo)
         entry = TimeLogEntry(
-            uid="t", label="x", start=aware, mode=TimeLogMode.COUNTUP,
+            uid="t",
+            label="x",
+            start=aware,
+            mode=TimeLogMode.COUNTUP,
         )
         assert entry.start.tzinfo is UTC
         # Converted: 14:00 JST -> 05:00 UTC.
@@ -148,8 +157,8 @@ class TestEntityValidators:
 @pytest.mark.parametrize(
     "tz_offset",
     [
-        timedelta(hours=9),    # Tokyo
-        timedelta(hours=-4),   # NY EDT
+        timedelta(hours=9),  # Tokyo
+        timedelta(hours=-4),  # NY EDT
         timedelta(hours=5, minutes=30),  # India
         timedelta(hours=9, minutes=30),  # Australia (ACST)
     ],
@@ -161,7 +170,10 @@ def test_round_trip_through_entity(tz_offset: timedelta) -> None:
     zone = timezone(tz_offset)
     original = datetime(2026, 9, 7, 12, 0, tzinfo=zone)
     entry = TimeLogEntry(
-        uid="t", label="x", start=original, mode=TimeLogMode.COUNTUP,
+        uid="t",
+        label="x",
+        start=original,
+        mode=TimeLogMode.COUNTUP,
     )
     assert entry.start.tzinfo is UTC
     # Converting back to the original zone yields the same wall clock.

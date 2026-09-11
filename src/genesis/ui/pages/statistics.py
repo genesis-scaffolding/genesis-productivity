@@ -161,16 +161,11 @@ st.divider()
 
 
 st.subheader("Daily activity")
-st.caption(
-    f"Minutes per day, in local time, stacked by category, for {period_label.lower()}."
-)
+st.caption(f"Minutes per day, in local time, stacked by category, for {period_label.lower()}.")
 if not rollup.daily:
     st.info("No completed sessions in this period yet.")
 else:
-    cols = {
-        cat.value: [p.minutes_by_category.get(cat, 0.0) for p in rollup.daily]
-        for cat in TimeLogCategory
-    }
+    cols = {cat.value: [p.minutes_by_category.get(cat, 0.0) for p in rollup.daily] for cat in TimeLogCategory}
     df = pd.DataFrame(cols, index=[p.day for p in rollup.daily])
     st.bar_chart(df, height=240, width="stretch")
 
@@ -218,8 +213,7 @@ st.write("")
 
 st.subheader("Recent sessions")
 st.caption(
-    f"Up to {rollup.recent.__len__()} most recent completed sessions within "
-    f"{period_label.lower()}, newest first."
+    f"Up to {rollup.recent.__len__()} most recent completed sessions within {period_label.lower()}, newest first."
 )
 
 if not rollup.recent:

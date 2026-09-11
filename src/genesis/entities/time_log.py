@@ -79,9 +79,7 @@ class TimeLogEntry(BaseModel):
         "extra": "ignore",
     }
 
-    @field_validator(
-        "start", "due", "completed_at", "created", "modified", mode="before"
-    )
+    @field_validator("start", "due", "completed_at", "created", "modified", mode="before")
     @classmethod
     def _utc_field(cls, v: object) -> object:
         if isinstance(v, datetime):

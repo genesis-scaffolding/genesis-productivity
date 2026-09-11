@@ -10,6 +10,8 @@ Marked ``@pytest.mark.integration`` per project convention.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -49,6 +51,28 @@ def test_login_success(api_server: TestClient) -> None:
     assert body["expires_in"] >= 36000
     assert body["access_token"].count(".") == 2  # header.payload.sig
     assert body["refresh_token"].count(".") == 2
+
+
+def test_login_unknown_user_rejected(api_server: TestClient) -> None:
+    """A username not in the users table returns 401."""
+    resp = api_server.post(
+        "/auth/login",
+        data={"username": "ghost", "password": "test-pw", "grant_type": "password"},
+    )
+    assert resp.status_code == 401
+
+
+def test_auth_me_returns_subject(api_server: TestClient) -> None:
+    """GET /auth/me echoes the username embedded in the bearer token."""
+    token = _login(api_server)
+    resp = api_server.get("/auth/me", headers=_auth(token))
+    assert resp.status_code == 200
+    assert resp.json() == {"username": "default"}
+
+
+def test_auth_me_requires_bearer(api_server: TestClient) -> None:
+    resp = api_server.get("/auth/me")
+    assert resp.status_code == 401
 
 
 def test_login_wrong_password_rejected(api_server: TestClient) -> None:
@@ -230,6 +254,7 @@ def test_task_404_on_missing_uid(api_server: TestClient) -> None:
 
 def test_list_tasks_converts_date_query_params_to_datetime(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Regression: ISO date query params must reach the CalDAV facade
     as ``datetime``, not ``str``.
@@ -244,6 +269,7 @@ def test_list_tasks_converts_date_query_params_to_datetime(
 
     from genesis.api.app import app as _app
     from genesis.api.routers import productivity as _router
+    from genesis.users.store import UserStore
 
     captured: list[dict] = []
 
@@ -259,8 +285,10 @@ def test_list_tasks_converts_date_query_params_to_datetime(
         def shutdown(self) -> None:
             pass
 
-    monkeypatch.setattr(_router, "_facade", lambda: _SpyFacade())
-    monkeypatch.setenv("GENESIS_API_PASSWORD", "test-pw")
+    users_path = tmp_path / "users.yaml"
+    UserStore(users_path).add("default", "test-pw")
+    monkeypatch.setattr("genesis.users.store._default_store", UserStore(users_path))
+    monkeypatch.setattr(_router, "_facade", lambda subject: _SpyFacade())
 
     with TestClient(_app) as client:
         token = client.post(
@@ -273,9 +301,7 @@ def test_list_tasks_converts_date_query_params_to_datetime(
         ).json()["access_token"]
 
         resp = client.get(
-            "/productivity/tasks"
-            "?assigned_date_start=2026-09-01"
-            "&assigned_date_end=2026-09-30",
+            "/productivity/tasks?assigned_date_start=2026-09-01&assigned_date_end=2026-09-30",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -344,9 +370,7 @@ def test_list_tasks_with_datetime_deadline_filter_does_not_500(
     )
 
     resp = client.get(
-        "/productivity/tasks"
-        "?hard_deadline_start=2026-09-01T00:00:00.000Z"
-        "&hard_deadline_end=2026-09-30T23:59:59.999Z",
+        "/productivity/tasks?hard_deadline_start=2026-09-01T00:00:00.000Z&hard_deadline_end=2026-09-30T23:59:59.999Z",
         headers=headers,
     )
 

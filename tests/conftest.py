@@ -38,6 +38,7 @@ from fastapi.testclient import TestClient
 
 from genesis.api.app import app
 from genesis.api.routers import productivity as _productivity_router
+from genesis.users.store import UserStore
 
 from ._mock_journal import InMemoryJournalFacade
 from .mock_caldav import MockCalDAVFacade
@@ -61,15 +62,14 @@ def _free_port() -> int:
 def _substitute_facade(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch the API router's ``_facade()`` to return a fresh mock facade.
 
-    Returns an object with the same ``.caldav`` and ``.journal``
-    attributes plus a no-op ``shutdown()`` so the router's
-    ``try/finally facade.shutdown()`` does not error.
+    The router signature is ``_facade(subject)``; the mock ignores
+    the subject and returns the same shared facade for the whole
+    test, so per-request state is preserved within a test and
+    isolated between tests.
     """
     state: dict[str, object] = {"mock": _build_mock_facade()}
 
-    def fake_facade() -> object:
-        # The mock keeps state across requests within one test, but
-        # a new mock is built for each test (see fixture body).
+    def fake_facade(subject: str) -> object:
         return state["mock"]
 
     monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
@@ -93,13 +93,19 @@ def _build_mock_facade() -> object:
 
 
 @pytest.fixture
-def api_server(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+def api_server(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Generator[TestClient, None, None]:
     """Fast fixture: ``MockCalDAVFacade`` + ``InMemoryJournalFacade``.
 
     No subprocess, no temp dir, no port allocation. Each test gets a
-    fresh mock so isolation is automatic.
+    fresh mock so isolation is automatic. Seeds a ``default`` user
+    in a temp users file.
     """
-    os.environ["GENESIS_API_PASSWORD"] = "test-pw"
+    store_path = tmp_path / "users.yaml"
+    _seed_default_user(store_path)
+    monkeypatch.setattr("genesis.users.store._default_store", UserStore(store_path))
     _substitute_facade(monkeypatch)
     with TestClient(app) as client:
         yield client
@@ -108,17 +114,20 @@ def api_server(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, N
 @pytest.fixture
 def api_server_with_mock(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> Generator[tuple[TestClient, MockCalDAVFacade], None, None]:
     """Like :func:`api_server` but also yields the underlying mock facade.
 
     Use when a test needs to seed time log entries (no POST endpoint
     exists for them) or otherwise mutate backend state directly.
     """
-    os.environ["GENESIS_API_PASSWORD"] = "test-pw"
+    store_path = tmp_path / "users.yaml"
+    _seed_default_user(store_path)
+    monkeypatch.setattr("genesis.users.store._default_store", UserStore(store_path))
     mock = _build_mock_facade()
     state: dict[str, object] = {"mock": mock}
 
-    def fake_facade() -> object:
+    def fake_facade(subject: str) -> object:
         return state["mock"]
 
     monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
@@ -161,9 +170,7 @@ def _spawn_radicale(host: str, port: int, data_path: Path) -> subprocess.Popen:
         f"file = {data_path / 'rights'}\n"
     )
     (data_path / "users").write_text("default:default\n")
-    (data_path / "rights").write_text(
-        "[base]\nuser = .+\ncollection = .*\npermissions = RrWw\n"
-    )
+    (data_path / "rights").write_text("[base]\nuser = .+\ncollection = .*\npermissions = RrWw\n")
 
     proc = subprocess.Popen(
         [sys.executable, _radicale_binary(), "-C", str(cfg)],
@@ -201,8 +208,18 @@ def _wipe(data_path: Path, config_home: Path) -> None:
         shutil.rmtree(journal_dir)
 
 
+def _seed_default_user(store_path: Path) -> None:
+    """Write a fresh users file containing only ``default`` with the
+    test password."""
+    store = UserStore(store_path)
+    store.add("default", "test-pw")
+
+
 @pytest.fixture
-def api_server_real() -> Generator[TestClient, None, None]:
+def api_server_real(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[TestClient, None, None]:
     """Slow fixture: real Radicale + real journal files.
 
     ~1 s per test for the subprocess startup. Use only for the
@@ -217,17 +234,26 @@ def api_server_real() -> Generator[TestClient, None, None]:
         root = Path(tmp.name)
         config_home = root / "config"
         data_home = root / "data"
+        state_home = root / "state"
+        cache_home = root / "cache"
         rad_data = root / "radicale"
-        for d in (config_home, data_home, rad_data):
+        for d in (config_home, data_home, state_home, cache_home, rad_data):
             d.mkdir(parents=True, exist_ok=True)
+
+        # Seed the default user in the test users file before
+        # monkeypatching the module-level store.
+        _seed_default_user(state_home / "genesis" / "users.yaml")
+        monkeypatch.setattr(
+            "genesis.users.store._default_store",
+            UserStore(state_home / "genesis" / "users.yaml"),
+        )
 
         proc = _spawn_radicale(host, port, rad_data)
 
         os.environ["XDG_CONFIG_HOME"] = str(config_home)
         os.environ["XDG_DATA_HOME"] = str(data_home)
-        os.environ["XDG_STATE_HOME"] = str(root / "state")
-        os.environ["XDG_CACHE_HOME"] = str(root / "cache")
-        os.environ["GENESIS_API_PASSWORD"] = "test-pw"
+        os.environ["XDG_STATE_HOME"] = str(state_home)
+        os.environ["XDG_CACHE_HOME"] = str(cache_home)
         os.environ["GENESIS__DAV__HOST"] = host
         os.environ["GENESIS__DAV__PORT"] = str(port)
         os.environ["GENESIS__DAV__USERNAME"] = "default"

@@ -148,9 +148,7 @@ def list_events(
     return events
 
 
-def update_event(
-    facade: CalDAVFacade, uid: str, data: EventUpdate
-) -> Event | None:
+def update_event(facade: CalDAVFacade, uid: str, data: EventUpdate) -> Event | None:
     """Update an existing event.
 
     Mutates the icalendar component in place and saves. Refuses to
@@ -171,8 +169,7 @@ def update_event(
 
     if existing.task_id is not None:
         raise ValueError(
-            f"Event {uid} is a shadow event owned by task {existing.task_id}; "
-            "update via update_task instead"
+            f"Event {uid} is a shadow event owned by task {existing.task_id}; update via update_task instead"
         )
 
     update_data = data.model_dump(exclude_unset=True)
@@ -201,10 +198,7 @@ def delete_event(facade: CalDAVFacade, uid: str) -> bool:
 
     component = obj.icalendar_component
     if component.get("x-task-id") is not None:
-        raise ValueError(
-            f"Event {uid} is a shadow event; clear scheduled_start on "
-            "its source task to remove it"
-        )
+        raise ValueError(f"Event {uid} is a shadow event; clear scheduled_start on its source task to remove it")
 
     obj.delete()
     return True

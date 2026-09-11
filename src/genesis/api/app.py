@@ -22,8 +22,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Genesis Productivity API",
         description=(
-            "REST API for the genesis productivity system. "
-            "Authentication: OAuth2 password grant with bearer tokens."
+            "REST API for the genesis productivity system. Authentication: OAuth2 password grant with bearer tokens."
         ),
         version="0.1.0",
     )

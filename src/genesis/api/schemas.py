@@ -84,6 +84,7 @@ def wire_to_task_status(s: Status) -> TaskStatus:
 def wire_to_project_status(s: Status) -> ProjectStatus:
     return STATUS_TO_PROJECT_ENTITY[s]
 
+
 # Wire-side journal type re-exported as a string-valued alias.
 # The entity's EntryType values (``daily | weekly | monthly | yearly |
 # project | misc``) are the wire values; no mapping is required.

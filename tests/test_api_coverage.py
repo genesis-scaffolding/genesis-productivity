@@ -88,9 +88,7 @@ def test_task_pagination_limit_only(api_server: TestClient) -> None:
     token = _login(api_server)
     _seed(api_server, token, n=7)
 
-    resp = api_server.get(
-        "/productivity/tasks?limit=3", headers=_auth(token)
-    ).json()
+    resp = api_server.get("/productivity/tasks?limit=3", headers=_auth(token)).json()
     assert resp["total"] == 7
     assert len(resp["items"]) == 3
     assert resp["offset"] == 0
@@ -104,9 +102,7 @@ def test_task_pagination_offset_only(api_server: TestClient) -> None:
     token = _login(api_server)
     _seed(api_server, token, n=7)
 
-    resp = api_server.get(
-        "/productivity/tasks?offset=4", headers=_auth(token)
-    ).json()
+    resp = api_server.get("/productivity/tasks?offset=4", headers=_auth(token)).json()
     assert resp["total"] == 7
     assert len(resp["items"]) == 3  # 7 - 4
     assert resp["offset"] == 4
@@ -118,9 +114,7 @@ def test_task_pagination_offset_past_end_returns_empty(api_server: TestClient) -
     token = _login(api_server)
     _seed(api_server, token, n=3)
 
-    resp = api_server.get(
-        "/productivity/tasks?offset=10", headers=_auth(token)
-    ).json()
+    resp = api_server.get("/productivity/tasks?offset=10", headers=_auth(token)).json()
     assert resp["total"] == 3
     assert resp["items"] == []
     assert resp["offset"] == 10
@@ -135,9 +129,7 @@ def test_task_pagination_window_exhausted_returns_partial(api_server: TestClient
     token = _login(api_server)
     _seed(api_server, token, n=7)
 
-    resp = api_server.get(
-        "/productivity/tasks?offset=5&limit=10", headers=_auth(token)
-    ).json()
+    resp = api_server.get("/productivity/tasks?offset=5&limit=10", headers=_auth(token)).json()
     assert resp["total"] == 7
     assert len(resp["items"]) == 2  # only 7 - 5 = 2 left
     assert resp["offset"] == 5
@@ -160,15 +152,11 @@ def test_task_filter_by_status(api_server: TestClient) -> None:
         headers=_auth(token),
     )
 
-    completed = api_server.get(
-        "/productivity/tasks?status=completed", headers=_auth(token)
-    ).json()
+    completed = api_server.get("/productivity/tasks?status=completed", headers=_auth(token)).json()
     assert completed["total"] == 1
     assert completed["items"][0]["uid"] == keep[0]["uid"]
 
-    needs_action = api_server.get(
-        "/productivity/tasks?status=needs-action", headers=_auth(token)
-    ).json()
+    needs_action = api_server.get("/productivity/tasks?status=needs-action", headers=_auth(token)).json()
     assert needs_action["total"] == 1
     assert needs_action["items"][0]["uid"] == keep[1]["uid"]
 
@@ -176,9 +164,7 @@ def test_task_filter_by_status(api_server: TestClient) -> None:
 @pytest.mark.integration
 def test_task_filter_by_project(api_server: TestClient) -> None:
     token = _login(api_server)
-    project = api_server.post(
-        "/productivity/projects", json={"name": "container"}, headers=_auth(token)
-    ).json()
+    project = api_server.post("/productivity/projects", json={"name": "container"}, headers=_auth(token)).json()
 
     # 2 in the project, 2 outside.
     api_server.post(
@@ -191,12 +177,8 @@ def test_task_filter_by_project(api_server: TestClient) -> None:
         json={"title": "in-2", "project_id": project["uid"]},
         headers=_auth(token),
     )
-    api_server.post(
-        "/productivity/tasks", json={"title": "out-1"}, headers=_auth(token)
-    )
-    api_server.post(
-        "/productivity/tasks", json={"title": "out-2"}, headers=_auth(token)
-    )
+    api_server.post("/productivity/tasks", json={"title": "out-1"}, headers=_auth(token))
+    api_server.post("/productivity/tasks", json={"title": "out-2"}, headers=_auth(token))
 
     resp = api_server.get(
         f"/productivity/tasks?project_id={project['uid']}",
@@ -221,15 +203,11 @@ def test_task_filter_by_search_query(api_server: TestClient) -> None:
         headers=_auth(token),
     )
 
-    by_title = api_server.get(
-        "/productivity/tasks?search_query=groceries", headers=_auth(token)
-    ).json()
+    by_title = api_server.get("/productivity/tasks?search_query=groceries", headers=_auth(token)).json()
     assert by_title["total"] == 1
     assert by_title["items"][0]["title"] == "Buy groceries"
 
-    by_desc = api_server.get(
-        "/productivity/tasks?search_query=leak", headers=_auth(token)
-    ).json()
+    by_desc = api_server.get("/productivity/tasks?search_query=leak", headers=_auth(token)).json()
     assert by_desc["total"] == 1
     assert by_desc["items"][0]["title"] == "Fix bug"
 
@@ -238,18 +216,12 @@ def test_task_filter_by_search_query(api_server: TestClient) -> None:
 def test_task_sort_by_title(api_server: TestClient) -> None:
     token = _login(api_server)
     for title in ["Zebra", "Apple", "Mango"]:
-        api_server.post(
-            "/productivity/tasks", json={"title": title}, headers=_auth(token)
-        )
+        api_server.post("/productivity/tasks", json={"title": title}, headers=_auth(token))
 
-    asc = api_server.get(
-        "/productivity/tasks?sort_by=title&order=asc", headers=_auth(token)
-    ).json()
+    asc = api_server.get("/productivity/tasks?sort_by=title&order=asc", headers=_auth(token)).json()
     assert [t["title"] for t in asc["items"]] == ["Apple", "Mango", "Zebra"]
 
-    desc = api_server.get(
-        "/productivity/tasks?sort_by=title&order=desc", headers=_auth(token)
-    ).json()
+    desc = api_server.get("/productivity/tasks?sort_by=title&order=desc", headers=_auth(token)).json()
     assert [t["title"] for t in desc["items"]] == ["Zebra", "Mango", "Apple"]
 
 
@@ -275,16 +247,10 @@ def test_project_create_with_non_default_status(api_server: TestClient) -> None:
 @pytest.mark.integration
 def test_project_filter_by_search_query(api_server: TestClient) -> None:
     token = _login(api_server)
-    api_server.post(
-        "/productivity/projects", json={"name": "alpha"}, headers=_auth(token)
-    )
-    api_server.post(
-        "/productivity/projects", json={"name": "beta"}, headers=_auth(token)
-    )
+    api_server.post("/productivity/projects", json={"name": "alpha"}, headers=_auth(token))
+    api_server.post("/productivity/projects", json={"name": "beta"}, headers=_auth(token))
 
-    resp = api_server.get(
-        "/productivity/projects?search_query=alp", headers=_auth(token)
-    ).json()
+    resp = api_server.get("/productivity/projects?search_query=alp", headers=_auth(token)).json()
     assert len(resp["items"]) == 1
     assert resp["items"][0]["name"] == "alpha"
 
@@ -303,9 +269,7 @@ def test_project_filter_by_status(api_server: TestClient) -> None:
         headers=_auth(token),
     )
 
-    resp = api_server.get(
-        "/productivity/projects?status=completed", headers=_auth(token)
-    ).json()
+    resp = api_server.get("/productivity/projects?status=completed", headers=_auth(token)).json()
     assert len(resp["items"]) == 1
     assert resp["items"][0]["name"] == "done-p"
 
@@ -349,9 +313,7 @@ def test_journal_filter_by_type(api_server: TestClient) -> None:
         headers=_auth(token),
     )
 
-    resp = api_server.get(
-        "/productivity/journals?type=daily", headers=_auth(token)
-    ).json()
+    resp = api_server.get("/productivity/journals?type=daily", headers=_auth(token)).json()
     assert resp["total"] == 1
     assert resp["items"][0]["type"] == "daily"
 
@@ -388,9 +350,7 @@ def test_journal_filter_by_search_query(api_server: TestClient) -> None:
         headers=_auth(token),
     )
 
-    resp = api_server.get(
-        "/productivity/journals?search_query=bravo", headers=_auth(token)
-    ).json()
+    resp = api_server.get("/productivity/journals?search_query=bravo", headers=_auth(token)).json()
     assert resp["total"] == 1
     assert "alpha bravo" in resp["items"][0]["content"]
 
@@ -398,9 +358,7 @@ def test_journal_filter_by_search_query(api_server: TestClient) -> None:
 @pytest.mark.integration
 def test_journal_filter_by_project(api_server: TestClient) -> None:
     token = _login(api_server)
-    project = api_server.post(
-        "/productivity/projects", json={"name": "journal-test"}, headers=_auth(token)
-    ).json()
+    project = api_server.post("/productivity/projects", json={"name": "journal-test"}, headers=_auth(token)).json()
 
     api_server.post(
         "/productivity/journals",
@@ -470,9 +428,7 @@ def test_journal_patch_invalid_type_rejected(api_server: TestClient) -> None:
 @pytest.mark.integration
 def test_journal_filter_invalid_type_returns_400(api_server: TestClient) -> None:
     token = _login(api_server)
-    resp = api_server.get(
-        "/productivity/journals?type=nonsense", headers=_auth(token)
-    )
+    resp = api_server.get("/productivity/journals?type=nonsense", headers=_auth(token))
     assert resp.status_code == 400
 
 

@@ -55,9 +55,7 @@ def render_tasks_table(
 
     statuses_all = [s.value for s in TaskStatus]
 
-    projects_list = (
-        list(caldav.list_projects()) if show_project_column else []
-    )
+    projects_list = list(caldav.list_projects()) if show_project_column else []
     project_label_to_uid: dict[str, str | None] = {"(none)": None}
     for p in projects_list:
         project_label_to_uid[p.name] = p.uid
@@ -126,19 +124,13 @@ def render_tasks_table(
             update: TaskUpdate = TaskUpdate()
             touched = False
             if "Title" in changes:
-                update = update.model_copy(
-                    update={"title": str(changes["Title"])}
-                )
+                update = update.model_copy(update={"title": str(changes["Title"])})
                 touched = True
             if "Priority" in changes:
-                update = update.model_copy(
-                    update={"priority": int(changes["Priority"])}
-                )
+                update = update.model_copy(update={"priority": int(changes["Priority"])})
                 touched = True
             if "Status" in changes:
-                update = update.model_copy(
-                    update={"status": TaskStatus(str(changes["Status"]))}
-                )
+                update = update.model_copy(update={"status": TaskStatus(str(changes["Status"]))})
                 touched = True
             if "Scheduled" in changes:
                 new_val = changes["Scheduled"]
@@ -162,9 +154,7 @@ def render_tasks_table(
                 touched = True
             if "Assigned" in changes:
                 new_val = changes["Assigned"]
-                assigned: object = (
-                    None if pd.isna(new_val) else pd.Timestamp(new_val).date()
-                )
+                assigned: object = None if pd.isna(new_val) else pd.Timestamp(new_val).date()
                 update = update.model_copy(update={"assigned_date": assigned})
                 touched = True
             if "Project" in changes and show_project_column:
@@ -172,13 +162,9 @@ def render_tasks_table(
                 if new_label in project_label_to_uid:
                     new_uid = project_label_to_uid[new_label]
                     if new_uid is None:
-                        update = update.model_copy(
-                            update={"clear_project_id": True}
-                        )
+                        update = update.model_copy(update={"clear_project_id": True})
                     else:
-                        update = update.model_copy(
-                            update={"project_id": new_uid}
-                        )
+                        update = update.model_copy(update={"project_id": new_uid})
                     touched = True
 
             if not touched:
@@ -198,37 +184,22 @@ def render_tasks_table(
     column_config: dict = {
         "uid": None,  # hidden
         "Title": st.column_config.TextColumn("Title", width="large"),
-        "Priority": st.column_config.NumberColumn(
-            "Priority", min_value=1, max_value=9
-        ),
-        "Scheduled": st.column_config.DatetimeColumn(
-            "Scheduled", format="YYYY-MM-DD HH:mm"
-        ),
-        "Deadline": st.column_config.DatetimeColumn(
-            "Deadline", format="YYYY-MM-DD"
-        ),
-        "Assigned": st.column_config.DateColumn(
-            "Assigned", format="YYYY-MM-DD"
-        ),
-        "Status": st.column_config.SelectboxColumn(
-            "Status", options=statuses_all, required=True
-        ),
+        "Priority": st.column_config.NumberColumn("Priority", min_value=1, max_value=9),
+        "Scheduled": st.column_config.DatetimeColumn("Scheduled", format="YYYY-MM-DD HH:mm"),
+        "Deadline": st.column_config.DatetimeColumn("Deadline", format="YYYY-MM-DD"),
+        "Assigned": st.column_config.DateColumn("Assigned", format="YYYY-MM-DD"),
+        "Status": st.column_config.SelectboxColumn("Status", options=statuses_all, required=True),
     }
     if show_project_column:
         column_config["Project"] = st.column_config.SelectboxColumn(
             "Project",
             options=project_labels,
             required=False,
-            help=(
-                "Reassign task to another project. "
-                "Select (none) to unassign."
-            ),
+            help=("Reassign task to another project. Select (none) to unassign."),
         )
     else:
         column_config["Project"] = None
-    column_config["actions"] = st.column_config.ButtonColumn(
-        "Actions", on_click=_handle_action, key=action_key
-    )
+    column_config["actions"] = st.column_config.ButtonColumn("Actions", on_click=_handle_action, key=action_key)
 
     st.data_editor(
         df,

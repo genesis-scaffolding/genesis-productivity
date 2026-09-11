@@ -200,9 +200,7 @@ class TestTaskFilters:
     def test_text_search(self, facade: CalDAVFacade) -> None:
         """Text search finds tasks by summary or description."""
         facade.create_task(TaskCreate(title="Buy groceries"))
-        facade.create_task(
-            TaskCreate(title="Fix bug", description="Memory leak in parser")
-        )
+        facade.create_task(TaskCreate(title="Fix bug", description="Memory leak in parser"))
 
         results = facade.list_tasks(search="bug")
         assert len(results) >= 1
@@ -243,9 +241,7 @@ class TestServerSideFilters:
       - VEVENT time-range (event overlap with window)
     """
 
-    def test_tasks_filter_by_project_id_server_side(
-        self, facade: CalDAVFacade
-    ) -> None:
+    def test_tasks_filter_by_project_id_server_side(self, facade: CalDAVFacade) -> None:
         """list_tasks(project_id=uid) returns only tasks with that X-PROJECT-ID."""
         proj_a = facade.create_project(ProjectCreate(name="Alpha"))
         proj_b = facade.create_project(ProjectCreate(name="Beta"))
@@ -260,9 +256,7 @@ class TestServerSideFilters:
         beta_tasks = facade.list_tasks(project_id=proj_b.uid)
         assert {t.title for t in beta_tasks} == {"B-1"}
 
-    def test_tasks_time_range_filter_server_side(
-        self, facade: CalDAVFacade
-    ) -> None:
+    def test_tasks_time_range_filter_server_side(self, facade: CalDAVFacade) -> None:
         """list_tasks(start=..., end=...) narrows to tasks with DTSTART/DUE/DTEND in window.
 
         The server-side filter is a SUPERSET of DTSTART-only matching; we
@@ -273,16 +267,12 @@ class TestServerSideFilters:
         # In-window: scheduled Tuesday at 10:00
         in_window = facade.create_task(TaskCreate(title="In window"))
         tuesday_10 = datetime(2026, 9, 8, 10, 0, tzinfo=UTC)
-        facade.update_task(
-            in_window.uid, TaskUpdate(scheduled_start=tuesday_10)
-        )
+        facade.update_task(in_window.uid, TaskUpdate(scheduled_start=tuesday_10))
 
         # Out of window: scheduled the following week
         next_week = facade.create_task(TaskCreate(title="Next week"))
         next_monday_10 = datetime(2026, 9, 14, 10, 0, tzinfo=UTC)
-        facade.update_task(
-            next_week.uid, TaskUpdate(scheduled_start=next_monday_10)
-        )
+        facade.update_task(next_week.uid, TaskUpdate(scheduled_start=next_monday_10))
 
         # In-window by DUE only (no scheduled_start)
         due_in_window = facade.create_task(TaskCreate(title="Due in window"))
@@ -304,47 +294,52 @@ class TestServerSideFilters:
 
         # Apply the same strict DTSTART refinement the calendar page does.
         scheduled_in_window = [
-            t for t in week_tasks
-            if t.scheduled_start is not None
-            and week_start <= t.scheduled_start < week_end
+            t for t in week_tasks if t.scheduled_start is not None and week_start <= t.scheduled_start < week_end
         ]
         assert {t.title for t in scheduled_in_window} == {"In window"}
 
-    def test_events_time_range_filter_server_side(
-        self, facade: CalDAVFacade
-    ) -> None:
+    def test_events_time_range_filter_server_side(self, facade: CalDAVFacade) -> None:
         """list_events(start=..., end=...) returns events that overlap the window."""
         from genesis.entities import EventCreate
 
         # Event fully inside the window
-        facade.create_event(EventCreate(
-            summary="Mid-week meeting",
-            start=datetime(2026, 9, 9, 10, 0, tzinfo=UTC),
-            end=datetime(2026, 9, 9, 11, 0, tzinfo=UTC),
-        ))
+        facade.create_event(
+            EventCreate(
+                summary="Mid-week meeting",
+                start=datetime(2026, 9, 9, 10, 0, tzinfo=UTC),
+                end=datetime(2026, 9, 9, 11, 0, tzinfo=UTC),
+            )
+        )
         # Event that starts before the window and ends inside it
-        facade.create_event(EventCreate(
-            summary="Overlapping start",
-            start=datetime(2026, 9, 6, 23, 0, tzinfo=UTC),
-            end=datetime(2026, 9, 7, 1, 0, tzinfo=UTC),
-        ))
+        facade.create_event(
+            EventCreate(
+                summary="Overlapping start",
+                start=datetime(2026, 9, 6, 23, 0, tzinfo=UTC),
+                end=datetime(2026, 9, 7, 1, 0, tzinfo=UTC),
+            )
+        )
         # Event entirely before the window
-        facade.create_event(EventCreate(
-            summary="Before window",
-            start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
-            end=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
-        ))
+        facade.create_event(
+            EventCreate(
+                summary="Before window",
+                start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+                end=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
+            )
+        )
         # Event entirely after the window
-        facade.create_event(EventCreate(
-            summary="After window",
-            start=datetime(2026, 9, 20, 10, 0, tzinfo=UTC),
-            end=datetime(2026, 9, 20, 11, 0, tzinfo=UTC),
-        ))
+        facade.create_event(
+            EventCreate(
+                summary="After window",
+                start=datetime(2026, 9, 20, 10, 0, tzinfo=UTC),
+                end=datetime(2026, 9, 20, 11, 0, tzinfo=UTC),
+            )
+        )
 
         week_start = datetime(2026, 9, 7, 0, 0, tzinfo=UTC)
         week_end = datetime(2026, 9, 14, 0, 0, tzinfo=UTC)
         week_events = facade.list_events(
-            start=week_start, end=week_end,
+            start=week_start,
+            end=week_end,
             status=EventStatus.CONFIRMED,
         )
 
@@ -460,9 +455,7 @@ class TestProjectFilters:
     def test_text_search(self, facade: CalDAVFacade) -> None:
         """Text search finds projects by name or description."""
         facade.create_project(ProjectCreate(name="Marketing Campaign"))
-        facade.create_project(
-            ProjectCreate(name="Tech Project", description="Hardware development")
-        )
+        facade.create_project(ProjectCreate(name="Tech Project", description="Hardware development"))
 
         results = facade.list_projects(search="marketing")
         assert len(results) >= 1
@@ -550,13 +543,9 @@ class TestServerManager:
 class TestShadowVEVENTIntegration:
     """Verify the shadow VEVENT pattern actually round-trips through Radicale."""
 
-    def test_create_task_with_schedule_writes_shadow_to_events_collection(
-        self, facade: CalDAVFacade
-    ) -> None:
+    def test_create_task_with_schedule_writes_shadow_to_events_collection(self, facade: CalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
 
         # The shadow should appear in the events collection with the same UID
         shadow = facade.get_event(task.uid)
@@ -564,14 +553,10 @@ class TestShadowVEVENTIntegration:
         assert shadow.task_id == task.uid
         assert shadow.start == start
 
-    def test_clear_scheduled_start_removes_shadow(
-        self, facade: CalDAVFacade
-    ) -> None:
+    def test_clear_scheduled_start_removes_shadow(self, facade: CalDAVFacade) -> None:
 
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
         assert facade.get_event(task.uid) is not None
 
         facade.update_task(task.uid, TaskUpdate(clear_scheduled_start=True))
@@ -579,17 +564,13 @@ class TestShadowVEVENTIntegration:
 
     def test_delete_task_removes_shadow(self, facade: CalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
         facade.delete_task(task.uid)
         assert facade.get_event(task.uid) is None
 
     def test_reschedule_updates_shadow(self, facade: CalDAVFacade) -> None:
         first = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=first)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=first))
 
         second = datetime(2030, 1, 2, 14, 0, tzinfo=UTC)
         facade.update_task(task.uid, TaskUpdate(scheduled_start=second))
@@ -612,9 +593,7 @@ class TestEventCRUDIntegration:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         end = datetime(2030, 3, 1, 10, 0, tzinfo=UTC)
 
-        event = facade.create_event(
-            EventCreate(summary="Coffee", start=start, end=end)
-        )
+        event = facade.create_event(EventCreate(summary="Coffee", start=start, end=end))
         assert event.status == EventStatus.CONFIRMED
 
         fetched = facade.get_event(event.uid)
@@ -625,9 +604,7 @@ class TestEventCRUDIntegration:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         end = datetime(2030, 3, 1, 10, 0, tzinfo=UTC)
 
-        event = facade.create_event(
-            EventCreate(summary="Coffee", start=start, end=end)
-        )
+        event = facade.create_event(EventCreate(summary="Coffee", start=start, end=end))
         assert facade.delete_event(event.uid) is True
         assert facade.get_event(event.uid) is None
 
@@ -684,9 +661,7 @@ class TestTimeLogIntegration:
         )
 
         completed_at = datetime(2030, 3, 1, 9, 30, tzinfo=UTC)
-        stopped = facade.stop_time_log_entry(
-            entry.uid, actual_due=due, completed_at=completed_at
-        )
+        stopped = facade.stop_time_log_entry(entry.uid, actual_due=due, completed_at=completed_at)
         assert stopped is not None
         assert stopped.status == TimeLogStatus.COMPLETED
         assert stopped.due == due
@@ -740,17 +715,13 @@ class TestTimeLogIntegration:
 class TestFourCollectionsIntegration:
     """Verify the four fixed collections exist and are separate."""
 
-    def test_each_collection_round_trips_independently(
-        self, facade: CalDAVFacade
-    ) -> None:
+    def test_each_collection_round_trips_independently(self, facade: CalDAVFacade) -> None:
         # Create one of each entity type
         project = facade.create_project(ProjectCreate(name="P"))
         task = facade.create_task(TaskCreate(title="T"))
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         end = datetime(2030, 3, 1, 10, 0, tzinfo=UTC)
-        event = facade.create_event(
-            EventCreate(summary="E", start=start, end=end)
-        )
+        event = facade.create_event(EventCreate(summary="E", start=start, end=end))
         entry = facade.create_time_log_entry(
             TimeLogEntryCreate(
                 label="T",
@@ -774,4 +745,3 @@ class TestFourCollectionsIntegration:
         # Active time-log entry; default list filters to COMPLETED.
         assert len(facade.list_time_log(active_only=True)) == 1
         assert len(facade.list_time_log()) == 0
-

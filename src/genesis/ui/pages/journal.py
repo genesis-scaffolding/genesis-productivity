@@ -90,13 +90,8 @@ def _render_list() -> None:
         {
             "date": [e.date for e in entries],
             "type": [e.type.value if e.type else "" for e in entries],
-            "title": [
-                e.title or e.date.strftime("%A, %B %d, %Y") for e in entries
-            ],
-            "preview": [
-                (e.content.split("\n", 1)[0][:100] if e.content else "")
-                for e in entries
-            ],
+            "title": [e.title or e.date.strftime("%A, %B %d, %Y") for e in entries],
+            "preview": [(e.content.split("\n", 1)[0][:100] if e.content else "") for e in entries],
             "uid": [e.uid for e in entries],
             "actions": [["Open", "Delete"] for _ in entries],
         }
@@ -146,18 +141,12 @@ def _render_list() -> None:
     st.data_editor(
         df,
         column_config={
-            "date": st.column_config.DateColumn(
-                "Date", disabled=True, format="YYYY-MM-DD"
-            ),
+            "date": st.column_config.DateColumn("Date", disabled=True, format="YYYY-MM-DD"),
             "type": st.column_config.TextColumn("Type", disabled=True),
             "title": st.column_config.TextColumn("Title", width="large"),
-            "preview": st.column_config.TextColumn(
-                "Preview", disabled=True, width="large"
-            ),
+            "preview": st.column_config.TextColumn("Preview", disabled=True, width="large"),
             "uid": None,  # hidden
-            "actions": st.column_config.ButtonColumn(
-                "Actions", on_click=_handle_action, key="journal_action"
-            ),
+            "actions": st.column_config.ButtonColumn("Actions", on_click=_handle_action, key="journal_action"),
         },
         hide_index=True,
         on_change=_handle_inline_edit,
@@ -237,9 +226,7 @@ def _render_edit(uid: str) -> None:
         ftitle = st.text_input("Title", value=entry.title or "")
         ftype = st.selectbox("Type", type_labels, index=cur_idx)
         fbody = st.text_area("Content", value=entry.content, height=400)
-        st.caption(
-            f"Date: {entry.date.isoformat()} (set at creation, not editable)"
-        )
+        st.caption(f"Date: {entry.date.isoformat()} (set at creation, not editable)")
         cols = st.columns([1, 1, 6])
         if cols[0].form_submit_button("Save"):
             new_type = EntryType(ftype) if ftype != "(none)" else None
@@ -274,22 +261,15 @@ def _render_create(uid: str) -> None:
     with st.form("je_create"):
         ftitle = st.text_input("Title")
         ftype = st.selectbox("Type", type_labels, index=type_labels.index("daily"))
-        fbody = st.text_area(
-            "Content", height=400, placeholder="What's on your mind?"
-        )
+        fbody = st.text_area("Content", height=400, placeholder="What's on your mind?")
         st.caption(f"Date: {today.isoformat()} (set at creation, not editable)")
         cols = st.columns([1, 1, 6])
         if cols[0].form_submit_button("Create"):
             new_type = EntryType(ftype) if ftype != "(none)" else None
-            existing = (
-                journal.find_for_period(new_type, today)
-                if new_type is not None
-                else None
-            )
+            existing = journal.find_for_period(new_type, today) if new_type is not None else None
             if existing is not None and new_type is not None:
                 st.error(
-                    f"A {new_type.value} entry for this period already exists; "
-                    "edit it instead",
+                    f"A {new_type.value} entry for this period already exists; edit it instead",
                 )
             else:
                 entry = Entry(

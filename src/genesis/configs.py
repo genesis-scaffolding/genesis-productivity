@@ -47,13 +47,28 @@ DEFAULT_CACHE_HOME = Path.home() / ".cache"
 class Paths(BaseModel):
     """XDG-based paths for the application.
 
-    All paths are resolved relative to <xdg_base>/<app_name>/<user>/.
+    Most paths are resolved relative to ``<xdg_base>/<app_name>/<user>/``
+    so that per-user config, cache, and state stay isolated on disk.
+
+    Three fields are SHARED across users: ``radicale_root``,
+    ``journal_root``, and ``api_secret_key``. They live under
+    ``<xdg_data>/<app_name>/`` so one Radicale instance and one
+    JWT signing key serve every account (ADR-019).
     """
 
-    config: Path = Field(description="Directory for config files.")
-    data: Path = Field(description="Directory for persistent data.")
-    state: Path = Field(description="Directory for logs and runtime state.")
-    cache: Path = Field(description="Directory for cache files.")
+    config: Path = Field(description="Directory for config files (per-user).")
+    data: Path = Field(description="Directory for persistent data (per-user).")
+    state: Path = Field(description="Directory for logs and runtime state (per-user).")
+    cache: Path = Field(description="Directory for cache files (per-user).")
+    radicale_root: Path = Field(
+        description="Shared Radicale data root. One Radicale serves all users.",
+    )
+    journal_root: Path = Field(
+        description="Shared root under which each user gets a per-user journal subdir.",
+    )
+    api_secret_key: Path = Field(
+        description="Shared JWT signing key. Rotating it invalidates every user's tokens.",
+    )
 
 
 class DAV(BaseModel):
@@ -96,12 +111,8 @@ class Configs(BaseSettings):
     ) -> None:
         # Determine yaml_path
         if yaml_path is None:
-            config_home = os.environ.get(
-                "XDG_CONFIG_HOME", str(DEFAULT_CONFIG_HOME)
-            )
-            yaml_path = (
-                Path(config_home) / DEFAULT_APP_NAME / DEFAULT_USER / "configs.yaml"
-            )
+            config_home = os.environ.get("XDG_CONFIG_HOME", str(DEFAULT_CONFIG_HOME))
+            yaml_path = Path(config_home) / DEFAULT_APP_NAME / DEFAULT_USER / "configs.yaml"
         else:
             yaml_path = Path(yaml_path).resolve()
 
@@ -192,25 +203,39 @@ def resolve_config_path(user: str | None = None) -> Path:
 
 
 def _build_paths(raw: dict, user: str) -> dict:
-    """Build the paths dict, scoping all paths to genesis/<user>/."""
+    """Build the paths dict.
+
+    Per-user fields resolve under ``<xdg_base>/<app_name>/<user>/``.
+    Shared fields (``radicale_root``, ``journal_root``,
+    ``api_secret_key``) resolve under ``<xdg_data>/<app_name>/``
+    so that one Radicale instance and one JWT signing key serve
+    every account. YAML may override any field.
+    """
     config_home = os.environ.get("XDG_CONFIG_HOME", str(DEFAULT_CONFIG_HOME))
     data_home = os.environ.get("XDG_DATA_HOME", str(DEFAULT_DATA_HOME))
     state_home = os.environ.get("XDG_STATE_HOME", str(DEFAULT_STATE_HOME))
     cache_home = os.environ.get("XDG_CACHE_HOME", str(DEFAULT_CACHE_HOME))
 
     user_prefix = f"{DEFAULT_APP_NAME}/{user}"
+    shared_prefix = f"{data_home}/{DEFAULT_APP_NAME}"
 
     yaml_paths = raw.get("paths", {})
     config_base = yaml_paths.get("config") or f"{config_home}/{user_prefix}"
     data_base = yaml_paths.get("data") or f"{data_home}/{user_prefix}"
     state_base = yaml_paths.get("state") or f"{state_home}/{user_prefix}"
     cache_base = yaml_paths.get("cache") or f"{cache_home}/{user_prefix}"
+    radicale_root = yaml_paths.get("radicale_root") or f"{shared_prefix}/radicale"
+    journal_root = yaml_paths.get("journal_root") or f"{shared_prefix}/journals"
+    api_secret_key = yaml_paths.get("api_secret_key") or f"{shared_prefix}/api_secret.key"
 
     return {
         "config": config_base,
         "data": data_base,
         "state": state_base,
         "cache": cache_base,
+        "radicale_root": radicale_root,
+        "journal_root": journal_root,
+        "api_secret_key": api_secret_key,
     }
 
 
@@ -218,14 +243,9 @@ def _build_dav(raw: dict, user: str) -> dict:
     """Build the DAV config dict from YAML or defaults."""
     yaml_dav = raw.get("dav", {})
     return {
-        "host": os.environ.get("GENESIS__DAV__HOST")
-        or yaml_dav.get("host", DEFAULT_DAV_HOST),
-        "port": int(
-            os.environ.get("GENESIS__DAV__PORT")
-            or yaml_dav.get("port", DEFAULT_DAV_PORT)
-        ),
+        "host": os.environ.get("GENESIS__DAV__HOST") or yaml_dav.get("host", DEFAULT_DAV_HOST),
+        "port": int(os.environ.get("GENESIS__DAV__PORT") or yaml_dav.get("port", DEFAULT_DAV_PORT)),
         "username": os.environ.get("GENESIS__DAV__USERNAME")
         or yaml_dav.get("username", user),  # Default to extracted user
-        "password": os.environ.get("GENESIS__DAV__PASSWORD")
-        or yaml_dav.get("password", DEFAULT_DAV_PASSWORD),
+        "password": os.environ.get("GENESIS__DAV__PASSWORD") or yaml_dav.get("password", DEFAULT_DAV_PASSWORD),
     }

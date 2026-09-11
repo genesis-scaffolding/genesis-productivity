@@ -62,17 +62,15 @@ run-ui: ui  ## Deprecated alias for `make ui`
 api:  ## Start the FastAPI server for the default user (GENESIS_API_PORT, default 8765)
 	uv run genesis-api
 
-# Run UI and API together. The trap chain mirrors the pattern from
-# genesis-agent-backend/Makefile: outer EXIT trap catches normal exit,
-# the inner INT trap kills the whole process group on Ctrl+C and
-# exits with 130 (the conventional SIGINT code).
+# Run UI and API together. Uses Make's parallel-job mechanism
+# (``-j 2``) so GNU Make itself handles signal propagation: when
+# Ctrl+C arrives at the parent make, it forwards SIGTERM/SIGINT to
+# every child process it spawned and waits for them to exit. This
+# is the same pattern genesis-scaffolding/Makefile uses for its
+# ``dev`` target and avoids any custom trap logic in the recipe.
 serve:  ## Start UI and API together (Ctrl+C to stop both)
 	@echo "Starting UI on $${GENESIS_UI_PORT:-3000} and API on $${GENESIS_API_PORT:-8765} (Ctrl+C to stop both)..."
-	@trap 'kill 0' EXIT; \
-	trap 'kill 0; exit 130' INT; \
-	uv run genesis-api & \
-	uv run genesis-ui & \
-	wait
+	@$(MAKE) -j 2 ui api
 
 # -----------------------------------------------------------------------------
 # Utility

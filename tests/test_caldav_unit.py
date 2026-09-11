@@ -132,9 +132,7 @@ class TestTaskFields:
 
     def test_create_task_with_scheduled_duration(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Meeting", scheduled_start=start, scheduled_duration=45)
-        )
+        task = facade.create_task(TaskCreate(title="Meeting", scheduled_start=start, scheduled_duration=45))
         assert task.scheduled_duration == 45
 
 
@@ -163,9 +161,7 @@ class TestTaskFilters:
     def test_text_search(self, facade: MockCalDAVFacade) -> None:
         """Text search finds tasks by summary or description."""
         facade.create_task(TaskCreate(title="Buy groceries"))
-        facade.create_task(
-            TaskCreate(title="Fix bug", description="Memory leak in parser")
-        )
+        facade.create_task(TaskCreate(title="Fix bug", description="Memory leak in parser"))
 
         results = facade.list_tasks(search="bug")
         assert len(results) == 1
@@ -200,13 +196,9 @@ class TestTaskSorting:
 class TestShadowVEVENT:
     """Tests for the shadow VEVENT pattern (ADR-012 §5)."""
 
-    def test_create_task_with_scheduled_start_creates_shadow(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_create_task_with_scheduled_start_creates_shadow(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
 
         shadow = facade.get_event(task.uid)
         assert shadow is not None
@@ -216,9 +208,7 @@ class TestShadowVEVENT:
         assert shadow.end == start + timedelta(minutes=30)  # default duration
         assert shadow.status == EventStatus.CONFIRMED
 
-    def test_create_task_with_scheduled_duration_uses_it(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_create_task_with_scheduled_duration_uses_it(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
         task = facade.create_task(
             TaskCreate(
@@ -232,35 +222,25 @@ class TestShadowVEVENT:
         assert shadow is not None
         assert shadow.end == start + timedelta(minutes=90)
 
-    def test_create_task_without_scheduled_start_creates_no_shadow(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_create_task_without_scheduled_start_creates_no_shadow(self, facade: MockCalDAVFacade) -> None:
         task = facade.create_task(TaskCreate(title="Plain task"))
         assert facade.get_event(task.uid) is None
 
-    def test_update_task_set_scheduled_start_creates_shadow(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_task_set_scheduled_start_creates_shadow(self, facade: MockCalDAVFacade) -> None:
         task = facade.create_task(TaskCreate(title="No schedule yet"))
         assert facade.get_event(task.uid) is None
 
         start = datetime(2030, 2, 1, 10, 0, tzinfo=UTC)
-        facade.update_task(
-            task.uid, TaskUpdate(scheduled_start=start, scheduled_duration=60)
-        )
+        facade.update_task(task.uid, TaskUpdate(scheduled_start=start, scheduled_duration=60))
 
         shadow = facade.get_event(task.uid)
         assert shadow is not None
         assert shadow.start == start
         assert shadow.end == start + timedelta(minutes=60)
 
-    def test_update_task_clear_scheduled_start_deletes_shadow(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_task_clear_scheduled_start_deletes_shadow(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
         assert facade.get_event(task.uid) is not None
 
         facade.update_task(task.uid, TaskUpdate(clear_scheduled_start=True))
@@ -271,21 +251,15 @@ class TestShadowVEVENT:
 
     def test_delete_task_removes_shadow(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
         assert facade.get_event(task.uid) is not None
 
         facade.delete_task(task.uid)
         assert facade.get_event(task.uid) is None
 
-    def test_update_task_reschedule_updates_shadow(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_task_reschedule_updates_shadow(self, facade: MockCalDAVFacade) -> None:
         first = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=first)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=first))
 
         second = datetime(2030, 1, 2, 14, 0, tzinfo=UTC)
         facade.update_task(task.uid, TaskUpdate(scheduled_start=second))
@@ -294,13 +268,9 @@ class TestShadowVEVENT:
         assert shadow is not None
         assert shadow.start == second
 
-    def test_update_task_summary_propagates_to_shadow(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_task_summary_propagates_to_shadow(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Old name", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Old name", scheduled_start=start))
 
         facade.update_task(task.uid, TaskUpdate(title="New name"))
 
@@ -308,13 +278,9 @@ class TestShadowVEVENT:
         assert shadow is not None
         assert shadow.summary == "New name"
 
-    def test_shadow_event_in_list_events_for_task(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_shadow_event_in_list_events_for_task(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
 
         shadows = facade.list_events(task_id=task.uid)
         assert len(shadows) == 1
@@ -328,18 +294,14 @@ class TestShadowVEVENTProtection:
         from genesis.entities import EventUpdate
 
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
 
         with pytest.raises(ValueError, match="shadow event"):
             facade.update_event(task.uid, EventUpdate(summary="Renamed"))
 
     def test_cannot_delete_shadow_event(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 1, 1, 14, 0, tzinfo=UTC)
-        task = facade.create_task(
-            TaskCreate(title="Standup", scheduled_start=start)
-        )
+        task = facade.create_task(TaskCreate(title="Standup", scheduled_start=start))
 
         with pytest.raises(ValueError, match="shadow event"):
             facade.delete_event(task.uid)
@@ -458,9 +420,7 @@ class TestEventCRUD:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         end = datetime(2030, 3, 1, 10, 0, tzinfo=UTC)
 
-        event = facade.create_event(
-            EventCreate(summary="Coffee", start=start, end=end)
-        )
+        event = facade.create_event(EventCreate(summary="Coffee", start=start, end=end))
 
         assert event.uid is not None
         assert event.summary == "Coffee"
@@ -468,9 +428,7 @@ class TestEventCRUD:
         assert event.end == end
         assert event.status == EventStatus.CONFIRMED  # default
 
-    def test_list_events_excludes_shadows_by_default(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_list_events_excludes_shadows_by_default(self, facade: MockCalDAVFacade) -> None:
         """list_events() with no task_id filter returns all events; shadows
         have task_id set so callers can distinguish them if they care."""
 
@@ -587,9 +545,7 @@ class TestTimeLogCRUD:
         )
 
         completed_at = datetime(2030, 3, 1, 9, 30, tzinfo=UTC)
-        stopped = facade.stop_time_log_entry(
-            entry.uid, actual_due=due, completed_at=completed_at
-        )
+        stopped = facade.stop_time_log_entry(entry.uid, actual_due=due, completed_at=completed_at)
 
         assert stopped is not None
         assert stopped.status == TimeLogStatus.COMPLETED
@@ -598,9 +554,7 @@ class TestTimeLogCRUD:
 
     def test_stop_missing_entry_returns_none(self, facade: MockCalDAVFacade) -> None:
         now = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
-        result = facade.stop_time_log_entry(
-            "nonexistent-uid", actual_due=now, completed_at=now
-        )
+        result = facade.stop_time_log_entry("nonexistent-uid", actual_due=now, completed_at=now)
         assert result is None
 
     def test_list_time_log_filtered_by_task(self, facade: MockCalDAVFacade) -> None:
@@ -651,9 +605,7 @@ class TestNoDeleteOnUpdate:
     dict entry holds the same Task instance after update.
     """
 
-    def test_update_task_preserves_object_identity(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_task_preserves_object_identity(self, facade: MockCalDAVFacade) -> None:
         task = facade.create_task(TaskCreate(title="Original"))
         original_object_id = id(task)
 
@@ -676,9 +628,7 @@ def _stale_then_good_calendar(good_components: list) -> MagicMock:
     components.
     """
     stale = MagicMock()
-    type(stale).icalendar_component = PropertyMock(
-        side_effect=NotFoundError("stale", "404")
-    )
+    type(stale).icalendar_component = PropertyMock(side_effect=NotFoundError("stale", "404"))
 
     good_objs = []
     for comp in good_components:

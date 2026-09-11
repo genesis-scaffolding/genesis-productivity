@@ -91,9 +91,7 @@ class TestJournalFacade:
         assert loaded is not None
         assert loaded.uid == entry.uid
 
-    def test_save_with_no_type_or_title_writes_minimal_frontmatter(
-        self, tmp_path: Path
-    ) -> None:
+    def test_save_with_no_type_or_title_writes_minimal_frontmatter(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         entry = Entry(date=date(2026, 9, 5), content="Just a body\n")
         facade.save_entry(entry)
@@ -134,9 +132,7 @@ class TestJournalFacade:
         facade = JournalFacade(tmp_path)
         facade.save_entry(bad)
         # Tamper with the file to inject a bogus type
-        (tmp_path / f"{bad.uid}.md").write_text(
-            "---\ndate: 2026-09-05\ntype: garbled\n---\n\nbody\n"
-        )
+        (tmp_path / f"{bad.uid}.md").write_text("---\ndate: 2026-09-05\ntype: garbled\n---\n\nbody\n")
         assert facade.get_entry(bad.uid) is None
         assert facade.list_entries() == []
 
@@ -183,9 +179,7 @@ class TestJournalFacade:
         facade.save_entry(c)
         assert len(facade.list_entries()) == 2
 
-    def test_project_and_misc_types_have_no_uniqueness_constraint(
-        self, tmp_path: Path
-    ) -> None:
+    def test_project_and_misc_types_have_no_uniqueness_constraint(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         for i in range(3):
             entry = Entry(
@@ -247,9 +241,7 @@ class TestJournalFacade:
 class TestReferenceDate:
     """Server-side period anchoring for periodic entries."""
 
-    def test_daily_save_stores_reference_date_equal_to_date(
-        self, tmp_path: Path
-    ) -> None:
+    def test_daily_save_stores_reference_date_equal_to_date(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         entry = Entry(date=date(2026, 9, 5), type=EntryType.DAILY, content="x")
         facade.save_entry(entry)
@@ -291,9 +283,7 @@ class TestReferenceDate:
             assert loaded is not None
             assert loaded.reference_date is None
 
-    def test_explicit_reference_date_accepted_when_matches_normalised(
-        self, tmp_path: Path
-    ) -> None:
+    def test_explicit_reference_date_accepted_when_matches_normalised(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         entry = Entry(
             date=date(2026, 9, 5),
@@ -306,9 +296,7 @@ class TestReferenceDate:
         assert loaded is not None
         assert loaded.reference_date == date(2026, 8, 31)
 
-    def test_explicit_reference_date_rejected_when_mismatched(
-        self, tmp_path: Path
-    ) -> None:
+    def test_explicit_reference_date_rejected_when_mismatched(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         entry = Entry(
             date=date(2026, 9, 5),
@@ -319,9 +307,7 @@ class TestReferenceDate:
         with pytest.raises(ValueError, match="does not match"):
             facade.save_entry(entry)
 
-    def test_weekly_uniqueness_blocks_second_save_in_same_week(
-        self, tmp_path: Path
-    ) -> None:
+    def test_weekly_uniqueness_blocks_second_save_in_same_week(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         a = Entry(date=date(2026, 9, 5), type=EntryType.WEEKLY, content="a")
         facade.save_entry(a)
@@ -340,9 +326,7 @@ class TestReferenceDate:
         facade.save_entry(b)
         assert len(facade.list_entries()) == 2
 
-    def test_monthly_uniqueness_blocks_second_save_in_same_month(
-        self, tmp_path: Path
-    ) -> None:
+    def test_monthly_uniqueness_blocks_second_save_in_same_month(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         a = Entry(date=date(2026, 9, 5), type=EntryType.MONTHLY, content="a")
         facade.save_entry(a)
@@ -358,9 +342,7 @@ class TestReferenceDate:
         facade.save_entry(b)
         assert len(facade.list_entries()) == 2
 
-    def test_yearly_uniqueness_blocks_second_save_in_same_year(
-        self, tmp_path: Path
-    ) -> None:
+    def test_yearly_uniqueness_blocks_second_save_in_same_year(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         a = Entry(date=date(2026, 1, 5), type=EntryType.YEARLY, content="a")
         facade.save_entry(a)
@@ -427,9 +409,7 @@ class TestReferenceDate:
         assert loaded is not None
         assert loaded.reference_date == date(2026, 9, 5)
 
-    def test_legacy_periodic_defaults_reference_date_to_none(
-        self, tmp_path: Path
-    ) -> None:
+    def test_legacy_periodic_defaults_reference_date_to_none(self, tmp_path: Path) -> None:
         path = tmp_path / "j-legacy02.md"
         path.write_text("---\ndate: 2026-09-05\ntype: weekly\n---\n\nbody\n")
         facade = JournalFacade(tmp_path)
@@ -437,19 +417,11 @@ class TestReferenceDate:
         assert loaded is not None
         assert loaded.reference_date is None
 
-    def test_repair_reference_dates_populates_periodic_entries(
-        self, tmp_path: Path
-    ) -> None:
+    def test_repair_reference_dates_populates_periodic_entries(self, tmp_path: Path) -> None:
         # Legacy periodic files without ``reference-date``.
-        (tmp_path / "j-legacy01.md").write_text(
-            "---\ndate: 2026-09-05\ntype: weekly\n---\n\nweekly body\n"
-        )
-        (tmp_path / "j-legacy02.md").write_text(
-            "---\ndate: 2026-09-15\ntype: monthly\n---\n\nmonthly body\n"
-        )
-        (tmp_path / "j-legacy03.md").write_text(
-            "---\ndate: 2026-09-15\ntype: yearly\n---\n\nyearly body\n"
-        )
+        (tmp_path / "j-legacy01.md").write_text("---\ndate: 2026-09-05\ntype: weekly\n---\n\nweekly body\n")
+        (tmp_path / "j-legacy02.md").write_text("---\ndate: 2026-09-15\ntype: monthly\n---\n\nmonthly body\n")
+        (tmp_path / "j-legacy03.md").write_text("---\ndate: 2026-09-15\ntype: yearly\n---\n\nyearly body\n")
         facade = JournalFacade(tmp_path)
         report = facade.repair_reference_dates()
         assert report.repaired == 3
@@ -465,9 +437,7 @@ class TestReferenceDate:
         assert loaded.reference_date == date(2026, 1, 1)
 
     def test_repair_reference_dates_is_idempotent(self, tmp_path: Path) -> None:
-        (tmp_path / "j-legacy01.md").write_text(
-            "---\ndate: 2026-09-05\ntype: weekly\n---\n\nbody\n"
-        )
+        (tmp_path / "j-legacy01.md").write_text("---\ndate: 2026-09-05\ntype: weekly\n---\n\nbody\n")
         facade = JournalFacade(tmp_path)
         first = facade.repair_reference_dates()
         second = facade.repair_reference_dates()
@@ -477,12 +447,8 @@ class TestReferenceDate:
     def test_repair_reference_dates_reports_collisions(self, tmp_path: Path) -> None:
         # Two legacy weeklies filed under different days of the same
         # ISO week collide once ``reference-date`` is populated.
-        (tmp_path / "j-legacy01.md").write_text(
-            "---\ndate: 2026-09-05\ntype: weekly\n---\n\nfirst\n"
-        )
-        (tmp_path / "j-legacy02.md").write_text(
-            "---\ndate: 2026-09-06\ntype: weekly\n---\n\nsecond\n"
-        )
+        (tmp_path / "j-legacy01.md").write_text("---\ndate: 2026-09-05\ntype: weekly\n---\n\nfirst\n")
+        (tmp_path / "j-legacy02.md").write_text("---\ndate: 2026-09-06\ntype: weekly\n---\n\nsecond\n")
         facade = JournalFacade(tmp_path)
         report = facade.repair_reference_dates()
         # First one wins, second is reported as a failure.

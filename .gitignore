@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Agent tooling state
+.agents/
+.pi/

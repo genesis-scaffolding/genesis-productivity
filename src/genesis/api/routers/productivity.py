@@ -355,6 +355,8 @@ def list_tasks(
     hard_deadline_end: Annotated[datetime | None, Query()] = None,
     scheduled_start_start: Annotated[datetime | None, Query()] = None,
     scheduled_start_end: Annotated[datetime | None, Query()] = None,
+    completed_at_start: Annotated[datetime | None, Query()] = None,
+    completed_at_end: Annotated[datetime | None, Query()] = None,
     sort_by: Annotated[list[str] | None, Query()] = None,
     order: Annotated[str, Query()] = "asc",
     offset: Annotated[int | None, Query()] = None,
@@ -367,6 +369,8 @@ def list_tasks(
             status=wire_to_task_status(task_status) if task_status is not None else None,
             start=_to_caldav_datetime(assigned_date_start or hard_deadline_start or scheduled_start_start),
             end=_to_caldav_datetime(assigned_date_end or hard_deadline_end or scheduled_start_end),
+            completed_at_start=completed_at_start,
+            completed_at_end=completed_at_end,
             sort_by=_task_sort_field(sort_by),
             sort_order=order,
         )

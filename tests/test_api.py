@@ -380,6 +380,200 @@ def test_list_tasks_with_datetime_deadline_filter_does_not_500(
     assert body["items"][0]["title"] == "Ship the thing"
 
 
+def test_list_tasks_passes_completed_at_params_to_facade(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The new ``completed_at_start`` / ``completed_at_end`` query
+    params must reach the CalDAV facade as tz-aware ``datetime``
+    objects. Mirrors the existing date-query-param regression test
+    in style.
+    """
+    from datetime import datetime as _datetime
+
+    from genesis.api.app import app as _app
+    from genesis.api.routers import productivity as _router
+    from genesis.users.store import UserStore
+
+    captured: list[dict] = []
+
+    class _SpyCalDAV:
+        def list_tasks(self, **kwargs: object) -> list[object]:
+            captured.append(kwargs)
+            return []
+
+    class _SpyFacade:
+        def __init__(self) -> None:
+            self.caldav = _SpyCalDAV()
+
+        def shutdown(self) -> None:
+            pass
+
+    users_path = tmp_path / "users.yaml"
+    UserStore(users_path).add("default", "test-pw")
+    monkeypatch.setattr("genesis.users.store._default_store", UserStore(users_path))
+    monkeypatch.setattr(_router, "_facade", lambda subject: _SpyFacade())
+
+    with TestClient(_app) as client:
+        token = client.post(
+            "/auth/login",
+            data={
+                "username": "default",
+                "password": "test-pw",
+                "grant_type": "password",
+            },
+        ).json()["access_token"]
+
+        resp = client.get(
+            "/productivity/tasks"
+            "?completed_at_start=2026-03-01T00:00:00.000Z"
+            "&completed_at_end=2026-04-01T00:00:00.000Z",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    call = captured[0]
+    assert isinstance(call["completed_at_start"], _datetime)
+    assert isinstance(call["completed_at_end"], _datetime)
+    assert call["completed_at_start"].tzinfo is not None
+    assert call["completed_at_end"].tzinfo is not None
+
+
+def test_list_tasks_filters_by_completed_at_range(
+    api_server_with_mock: tuple[TestClient, MockCalDAVFacade],
+) -> None:
+    """End-to-end through the router: ``completed_at_start`` /
+    ``completed_at_end`` filter to tasks with ``completed_at`` in
+    window. Two in window, one outside, one uncompleted; only the
+    two in window come back.
+    """
+    from datetime import UTC, datetime
+
+    from genesis.entities import Task, TaskCreate, TaskStatus
+
+    client, mock = api_server_with_mock
+    token = _login(client)
+    headers = _auth(token)
+
+    def _seed(title: str, status: TaskStatus, completed_at: datetime | None) -> str:
+        created = mock.create_task(TaskCreate(title=title))
+        completed = Task(
+            uid=created.uid,
+            title=title,
+            status=status,
+            completed_at=completed_at,
+            created=created.created,
+            modified=created.modified,
+        )
+        mock._tasks[created.uid] = completed
+        return created.uid
+
+    in_one = _seed(
+        "in-one",
+        TaskStatus.COMPLETED,
+        datetime(2026, 3, 10, 9, 0, tzinfo=UTC),
+    )
+    in_two = _seed(
+        "in-two",
+        TaskStatus.COMPLETED,
+        datetime(2026, 3, 20, 14, 30, tzinfo=UTC),
+    )
+    _seed(
+        "out",
+        TaskStatus.COMPLETED,
+        datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
+    )
+    _seed(
+        "uncompleted",
+        TaskStatus.NEEDS_ACTION,
+        None,
+    )
+
+    resp = client.get(
+        "/productivity/tasks"
+        "?completed_at_start=2026-03-01T00:00:00.000Z"
+        "&completed_at_end=2026-04-01T00:00:00.000Z",
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    uids = {item["uid"] for item in body["items"]}
+    assert uids == {in_one, in_two}
+    assert body["total"] == 2
+
+
+def test_list_tasks_rejects_malformed_completed_at_param(
+    api_server: TestClient,
+) -> None:
+    """Bad input is rejected at the API edge with 422, not passed
+    through to crash the facade.
+    """
+    token = _login(api_server)
+    resp = api_server.get(
+        "/productivity/tasks?completed_at_start=not-a-date",
+        headers=_auth(token),
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.integration
+def test_list_tasks_filters_by_completed_at_round_trip(
+    api_server_real: TestClient,
+) -> None:
+    """End-to-end against real Radicale: PATCH to COMPLETED writes
+    the iCal COMPLETED property, and the new query params round-trip
+    it back through the facade's filter.
+    """
+
+    token = _login(api_server_real)
+    headers = _auth(token)
+
+    def _create_and_complete(title: str) -> str:
+        task = api_server_real.post(
+            "/productivity/tasks",
+            json={"title": title},
+            headers=headers,
+        ).json()
+        # Stamp a known completed_at via the PATCH path by going
+        # through update_task, then sleep-free backdating is not
+        # possible from the wire. Use the wire "now" value the
+        # server writes and query around it.
+        api_server_real.patch(
+            f"/productivity/tasks/{task['uid']}",
+            json={"status": "completed"},
+            headers=headers,
+        )
+        return task["uid"]
+
+    in_uid = _create_and_complete("in")
+    # The completion happens at wall-clock now; query a window that
+    # surrounds it. We can't pick a deterministic date without a
+    # wire-side override, so use a very wide window.
+    resp = api_server_real.get(
+        "/productivity/tasks"
+        "?status=completed"
+        "&completed_at_start=2020-01-01T00:00:00.000Z"
+        "&completed_at_end=2099-01-01T00:00:00.000Z",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    uids = {item["uid"] for item in body["items"]}
+    assert in_uid in uids
+
+    # And a window that excludes "now" returns no rows for this task.
+    resp_empty = api_server_real.get(
+        "/productivity/tasks"
+        "?completed_at_start=1970-01-01T00:00:00.000Z"
+        "&completed_at_end=1970-01-02T00:00:00.000Z",
+        headers=headers,
+    )
+    assert resp_empty.status_code == 200
+    assert all(item["uid"] != in_uid for item in resp_empty.json()["items"])
+
+
 # ---------------------------------------------------------------------------
 # Journals
 # ---------------------------------------------------------------------------

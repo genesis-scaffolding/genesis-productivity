@@ -97,12 +97,19 @@ class TimeLogEntry(BaseModel):
 
 
 class TimeLogEntryCreate(BaseModel):
-    """Data for creating a new time log entry (typically a new session)."""
+    """Data for creating a new time log entry (typically a new session).
+
+    ``completed_at`` defaults to None; callers that want a session
+    that is already finished on creation (retrospective logging, where
+    the user records a session after the fact) set it to the session
+    end time alongside ``status=COMPLETED``.
+    """
 
     label: str
     start: datetime
     mode: TimeLogMode
     due: datetime | None = None
+    completed_at: datetime | None = None
     status: TimeLogStatus = TimeLogStatus.NEEDS_ACTION
     task_id: str | None = None
     category: TimeLogCategory = TimeLogCategory.OTHER
@@ -110,7 +117,7 @@ class TimeLogEntryCreate(BaseModel):
 
     model_config = {"extra": "ignore"}
 
-    @field_validator("start", "due", mode="before")
+    @field_validator("start", "due", "completed_at", mode="before")
     @classmethod
     def _utc_field(cls, v: object) -> object:
         if isinstance(v, datetime):

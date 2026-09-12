@@ -29,6 +29,7 @@ import streamlit as st
 from genesis.category.enums import TimeLogCategory
 from genesis.stats import Period, compute_rollup
 from genesis.tz import format_local
+from genesis.ui._render import session_log_dialog
 from genesis.ui._state import get_facade
 
 facade = get_facade()
@@ -215,6 +216,13 @@ st.subheader("Recent sessions")
 st.caption(
     f"Up to {rollup.recent.__len__()} most recent completed sessions within {period_label.lower()}, newest first."
 )
+
+if st.button(
+    "+ Log past session",
+    key="stats_log_past_btn",
+    help="Record a session you forgot to log.",
+):
+    session_log_dialog()
 
 if not rollup.recent:
     st.info("No completed sessions in this period.")

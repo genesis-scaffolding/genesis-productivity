@@ -11,12 +11,19 @@ cleanly.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Any
 
 import streamlit as st
 
+from genesis.category.enums import TimeLogCategory
+from genesis.entities import (
+    Task,
+    TimeLogEntryCreate,
+    TimeLogMode,
+    TimeLogStatus,
+)
 from genesis.tz import to_utc
 from genesis.ui._state import get_facade
 
@@ -374,4 +381,117 @@ def delete_confirm_dialog(label: str, callback: Callable[[], Any]) -> None:
         callback()
         st.rerun()
     if cols[1].button("Cancel", key=f"delcn_{label}"):
+        st.rerun()
+
+
+# -----------------------------------------------------------------------------
+# Time log dialogs
+# -----------------------------------------------------------------------------
+
+
+def build_retrospective_entry(
+    *,
+    label: str,
+    category: TimeLogCategory,
+    start: datetime,
+    duration_minutes: int,
+    task: Task | None,
+) -> TimeLogEntryCreate:
+    """Build a TimeLogEntryCreate for a session logged after the fact.
+
+    The session is recorded as already ``COMPLETED``: ``due`` and
+    ``completed_at`` are both ``start + duration``. ``mode`` is
+    ``COUNTDOWN`` because the user is specifying a bounded target
+    duration, mirroring how the focus page writes auto-stopped
+    countdown sessions. ``task_id`` is set only when a task is
+    aligned; unaligned entries carry no task link.
+    """
+    start_utc = to_utc(start)
+    end_utc = start_utc + timedelta(minutes=duration_minutes)
+    return TimeLogEntryCreate(
+        label=label,
+        start=start_utc,
+        due=end_utc,
+        completed_at=end_utc,
+        status=TimeLogStatus.COMPLETED,
+        mode=TimeLogMode.COUNTDOWN,
+        task_id=task.uid if task is not None else None,
+        category=category,
+    )
+
+
+@st.dialog("Log past session", width="large", on_dismiss="rerun")
+def session_log_dialog() -> None:
+    """Open the retrospective-log dialog. Call from a button body.
+
+    For when the user forgot to start a timer or the system was
+    unavailable. The submitted session is written directly as
+    ``COMPLETED`` so it shows up in the Statistics rollups without
+    needing a stop action.
+    """
+    facade = get_facade()
+    caldav = facade.caldav
+
+    label = st.text_input(
+        "Session label",
+        key="_spl_label",
+        placeholder="What did you do?",
+    )
+
+    tasks = caldav.list_tasks()
+    task_options: list[Task | None] = [None, *tasks]
+    task_labels = ["(unaligned)"] + [t.title for t in tasks]
+    selected_task_label = st.selectbox(
+        "Linked task",
+        task_labels,
+        index=0,
+        key="_spl_task",
+        help="Pick a task to count this session against it, or leave unaligned.",
+    )
+    selected_task = task_options[task_labels.index(selected_task_label)]
+
+    time_cols = st.columns(2)
+    with time_cols[0]:
+        start_dt = st.datetime_input(
+            "Starting time",
+            key="_spl_start",
+            value=datetime.now(),
+        )
+    with time_cols[1]:
+        duration = st.number_input(
+            "Duration (minutes)",
+            min_value=1,
+            max_value=1440,
+            value=25,
+            key="_spl_dur",
+            help="How long the session lasted.",
+        )
+
+    category_options = [c.value for c in TimeLogCategory]
+    category_label = st.selectbox(
+        "Category",
+        category_options,
+        index=category_options.index(TimeLogCategory.WORK.value),
+        key="_spl_cat",
+        format_func=lambda v: v.capitalize(),
+    )
+
+    st.divider()
+    action_cols = st.columns([1, 1, 6])
+    if action_cols[0].button("Log", type="primary", key="_spl_save"):
+        label_clean = (label or "").strip()
+        if not label_clean:
+            st.error("Session label is required")
+            return
+        entry = build_retrospective_entry(
+            label=label_clean,
+            category=TimeLogCategory(category_label),
+            start=start_dt,
+            duration_minutes=int(duration),
+            task=selected_task,
+        )
+        facade.caldav.create_time_log_entry(entry)
+        st.toast(f"Logged: {label_clean}")
+        st.rerun()
+    if action_cols[1].button("Cancel", key="_spl_cancel"):
         st.rerun()

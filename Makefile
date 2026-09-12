@@ -55,7 +55,7 @@ run-cli:  ## Run the CLI app
 	uv run genesis
 
 ui:  ## Start the Streamlit UI for the default user
-	uv run streamlit run src/genesis/ui/app.py --server.address $${GENESIS_UI_HOST:-0.0.0.0} --server.port $${GENESIS_UI_PORT:-3000} --server.headless true
+	uv run streamlit run src/genesis/ui/asgi_app.py --server.address $${GENESIS_UI_HOST:-0.0.0.0} --server.port $${GENESIS_UI_PORT:-3000} --server.headless true
 
 run-ui: ui  ## Deprecated alias for `make ui`
 

@@ -45,8 +45,12 @@ nav: dict[str, list[st.Page]] = {
     ],
 }
 
-from genesis.ui._auth import render_logout_button  # noqa: E402
+from genesis.ui._auth import rehydrate_session, render_logout_button  # noqa: E402
 
+# Restore session_state from the signed session cookie before any
+# gate check, so a returning browser (e.g. phone just woken from
+# sleep) lands on the app instead of the login form. ADR-021.
+rehydrate_session()
 render_logout_button()
 
 st.navigation(nav).run()

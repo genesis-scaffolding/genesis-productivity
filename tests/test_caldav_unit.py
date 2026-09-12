@@ -627,6 +627,33 @@ class TestTimeLogCRUD:
         assert entry.due is None
         assert entry.mode == TimeLogMode.COUNTUP
 
+    def test_create_completed_entry_sets_completed_at(self, facade: MockCalDAVFacade) -> None:
+        """Retrospective entries round-trip completed_at through create."""
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        end = datetime(2030, 3, 1, 9, 30, tzinfo=UTC)
+        task = facade.create_task(TaskCreate(title="Side project"))
+
+        entry = facade.create_time_log_entry(
+            TimeLogEntryCreate(
+                label="Morning push",
+                start=start,
+                due=end,
+                completed_at=end,
+                status=TimeLogStatus.COMPLETED,
+                mode=TimeLogMode.COUNTDOWN,
+                task_id=task.uid,
+            )
+        )
+
+        assert entry.completed_at == end
+        assert entry.due == end
+        assert entry.status == TimeLogStatus.COMPLETED
+        assert entry.task_id == task.uid
+
+        # Listed by default since it's completed; appears in stats rollups.
+        completed = facade.list_time_log()
+        assert any(e.uid == entry.uid for e in completed)
+
     def test_active_only_excludes_completed(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)

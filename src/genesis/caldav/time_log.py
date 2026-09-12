@@ -63,14 +63,19 @@ def _get_calendar(facade: CalDAVFacade):
 
 
 def create_time_log_entry(facade: CalDAVFacade, data: TimeLogEntryCreate) -> TimeLogEntry:
-    """Create a new time log entry (typically a new focus session)."""
+    """Create a new time log entry (typically a new focus session).
+
+    ``completed_at`` is taken from ``data`` (defaulting to None for
+    active sessions) so retrospective-log callers can submit a
+    session that is already finished.
+    """
     now = now_utc()
     entry = TimeLogEntry(
         uid=new_uid("l"),
         label=data.label,
         start=data.start,
         due=data.due,
-        completed_at=None,
+        completed_at=data.completed_at,
         status=data.status,
         mode=data.mode,
         task_id=data.task_id,

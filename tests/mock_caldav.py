@@ -321,7 +321,7 @@ class MockCalDAVFacade:
             label=data.label,
             start=data.start,
             due=data.due,
-            completed_at=None,
+            completed_at=data.completed_at,
             status=data.status,
             mode=data.mode,
             task_id=data.task_id,

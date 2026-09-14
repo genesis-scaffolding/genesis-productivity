@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import streamlit as st
 
-from genesis.entities import TaskStatus
 from genesis.ui._render import task_create_dialog
 from genesis.ui._state import get_facade
-from genesis.ui._table import render_tasks_table
+from genesis.ui._table import render_filterable_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
@@ -26,25 +25,10 @@ if st.button("+ Add Task", key="global_add_task_btn"):
 
 st.divider()
 
-# --- Filter chips -----------------------------------------------------------
-
-statuses_all = [s.value for s in TaskStatus]
-active_statuses = st.session_state.get("tasks_filter_statuses", list(statuses_all))
-active_statuses = st.pills(
-    "Status",
-    options=statuses_all,
-    default=active_statuses,
-    selection_mode="multi",
-    key="tasks_filter_statuses",
-)
-
-st.write("")
-
-# --- Render table -----------------------------------------------------------
-
 tasks = caldav.list_tasks()
-if active_statuses:
-    selected = {TaskStatus(v) for v in active_statuses}
-    tasks = [t for t in tasks if t.status in selected]
-
-render_tasks_table(tasks, caldav=caldav, key="global_tasks")
+render_filterable_tasks_table(
+    tasks,
+    caldav=caldav,
+    key="global_tasks",
+    filter_key="tasks_filter_statuses",
+)

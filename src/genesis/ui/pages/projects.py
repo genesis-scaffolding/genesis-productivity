@@ -51,6 +51,8 @@ def _render_list() -> None:
         ProjectStatus.CANCELED: "Canceled",
     }
 
+    TERMINAL_STATUSES = (ProjectStatus.COMPLETED, ProjectStatus.CANCELED)
+
     for status in [
         ProjectStatus.IN_PROGRESS,
         ProjectStatus.NEEDS_ACTION,
@@ -60,32 +62,41 @@ def _render_list() -> None:
         items = groups.get(status, [])
         if not items:
             continue
-        st.subheader(f"{SECTION_LABELS[status]} ({len(items)})")
-        PER_ROW = 3
-        for row_start in range(0, len(items), PER_ROW):
-            row = items[row_start : row_start + PER_ROW]
-            cols = st.columns(PER_ROW, gap="medium")
-            for col, project in zip(cols, row, strict=False):
-                with col:
-                    with st.container(border=True):
-                        st.markdown(f"### {project.name}")
-                        if project.description:
-                            st.caption(project.description[:160])
-                        status_badge(project.status)
-                        if project.deadline:
-                            st.caption(f"Deadline: {project.deadline}")
-                        btn_cols = st.columns(2)
-                        with btn_cols[0]:
-                            if st.button("Open", key=f"proj_open_{project.uid}"):
-                                st.query_params["project"] = project.uid
-                                st.rerun()
-                        with btn_cols[1]:
-                            if st.button("Delete", key=f"proj_del_{project.uid}"):
-                                delete_confirm_dialog(
-                                    f"project '{project.name}'",
-                                    lambda uid=project.uid: caldav.delete_project(uid),
-                                )
+        label = f"{SECTION_LABELS[status]} ({len(items)})"
+        if status in TERMINAL_STATUSES:
+            with st.expander(label, expanded=False):
+                _render_card_grid(items)
+        else:
+            st.subheader(label)
+            _render_card_grid(items)
         st.write("")
+
+
+def _render_card_grid(items: list) -> None:
+    PER_ROW = 3
+    for row_start in range(0, len(items), PER_ROW):
+        row = items[row_start : row_start + PER_ROW]
+        cols = st.columns(PER_ROW, gap="medium")
+        for col, project in zip(cols, row, strict=False):
+            with col:
+                with st.container(border=True):
+                    st.markdown(f"### {project.name}")
+                    if project.description:
+                        st.caption(project.description[:160])
+                    status_badge(project.status)
+                    if project.deadline:
+                        st.caption(f"Deadline: {project.deadline}")
+                    btn_cols = st.columns(2)
+                    with btn_cols[0]:
+                        if st.button("Open", key=f"proj_open_{project.uid}"):
+                            st.query_params["project"] = project.uid
+                            st.rerun()
+                    with btn_cols[1]:
+                        if st.button("Delete", key=f"proj_del_{project.uid}"):
+                            delete_confirm_dialog(
+                                f"project '{project.name}'",
+                                lambda uid=project.uid: caldav.delete_project(uid),
+                            )
 
 
 # -----------------------------------------------------------------------------

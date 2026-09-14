@@ -180,6 +180,10 @@ def task_edit_dialog(uid: str) -> None:
     project_labels = ["(none)"] + [name for _, name in project_options]
     project_uids: list[str | None] = [None] + [uid for _, uid in project_options]
     cur_idx = project_uids.index(task.project_id) if task.project_id in project_uids else 0
+    # Reset the project dropdown so index=cur_idx re-applies on each open;
+    # otherwise a stale "(none)" left over from a prior open silently unlinks
+    # the task on Save.
+    st.session_state.pop(f"{kp}_proj", None)
 
     title = st.text_input("Title", value=task.title, key=f"{kp}_title")
     description = st.text_area(

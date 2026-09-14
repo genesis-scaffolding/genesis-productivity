@@ -101,6 +101,19 @@ class TestTaskCRUD:
         assert updated.status == TaskStatus.COMPLETED
         assert updated.completed_at is not None
 
+    def test_update_task_preserves_project_id_when_not_changed(
+        self, facade: MockCalDAVFacade
+    ) -> None:
+        """An update with no project fields must leave project_id alone."""
+        project = facade.create_project(ProjectCreate(name="Work"))
+        task = facade.create_task(
+            TaskCreate(title="Linked", project_id=project.uid)
+        )
+        # Edit only the title; do not touch project_id or clear_project_id.
+        updated = facade.update_task(task.uid, TaskUpdate(title="Renamed"))
+        assert updated is not None
+        assert updated.project_id == project.uid
+
     def test_update_task_clears_completed_at(self, facade: MockCalDAVFacade) -> None:
         """Reopening a completed task clears completed_at."""
         task = facade.create_task(TaskCreate(title="To complete"))

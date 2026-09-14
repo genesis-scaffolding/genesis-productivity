@@ -22,6 +22,46 @@ if TYPE_CHECKING:
     from genesis.caldav import CalDAVFacade
 
 
+def render_filterable_tasks_table(
+    tasks: list[Task],
+    *,
+    caldav: CalDAVFacade,
+    key: str,
+    show_project_column: bool = True,
+    filter_key: str | None = None,
+    default_statuses: list[TaskStatus] | None = None,
+) -> None:
+    """Render status filter pills above a tasks table.
+
+    When ``filter_key`` is None, render the table only (no pills).
+    When set, render the pills first and filter ``tasks`` to the
+    selected statuses before passing to ``render_tasks_table``.
+    ``default_statuses`` seeds the initial pill selection (defaults
+    to all statuses when None).
+    """
+    statuses_all = [s.value for s in TaskStatus]
+    default = [s.value for s in (default_statuses or TaskStatus)]
+    if filter_key is not None:
+        active_statuses = st.session_state.get(filter_key, default)
+        active_statuses = st.pills(
+            "Status",
+            options=statuses_all,
+            default=active_statuses,
+            selection_mode="multi",
+            key=filter_key,
+        )
+        st.write("")
+        if active_statuses:
+            selected = {TaskStatus(v) for v in active_statuses}
+            tasks = [t for t in tasks if t.status in selected]
+    render_tasks_table(
+        tasks,
+        caldav=caldav,
+        key=key,
+        show_project_column=show_project_column,
+    )
+
+
 def render_tasks_table(
     tasks: list[Task],
     *,

@@ -21,7 +21,7 @@ from genesis.ui._render import (
     task_create_dialog,
 )
 from genesis.ui._state import get_facade
-from genesis.ui._table import render_tasks_table
+from genesis.ui._table import render_filterable_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
@@ -167,11 +167,12 @@ def _render_detail(uid: str) -> None:
         task_create_dialog(project_id=uid)
 
     sorted_tasks = sorted(tasks, key=lambda t: (t.status.value, -(t.priority or 5)))
-    render_tasks_table(
+    render_filterable_tasks_table(
         sorted_tasks,
         caldav=caldav,
         key=f"project_tasks_{uid}",
         show_project_column=False,
+        filter_key=f"pd_filter_statuses_{uid}",
     )
 
 

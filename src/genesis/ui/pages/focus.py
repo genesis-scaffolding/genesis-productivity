@@ -193,7 +193,7 @@ def _render_active_sessions() -> None:
                 completed_at=now,
                 category=category,
             )
-            st.toast(f"Auto-stopped: {s.label} ({category.value})")
+            st.toast(f"Auto-stopped: {s.label} ({category.value})", duration="long")
             st.rerun(scope="app")
             return  # st.rerun() aborts; let next tick handle the rest
 
@@ -279,12 +279,12 @@ def _render_session_card(s, now: datetime) -> None:
                     completed_at=now,
                     category=category,
                 )
-                st.toast(f"Stopped: {s.label} ({category.value})")
+                st.toast(f"Stopped: {s.label} ({category.value})", duration="long")
                 st.rerun(scope="app")
         with btn_cols[1]:
             if st.button("Discard", key=f"focus_discard_{s.uid}"):
                 caldav.delete_time_log_entry(s.uid)
-                st.toast(f"Discarded: {s.label}")
+                st.toast(f"Discarded: {s.label}", duration="long")
                 st.rerun(scope="app")
 
 

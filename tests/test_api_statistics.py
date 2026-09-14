@@ -104,7 +104,10 @@ def test_statistics_with_one_completed_session(
     headers = _auth(token)
 
     task = mock.create_task(TaskCreate(title="Write spec"))
-    start = datetime(2026, 9, 7, 10, 0, tzinfo=UTC)
+    # Pin start to today so the session falls in the "this-week" window
+    # regardless of when the test runs (a hardcoded date would drift
+    # out of the window over time).
+    start = datetime.now(UTC).replace(hour=10, minute=0, second=0, microsecond=0)
     _seed_session(
         mock,
         label="Write spec",

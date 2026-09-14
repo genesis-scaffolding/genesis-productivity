@@ -24,7 +24,7 @@ import streamlit as st
 from genesis.caldav.ical import now_utc
 from genesis.category.enums import TimeLogCategory
 from genesis.category.facade import CategoryFacade
-from genesis.entities import Task, TimeLogEntryCreate, TimeLogMode, TimeLogStatus
+from genesis.entities import Task, TaskStatus, TimeLogEntryCreate, TimeLogMode, TimeLogStatus
 from genesis.ui._state import get_facade
 
 facade = get_facade()
@@ -97,7 +97,15 @@ def _start_session(
 
 
 def _render_start_form() -> None:
-    tasks = caldav.list_tasks(status=st.session_state.get("focus_task_status_filter"))
+    # Client-side filter: list_tasks takes a single status, so pull all and
+    # filter here. The candidate set is small for personal use.
+    if "focus_task_status_filter" not in st.session_state:
+        st.session_state["focus_task_status_filter"] = [
+            TaskStatus.NEEDS_ACTION,
+            TaskStatus.IN_PROGRESS,
+        ]
+    status_filter = st.session_state["focus_task_status_filter"]
+    tasks = [t for t in caldav.list_tasks() if t.status in status_filter]
 
     task_options: list[Task | None] = [None, *tasks]
     task_labels = ["(unaligned)"] + [t.title for t in tasks]

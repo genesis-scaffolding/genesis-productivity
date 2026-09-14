@@ -173,6 +173,7 @@ def _render_detail(uid: str) -> None:
         key=f"project_tasks_{uid}",
         show_project_column=False,
         filter_key=f"pd_filter_statuses_{uid}",
+        default_statuses=[TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS],
     )
 
 

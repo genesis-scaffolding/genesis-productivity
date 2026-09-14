@@ -13,7 +13,14 @@ from typing import TYPE_CHECKING
 
 from caldav.lib.error import NotFoundError
 
-from ..entities import Project, ProjectCreate, ProjectStatus, ProjectUpdate
+from ..entities import (
+    Project,
+    ProjectCreate,
+    ProjectStatus,
+    ProjectUpdate,
+    TaskStatus,
+    TaskUpdate,
+)
 from .ical import new_uid, now_utc, project_from_ical, project_to_ical
 
 if TYPE_CHECKING:
@@ -141,6 +148,10 @@ def update_project(facade: CalDAVFacade, uid: str, data: ProjectUpdate) -> Proje
     Loads the project, mutates the icalendar component in place, and
     saves. Does NOT delete-then-recreate; the caldav library handles
     ETag negotiation on save.
+
+    Transitions to CANCELED or COMPLETED cascade to every open task on
+    the project via update_task, which already sets completed_at on the
+    COMPLETED branch.
     """
     try:
         obj = _get_calendar(facade).object_by_uid(uid)
@@ -162,6 +173,15 @@ def update_project(facade: CalDAVFacade, uid: str, data: ProjectUpdate) -> Proje
 
     _populate(obj.icalendar_component, project)
     obj.save()
+
+    if update_data.get("status") in (ProjectStatus.CANCELED, ProjectStatus.COMPLETED):
+        from . import tasks as _tasks
+
+        cascade_status = update_data["status"]
+        for task in _tasks.list_tasks(facade, project_id=uid):
+            if task.status in (TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS):
+                _tasks.update_task(facade, task.uid, TaskUpdate(status=cascade_status))
+
     return project
 
 

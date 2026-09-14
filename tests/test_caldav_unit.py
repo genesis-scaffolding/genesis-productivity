@@ -502,6 +502,84 @@ class TestProjectCRUD:
         assert updated is not None
         assert updated.name == "Updated"
 
+    def test_update_project_to_canceled_cascades_to_open_tasks(
+        self, facade: MockCalDAVFacade
+    ) -> None:
+        project = facade.create_project(ProjectCreate(name="Doomed"))
+        needs_action = facade.create_task(TaskCreate(title="todo", project_id=project.uid))
+        facade.update_task(needs_action.uid, TaskUpdate(status=TaskStatus.IN_PROGRESS))
+        in_progress = facade.get_task(needs_action.uid)
+        assert in_progress is not None and in_progress.status == TaskStatus.IN_PROGRESS
+
+        needs_action2 = facade.create_task(TaskCreate(title="todo2", project_id=project.uid))
+        assert needs_action2.status == TaskStatus.NEEDS_ACTION
+
+        facade.update_project(project.uid, ProjectUpdate(status=ProjectStatus.CANCELED))
+
+        after_a = facade.get_task(needs_action.uid)
+        after_b = facade.get_task(needs_action2.uid)
+        assert after_a is not None and after_a.status == TaskStatus.CANCELED
+        assert after_b is not None and after_b.status == TaskStatus.CANCELED
+
+    def test_update_project_to_completed_cascades_to_open_tasks(
+        self, facade: MockCalDAVFacade
+    ) -> None:
+        project = facade.create_project(ProjectCreate(name="Shipping"))
+        needs_action = facade.create_task(TaskCreate(title="todo", project_id=project.uid))
+        facade.update_task(needs_action.uid, TaskUpdate(status=TaskStatus.IN_PROGRESS))
+        in_progress = facade.get_task(needs_action.uid)
+        assert in_progress is not None and in_progress.status == TaskStatus.IN_PROGRESS
+
+        needs_action2 = facade.create_task(TaskCreate(title="todo2", project_id=project.uid))
+
+        facade.update_project(project.uid, ProjectUpdate(status=ProjectStatus.COMPLETED))
+
+        after_a = facade.get_task(needs_action.uid)
+        after_b = facade.get_task(needs_action2.uid)
+        assert after_a is not None and after_a.status == TaskStatus.COMPLETED
+        assert after_b is not None and after_b.status == TaskStatus.COMPLETED
+        assert after_a.completed_at is not None
+        assert after_b.completed_at is not None
+
+    def test_update_project_terminal_leaves_terminal_tasks_alone(
+        self, facade: MockCalDAVFacade
+    ) -> None:
+        project = facade.create_project(ProjectCreate(name="Mixed"))
+        already_canceled = facade.create_task(TaskCreate(title="already", project_id=project.uid))
+        facade.update_task(already_canceled.uid, TaskUpdate(status=TaskStatus.CANCELED))
+
+        already_completed = facade.create_task(TaskCreate(title="done", project_id=project.uid))
+        facade.update_task(already_completed.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+        completed_before = facade.get_task(already_completed.uid)
+        assert completed_before is not None
+        completed_at_before = completed_before.completed_at
+
+        facade.update_project(project.uid, ProjectUpdate(status=ProjectStatus.CANCELED))
+
+        after_canceled = facade.get_task(already_canceled.uid)
+        assert after_canceled is not None
+        assert after_canceled.status == TaskStatus.CANCELED
+
+        after_completed = facade.get_task(already_completed.uid)
+        assert after_completed is not None
+        assert after_completed.status == TaskStatus.COMPLETED
+        assert after_completed.completed_at == completed_at_before
+
+    def test_update_project_terminal_does_not_affect_other_projects(
+        self, facade: MockCalDAVFacade
+    ) -> None:
+        a = facade.create_project(ProjectCreate(name="A"))
+        b = facade.create_project(ProjectCreate(name="B"))
+        t_a = facade.create_task(TaskCreate(title="on A", project_id=a.uid))
+        t_b = facade.create_task(TaskCreate(title="on B", project_id=b.uid))
+
+        facade.update_project(a.uid, ProjectUpdate(status=ProjectStatus.CANCELED))
+
+        after_a = facade.get_task(t_a.uid)
+        after_b = facade.get_task(t_b.uid)
+        assert after_a is not None and after_a.status == TaskStatus.CANCELED
+        assert after_b is not None and after_b.status == TaskStatus.NEEDS_ACTION
+
     def test_delete_project(self, facade: MockCalDAVFacade) -> None:
         """Deleting a project removes it."""
         project = facade.create_project(ProjectCreate(name="To delete"))

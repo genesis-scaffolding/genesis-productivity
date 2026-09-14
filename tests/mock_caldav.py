@@ -114,6 +114,13 @@ class MockCalDAVFacade:
             if value is not None:
                 setattr(project, key, value)
         project.modified = self._now()
+
+        if update_data.get("status") in (ProjectStatus.CANCELED, ProjectStatus.COMPLETED):
+            cascade_status = update_data["status"]
+            for task in self.list_tasks(project_id=uid):
+                if task.status in (TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS):
+                    self.update_task(task.uid, TaskUpdate(status=cascade_status))
+
         return project
 
     def delete_project(self, uid: str) -> bool:

@@ -252,6 +252,50 @@ def test_task_404_on_missing_uid(api_server: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_project_cancel_cascades_to_open_tasks(
+    api_server_with_mock: tuple[TestClient, MockCalDAVFacade],
+) -> None:
+    """PATCH /productivity/projects/{uid} with status=canceled cascades
+    to every open task on the project; tasks on other projects (or no
+    project) are untouched."""
+    client, _mock = api_server_with_mock
+    token = _login(client)
+    headers = _auth(token)
+
+    project = client.post(
+        "/productivity/projects",
+        json={"name": "Doomed"},
+        headers=headers,
+    ).json()
+    t1 = client.post(
+        "/productivity/tasks",
+        json={"title": "linked", "project_id": project["uid"]},
+        headers=headers,
+    ).json()
+    t3 = client.post(
+        "/productivity/tasks",
+        json={"title": "unlinked"},
+        headers=headers,
+    ).json()
+
+    resp = client.patch(
+        f"/productivity/projects/{project['uid']}",
+        json={"status": "canceled"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "canceled"
+
+    after_t1 = client.get(
+        f"/productivity/tasks/{t1['uid']}", headers=headers
+    ).json()
+    assert after_t1["status"] == "canceled"
+
+    listing = client.get("/productivity/tasks", headers=headers).json()
+    t3_after = next(item for item in listing["items"] if item["uid"] == t3["uid"])
+    assert t3_after["status"] == "needs-action"
+
+
 def test_list_tasks_converts_date_query_params_to_datetime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

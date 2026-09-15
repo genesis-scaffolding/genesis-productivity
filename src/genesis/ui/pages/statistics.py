@@ -21,12 +21,13 @@ count-ups reflect actual elapsed.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from genesis.category.enums import TimeLogCategory
+from genesis.entities import TimeLogEntryUpdate
 from genesis.stats import Period, compute_rollup
 from genesis.tz import format_local
 from genesis.ui._render import session_log_dialog
@@ -227,15 +228,91 @@ if st.button(
 if not rollup.recent:
     st.info("No completed sessions in this period.")
 else:
+    # The rollup's RecentSession carries uid/start/labels but not the
+    # category the user sees in the table. Look it up from the
+    # already-fetched all_completed set so we don't widen the
+    # API/dataclass surface for a UI-only display field.
+    entries_by_uid: dict[str, object] = {e.uid: e for e in all_completed}
+
+    def _category_for(uid: str) -> str:
+        entry = entries_by_uid.get(uid)
+        return entry.category.value if entry is not None else TimeLogCategory.OTHER.value
+
     rows = [
         {
+            "uid": s.uid,
             "Started": format_local(s.start, "%Y-%m-%d %H:%M"),
             "Label": s.label,
             "Task": s.task_title,
             "Mode": s.mode,
-            "Duration": _fmt_hms(s.duration_seconds),
+            "Type": _category_for(s.uid),
+            "Duration (min)": round(s.duration_seconds / 60.0, 1),
         }
         for s in rollup.recent
     ]
     df = pd.DataFrame(rows)
-    st.dataframe(df, hide_index=True, width="stretch")
+    recent_key = "stats_recent_sessions"
+
+    def _handle_inline_edit() -> None:
+        state = st.session_state.get(recent_key) or {}
+        edited_rows = state.get("edited_rows") or {}
+        if not edited_rows:
+            return
+        for row_idx_str, changes in edited_rows.items():
+            row_idx = int(row_idx_str)
+            if row_idx >= len(rollup.recent):
+                continue
+            original = rollup.recent[row_idx]
+            update = TimeLogEntryUpdate()
+            touched = False
+            if "Type" in changes:
+                try:
+                    update = update.model_copy(
+                        update={"category": TimeLogCategory(str(changes["Type"]))}
+                    )
+                    touched = True
+                except ValueError:
+                    pass
+            if "Duration (min)" in changes:
+                try:
+                    new_minutes = float(changes["Duration (min)"])
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    if new_minutes >= 0:
+                        update = update.model_copy(
+                            update={"due": original.start + timedelta(minutes=new_minutes)}
+                        )
+                        touched = True
+            if not touched:
+                continue
+            caldav.update_time_log_entry(original.uid, update)
+        # data_editor preserves edited_rows across reruns and reapplies
+        # them by row position; clear after dispatch so we don't
+        # double-apply if the underlying data reorders.
+        state["edited_rows"] = {}
+
+    st.data_editor(
+        df,
+        column_config={
+            "uid": None,
+            "Started": st.column_config.TextColumn("Started", disabled=True),
+            "Label": st.column_config.TextColumn("Label", width="large", disabled=True),
+            "Task": st.column_config.TextColumn("Task", width="large", disabled=True),
+            "Mode": st.column_config.TextColumn("Mode", disabled=True),
+            "Type": st.column_config.SelectboxColumn(
+                "Type",
+                options=[c.value for c in TimeLogCategory],
+                required=True,
+            ),
+            "Duration (min)": st.column_config.NumberColumn(
+                "Duration (min)",
+                min_value=0,
+                step=1,
+                format="%.0f",
+            ),
+        },
+        hide_index=True,
+        on_change=_handle_inline_edit,
+        key=recent_key,
+    )

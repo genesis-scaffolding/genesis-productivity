@@ -194,11 +194,13 @@ def _render_active_sessions() -> None:
                 category=category,
             )
             st.toast(f"Auto-stopped: {s.label} ({category.value})", duration="long")
-            # Rerun only the fragment, not the whole app: a full-app
-            # rerun re-executes the script body and clears the toast
-            # queue before the toast has a chance to render.
-            st.rerun(scope="fragment")
-            return  # st.rerun() aborts; let next tick handle the rest
+            # Return without a rerun so the toast has time to render
+            # against the current fragment state. Any rerun (app or
+            # fragment) discards the queued toast before the user can
+            # see it. The next run_every tick (1s later) will pick up
+            # the now-COMPLETED session and remove it from the card
+            # list.
+            return
 
     if not sessions:
         st.info("No active sessions. Start one above.")

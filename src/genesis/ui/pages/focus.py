@@ -194,7 +194,10 @@ def _render_active_sessions() -> None:
                 category=category,
             )
             st.toast(f"Auto-stopped: {s.label} ({category.value})", duration="long")
-            st.rerun(scope="app")
+            # Rerun only the fragment, not the whole app: a full-app
+            # rerun re-executes the script body and clears the toast
+            # queue before the toast has a chance to render.
+            st.rerun(scope="fragment")
             return  # st.rerun() aborts; let next tick handle the rest
 
     if not sessions:
@@ -279,12 +282,10 @@ def _render_session_card(s, now: datetime) -> None:
                     completed_at=now,
                     category=category,
                 )
-                st.toast(f"Stopped: {s.label} ({category.value})", duration="long")
                 st.rerun(scope="app")
         with btn_cols[1]:
             if st.button("Discard", key=f"focus_discard_{s.uid}"):
                 caldav.delete_time_log_entry(s.uid)
-                st.toast(f"Discarded: {s.label}", duration="long")
                 st.rerun(scope="app")
 
 

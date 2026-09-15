@@ -163,7 +163,21 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
         st.rerun()
 
 
-@st.dialog("Edit task", width="large", on_dismiss="rerun")
+def _on_task_edit_dismiss() -> None:
+    """Reset the project-dropdown init flag when the dialog closes.
+
+    The flag is set on the first render of each dialog session and
+    blocks the explicit seed-to-task-project step (see ``task_edit_dialog``)
+    on subsequent renders. Without this reset, a stale session_state
+    value from a prior open survives across opens and the dropdown
+    shows the wrong project.
+    """
+    for key in list(st.session_state.keys()):
+        if key.startswith("etd_proj_init_"):
+            st.session_state.pop(key, None)
+
+
+@st.dialog("Edit task", width="large", on_dismiss=_on_task_edit_dismiss)
 def task_edit_dialog(uid: str) -> None:
     """Open the edit-task dialog for the given task UID."""
     facade = get_facade()
@@ -180,10 +194,18 @@ def task_edit_dialog(uid: str) -> None:
     project_labels = ["(none)"] + [name for _, name in project_options]
     project_uids: list[str | None] = [None] + [uid for _, uid in project_options]
     cur_idx = project_uids.index(task.project_id) if task.project_id in project_uids else 0
-    # Reset the project dropdown so index=cur_idx re-applies on each open;
-    # otherwise a stale "(none)" left over from a prior open silently unlinks
-    # the task on Save.
-    st.session_state.pop(f"{kp}_proj", None)
+    # Force the project dropdown to the task's current project on the
+    # FIRST render of this dialog session. ``index=cur_idx`` only
+    # seeds a never-used widget, and ``st.session_state.pop`` does not
+    # reliably reset the Frontend's cached widget state in
+    # Streamlit 1.61, so explicitly assign the initial value here. On
+    # subsequent renders within the dialog, the flag below blocks the
+    # override so the user's selection survives. ``_on_task_edit_dismiss``
+    # resets the flag when the dialog closes, so the next open is fresh.
+    init_key = f"etd_proj_init_{uid}"
+    if not st.session_state.get(init_key, False):
+        st.session_state[f"{kp}_proj"] = project_labels[cur_idx]
+        st.session_state[init_key] = True
 
     title = st.text_input("Title", value=task.title, key=f"{kp}_title")
     description = st.text_area(

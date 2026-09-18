@@ -20,6 +20,7 @@ import streamlit as st
 from genesis.category.enums import TimeLogCategory
 from genesis.entities import (
     Task,
+    TaskStatus,
     TimeLogEntryCreate,
     TimeLogMode,
     TimeLogStatus,
@@ -424,41 +425,106 @@ def build_retrospective_entry(
     )
 
 
-@st.dialog("Log past session", width="large", on_dismiss="rerun")
-def session_log_dialog() -> None:
+# Keys for the retrospective-log dialog widgets. The dialog is
+# opened from multiple entry points (the Statistics page button
+# and the Tasks table "Log Session" action), so the keys are
+# intentionally unprefixed with any entity UID. State is reset on
+# each close so the caller-supplied ``task`` parameter always wins.
+_SESSION_LOG_DIALOG_LABEL_KEY = "_spl_label"
+# Tracks the label value the dialog last set automatically from
+# the selected task. The label auto-updates when the user picks a
+# different task only if its current value still matches this
+# baseline; a user-typed label that has drifted is preserved.
+_SESSION_LOG_DIALOG_LABEL_BASELINE_KEY = "_spl_label_baseline"
+_SESSION_LOG_DIALOG_TASK_KEY = "_spl_task"
+_SESSION_LOG_DIALOG_START_KEY = "_spl_start"
+_SESSION_LOG_DIALOG_DUR_KEY = "_spl_dur"
+_SESSION_LOG_DIALOG_CAT_KEY = "_spl_cat"
+
+
+def _clear_session_log_dialog_state() -> None:
+    """Drop the retrospective-log dialog widget keys from session state.
+
+    Called from Log and Cancel so the next open starts with the
+    task-based defaults instead of the previous session's values.
+    """
+    for key in (
+        _SESSION_LOG_DIALOG_LABEL_KEY,
+        _SESSION_LOG_DIALOG_LABEL_BASELINE_KEY,
+        _SESSION_LOG_DIALOG_TASK_KEY,
+        _SESSION_LOG_DIALOG_CAT_KEY,
+    ):
+        st.session_state.pop(key, None)
+
+
+@st.dialog("Log past session", width="large", on_dismiss=_clear_session_log_dialog_state)
+def session_log_dialog(*, task: Task | None = None) -> None:
     """Open the retrospective-log dialog. Call from a button body.
 
     For when the user forgot to start a timer or the system was
     unavailable. The submitted session is written directly as
     ``COMPLETED`` so it shows up in the Statistics rollups without
     needing a stop action.
+
+    When ``task`` is supplied, the dialog pre-selects it and
+    pre-fills the label with ``task.title``. As with
+    ``focus_create_dialog``, picking a different task in the
+    dropdown auto-updates the label unless the user has typed a
+    custom value.
     """
     facade = get_facade()
     caldav = facade.caldav
 
-    label = st.text_input(
-        "Session label",
-        key="_spl_label",
-        placeholder="What did you do?",
-    )
-
+    # Candidate set is the full task list (not just open tasks).
+    # Retrospective logging is meant for sessions against any task
+    # the user worked on, including ones that have since been
+    # completed or canceled.
     tasks = caldav.list_tasks()
     task_options: list[Task | None] = [None, *tasks]
     task_labels = ["(unaligned)"] + [t.title for t in tasks]
+    initial_idx = 0
+    if task is not None:
+        for i, candidate in enumerate(task_options):
+            if candidate is not None and candidate.uid == task.uid:
+                initial_idx = i
+                break
+
     selected_task_label = st.selectbox(
         "Linked task",
         task_labels,
-        index=0,
-        key="_spl_task",
+        index=initial_idx,
+        key=_SESSION_LOG_DIALOG_TASK_KEY,
         help="Pick a task to count this session against it, or leave unaligned.",
     )
     selected_task = task_options[task_labels.index(selected_task_label)]
+
+    # If a task is supplied (or one was selected on a prior open
+    # before the dialog was reset), default the label to the task
+    # title. Without a task, the field starts empty with the
+    # placeholder visible. The baseline tracks the last
+    # automatically-set value so subsequent in-dialog task changes
+    # auto-update the label unless the user has typed something
+    # custom.
+    label_default = selected_task.title if selected_task is not None else ""
+    if _SESSION_LOG_DIALOG_LABEL_BASELINE_KEY not in st.session_state:
+        st.session_state[_SESSION_LOG_DIALOG_LABEL_BASELINE_KEY] = label_default
+    baseline_label = st.session_state[_SESSION_LOG_DIALOG_LABEL_BASELINE_KEY]
+    current_label = st.session_state.get(_SESSION_LOG_DIALOG_LABEL_KEY, label_default)
+    if current_label == baseline_label:
+        st.session_state[_SESSION_LOG_DIALOG_LABEL_KEY] = label_default
+    st.session_state[_SESSION_LOG_DIALOG_LABEL_BASELINE_KEY] = label_default
+
+    label = st.text_input(
+        "Session label",
+        key=_SESSION_LOG_DIALOG_LABEL_KEY,
+        placeholder="What did you do?",
+    )
 
     time_cols = st.columns(2)
     with time_cols[0]:
         start_dt = st.datetime_input(
             "Starting time",
-            key="_spl_start",
+            key=_SESSION_LOG_DIALOG_START_KEY,
             value=datetime.now(),
         )
     with time_cols[1]:
@@ -467,16 +533,16 @@ def session_log_dialog() -> None:
             min_value=1,
             max_value=1440,
             value=25,
-            key="_spl_dur",
+            key=_SESSION_LOG_DIALOG_DUR_KEY,
             help="How long the session lasted.",
         )
 
     category_options = [c.value for c in TimeLogCategory]
-    category_label = st.selectbox(
+    st.selectbox(
         "Category",
         category_options,
         index=category_options.index(TimeLogCategory.WORK.value),
-        key="_spl_cat",
+        key=_SESSION_LOG_DIALOG_CAT_KEY,
         format_func=lambda v: v.capitalize(),
     )
 
@@ -489,13 +555,252 @@ def session_log_dialog() -> None:
             return
         entry = build_retrospective_entry(
             label=label_clean,
-            category=TimeLogCategory(category_label),
+            category=TimeLogCategory(
+                st.session_state[_SESSION_LOG_DIALOG_CAT_KEY],
+            ),
             start=start_dt,
             duration_minutes=int(duration),
             task=selected_task,
         )
         facade.caldav.create_time_log_entry(entry)
+        _clear_session_log_dialog_state()
         st.toast(f"Logged: {label_clean}")
         st.rerun()
     if action_cols[1].button("Cancel", key="_spl_cancel"):
+        _clear_session_log_dialog_state()
+        st.rerun()
+
+
+# -----------------------------------------------------------------------------
+# Focus session dialogs
+# -----------------------------------------------------------------------------
+
+
+# Keys for the focus-create dialog widgets. The dialog is opened
+# from multiple entry points (the Focus page button and the Tasks
+# table "Focus" action), so the keys are intentionally unprefixed
+# with any entity UID. State is reset on each open so the
+# caller-supplied ``task`` parameter always wins.
+_FOCUS_DIALOG_TASK_KEY = "_foc_task"
+_FOCUS_DIALOG_LABEL_KEY = "_foc_label"
+# Tracks the label value the dialog last set automatically (i.e.
+# derived from the selected task). When the user picks a different
+# task in the dropdown, the label auto-updates only if its current
+# value still matches this baseline. A user-typed label that has
+# drifted from the baseline is preserved across task changes.
+_FOCUS_DIALOG_LABEL_BASELINE_KEY = "_foc_label_baseline"
+_FOCUS_DIALOG_MODE_KEY = "_foc_mode"
+_FOCUS_DIALOG_DUR_KEY = "_foc_dur"
+_FOCUS_DIALOG_CAT_KEY = "_foc_cat"
+
+# Key the Focus page reads to decide whether to open the
+# completion dialog after a session ends (auto-stop or manual
+# stop). Set in the focus page; consumed there too.
+FOCUS_COMPLETION_PENDING_KEY = "focus_completion_pending"
+
+
+def build_focus_session_entry(
+    *,
+    label: str,
+    task: Task | None,
+    mode: TimeLogMode,
+    countdown_minutes: int | None,
+    category: TimeLogCategory,
+) -> TimeLogEntryCreate:
+    """Build a TimeLogEntryCreate for a new in-progress focus session.
+
+    ``start`` is "now" (UTC); ``due`` is set when ``mode`` is
+    ``COUNTDOWN`` and is ``start + countdown_minutes``. ``status``
+    is ``IN_PROGRESS`` so the entry shows up in the active-session
+    list. ``task_id`` carries the alignment when a task is
+    supplied; unaligned sessions carry no task link.
+    ``category`` is the user-chosen category for this session and
+    is recorded on the entry from the start so the active-session
+    card's "Will save as" matches what we will write on stop.
+    """
+    from genesis.caldav.ical import now_utc
+
+    now = now_utc()
+    if mode == TimeLogMode.COUNTDOWN:
+        assert countdown_minutes is not None
+        due = now + timedelta(minutes=countdown_minutes)
+    else:
+        due = None
+    return TimeLogEntryCreate(
+        label=label,
+        start=now,
+        due=due,
+        mode=mode,
+        status=TimeLogStatus.IN_PROGRESS,
+        task_id=task.uid if task is not None else None,
+        category=category,
+    )
+
+
+def _clear_focus_dialog_state() -> None:
+    """Drop the focus-create dialog widget keys from session state.
+
+    Called from Start and Cancel so the next open starts with the
+    task-based defaults instead of the previous session's values.
+    """
+    for key in (
+        _FOCUS_DIALOG_TASK_KEY,
+        _FOCUS_DIALOG_LABEL_KEY,
+        _FOCUS_DIALOG_LABEL_BASELINE_KEY,
+        _FOCUS_DIALOG_CAT_KEY,
+    ):
+        st.session_state.pop(key, None)
+
+
+@st.dialog("Start focus session", width="large", on_dismiss=_clear_focus_dialog_state)
+def focus_create_dialog(*, task: Task | None = None) -> None:
+    """Open the new-session dialog. Call from a button body.
+
+    When ``task`` is supplied, the dialog pre-selects it, defaults
+    the label to ``task.title`` (editable), and defaults the
+    category to ``WORK``. Without a task, the label defaults to
+    ``"Focus session"`` and the category defaults to ``OTHER``.
+
+    Widget state is intentionally NOT reset at the top of this
+    function: Streamlit re-runs the dialog body when the user
+    interacts with any widget inside it, and popping the keys
+    here would erase the user's in-flight changes (most visibly,
+    the task selectbox picks). Instead, Start and Cancel both
+    call ``_clear_focus_dialog_state`` so the next open starts
+    with task-based defaults.
+    """
+    facade = get_facade()
+    caldav = facade.caldav
+
+    # Task list mirrors the Focus page: open tasks (NEEDS_ACTION +
+    # IN_PROGRESS). Already-completed and canceled tasks are not
+    # useful alignment targets.
+    tasks = [t for t in caldav.list_tasks() if t.status in (TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS)]
+    task_options: list[Task | None] = [None, *tasks]
+    task_labels = ["(unaligned)"] + [t.title for t in tasks]
+    initial_idx = 0
+    if task is not None:
+        for i, candidate in enumerate(task_options):
+            if candidate is not None and candidate.uid == task.uid:
+                initial_idx = i
+                break
+
+    selected_label = st.selectbox(
+        "Task",
+        task_labels,
+        index=initial_idx,
+        key=_FOCUS_DIALOG_TASK_KEY,
+        help="Pick a task to count this session against it, or leave unaligned.",
+    )
+    selected_task = task_options[task_labels.index(selected_label)]
+
+    # Label and category defaults depend on whether a task is
+    # selected. The label is editable; the category is the
+    # recommended start but the user can pick anything.
+    label_default = selected_task.title if selected_task is not None else "Focus session"
+    category_default = TimeLogCategory.WORK if selected_task is not None else TimeLogCategory.OTHER
+    category_options = [c.value for c in TimeLogCategory]
+
+    # Auto-update the label when the task changes, unless the user
+    # has typed a custom value. The baseline records the value we
+    # last set automatically; if the current label still equals it,
+    # the user has not edited, so we replace it with the new task's
+    # expected label. If they have edited, the comparison fails and
+    # the typed value is preserved.
+    if _FOCUS_DIALOG_LABEL_BASELINE_KEY not in st.session_state:
+        st.session_state[_FOCUS_DIALOG_LABEL_BASELINE_KEY] = label_default
+    baseline_label = st.session_state[_FOCUS_DIALOG_LABEL_BASELINE_KEY]
+    current_label = st.session_state.get(_FOCUS_DIALOG_LABEL_KEY, label_default)
+    if current_label == baseline_label:
+        st.session_state[_FOCUS_DIALOG_LABEL_KEY] = label_default
+    st.session_state[_FOCUS_DIALOG_LABEL_BASELINE_KEY] = label_default
+
+    label = st.text_input(
+        "Session label",
+        value=label_default,
+        key=_FOCUS_DIALOG_LABEL_KEY,
+        help=(
+            "Shown on the active session card and in the time log. "
+            "Defaults to the task summary when a task is selected."
+        ),
+    )
+    mode_label = st.radio(
+        "Mode",
+        ["Count down", "Count up"],
+        index=0,
+        key=_FOCUS_DIALOG_MODE_KEY,
+        horizontal=True,
+    )
+    is_countdown = mode_label == "Count down"
+    duration = st.number_input(
+        "Duration (minutes)",
+        min_value=1,
+        max_value=240,
+        value=25,
+        key=_FOCUS_DIALOG_DUR_KEY,
+        disabled=not is_countdown,
+        help="Target session length when counting down.",
+    )
+    st.selectbox(
+        "Category",
+        category_options,
+        index=category_options.index(category_default.value),
+        key=_FOCUS_DIALOG_CAT_KEY,
+        format_func=lambda v: v.capitalize(),
+    )
+
+    st.divider()
+    action_cols = st.columns([1, 1, 6])
+    if action_cols[0].button("Start", type="primary", key="_foc_start"):
+        label_clean = (label or "").strip()
+        if not label_clean:
+            st.error("Session label is required")
+            return
+        mode = TimeLogMode.COUNTDOWN if is_countdown else TimeLogMode.COUNTUP
+        chosen_category = TimeLogCategory(
+            st.session_state[_FOCUS_DIALOG_CAT_KEY],
+        )
+        entry = caldav.create_time_log_entry(
+            build_focus_session_entry(
+                label=label_clean,
+                task=selected_task,
+                mode=mode,
+                countdown_minutes=int(duration) if is_countdown else None,
+                category=chosen_category,
+            )
+        )
+        _clear_focus_dialog_state()
+        st.toast(f"Started: {entry.label}")
+        st.rerun(scope="app")
+    if action_cols[1].button("Cancel", key="_foc_cancel"):
+        _clear_focus_dialog_state()
+        st.rerun()
+
+
+@st.dialog("Mark task completed?", on_dismiss="rerun")
+def focus_completion_dialog(*, task_uid: str, task_title: str) -> None:
+    """Open the post-session completion prompt. Call from a button body.
+
+    Triggered by the Focus page after a session with a linked
+    task ends (auto-stop or manual stop). Accepting marks the
+    linked task ``COMPLETED`` via ``update_task``; declining
+    leaves the task untouched. Both branches clear the
+    ``focus_completion_pending`` flag so the dialog does not
+    re-open on the next render.
+    """
+    facade = get_facade()
+    st.write(f"Mark task **{task_title}** as completed now that the focus session on it has ended?")
+    cols = st.columns(2)
+    if cols[0].button("Yes, complete", type="primary", key="_focpl_yes"):
+        from genesis.entities import TaskStatus, TaskUpdate
+
+        facade.caldav.update_task(
+            task_uid,
+            TaskUpdate(status=TaskStatus.COMPLETED),
+        )
+        st.session_state.pop(FOCUS_COMPLETION_PENDING_KEY, None)
+        st.toast(f"Completed: {task_title}")
+        st.rerun()
+    if cols[1].button("Not yet", key="_focpl_no"):
+        st.session_state.pop(FOCUS_COMPLETION_PENDING_KEY, None)
         st.rerun()

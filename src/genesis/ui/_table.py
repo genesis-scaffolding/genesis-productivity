@@ -16,7 +16,12 @@ import streamlit as st
 
 from genesis.entities import Task, TaskStatus, TaskUpdate
 from genesis.tz import to_local, to_utc
-from genesis.ui._render import delete_confirm_dialog, task_edit_dialog
+from genesis.ui._render import (
+    delete_confirm_dialog,
+    focus_create_dialog,
+    session_log_dialog,
+    task_edit_dialog,
+)
 
 if TYPE_CHECKING:
     from genesis.caldav import CalDAVFacade
@@ -126,7 +131,7 @@ def render_tasks_table(
         }
         if show_project_column:
             row["Project"] = _project_label(t.project_id)
-        row["actions"] = ["Edit", "Delete"]
+        row["actions"] = ["Focus", "Log Session", "Edit", "Delete"]
         rows.append(row)
     df = pd.DataFrame(rows)
 
@@ -144,6 +149,10 @@ def render_tasks_table(
         target = table_tasks[row_idx]
         if label == "Edit":
             task_edit_dialog(target.uid)
+        elif label == "Focus":
+            focus_create_dialog(task=target)
+        elif label == "Log Session":
+            session_log_dialog(task=target)
         elif label == "Delete":
             delete_confirm_dialog(
                 f"task '{target.title}'",

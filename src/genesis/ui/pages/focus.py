@@ -6,13 +6,19 @@ STATUS != COMPLETED. Completed sessions are filtered out; a future
 
 The page renders:
 
-- A form to start a new session: optional task, label (default task
-  summary when aligned, "Focus session" otherwise), mode (count
-  down vs count up), and countdown duration when count down is
-  selected.
+- A button that opens the shared ``focus_create_dialog`` for
+  starting a new session. The same dialog is reachable from the
+  Tasks page's per-row "Focus" action; here it opens with no
+  pre-selected task.
 - A live fragment that shows all active sessions, ticking every
   second, with Stop and Discard buttons. Countdown sessions
   auto-stop in-fragment when their target elapses.
+
+When a session with a linked task ends (either via the auto-stop
+path or via manual Stop), the page sets
+``st.session_state["focus_completion_pending"]`` and triggers an
+app-level rerun. The next render reads the flag at the top of this
+script and pops the completion dialog.
 """
 
 from __future__ import annotations
@@ -24,17 +30,17 @@ import streamlit as st
 from genesis.caldav.ical import now_utc
 from genesis.category.enums import TimeLogCategory
 from genesis.category.facade import CategoryFacade
-from genesis.entities import Task, TaskStatus, TimeLogEntryCreate, TimeLogMode, TimeLogStatus
+from genesis.entities import TimeLogMode, TimeLogStatus
+from genesis.ui._render import (
+    FOCUS_COMPLETION_PENDING_KEY,
+    focus_completion_dialog,
+    focus_create_dialog,
+)
 from genesis.ui._state import get_facade
 
 facade = get_facade()
 caldav = facade.caldav
 category_facade = CategoryFacade(caldav)
-
-# Sync refetch interval (seconds) for active sessions. The fragment
-# reruns every 1s for display; the CalDAV refetch is throttled.
-REFRESH_INTERVAL_S = 30
-DEFAULT_LABEL = "Focus session"
 
 CATEGORY_OPTIONS = ["Auto", *list(TimeLogCategory)]
 
@@ -67,105 +73,24 @@ def _format_elapsed(elapsed: timedelta) -> str:
     return f"{m:02d}:{s:02d}"
 
 
-def _start_session(
-    *,
-    label: str,
-    task: Task | None,
-    mode: TimeLogMode,
-    countdown_minutes: int | None,
-) -> TimeLogEntryCreate:
-    """Build a TimeLogEntryCreate for a new session."""
-    now = now_utc()
-    if mode == TimeLogMode.COUNTDOWN:
-        assert countdown_minutes is not None
-        due = now + timedelta(minutes=countdown_minutes)
-    else:
-        due = None
-    return TimeLogEntryCreate(
-        label=label,
-        start=now,
-        due=due,
-        mode=mode,
-        status=TimeLogStatus.IN_PROGRESS,
-        task_id=task.uid if task is not None else None,
-    )
+def _set_completion_pending(session) -> None:
+    """If ``session`` was aligned to a task, queue the completion dialog.
 
-
-# -----------------------------------------------------------------------------
-# Start session form (static, in parent script)
-# -----------------------------------------------------------------------------
-
-
-def _render_start_form() -> None:
-    # Client-side filter: list_tasks takes a single status, so pull all and
-    # filter here. The candidate set is small for personal use.
-    if "focus_task_status_filter" not in st.session_state:
-        st.session_state["focus_task_status_filter"] = [
-            TaskStatus.NEEDS_ACTION,
-            TaskStatus.IN_PROGRESS,
-        ]
-    status_filter = st.session_state["focus_task_status_filter"]
-    tasks = [t for t in caldav.list_tasks() if t.status in status_filter]
-
-    task_options: list[Task | None] = [None, *tasks]
-    task_labels = ["(unaligned)"] + [t.title for t in tasks]
-    cur_label = st.session_state.get("focus_form_task_label", "(unaligned)")
-    cur_idx = task_labels.index(cur_label) if cur_label in task_labels else 0
-
-    selected_label = st.selectbox(
-        "Task",
-        task_labels,
-        index=cur_idx,
-        key="focus_form_task_label",
-    )
-    selected_task = task_options[task_labels.index(selected_label)]
-
-    label_default = selected_task.title if selected_task is not None else DEFAULT_LABEL
-    label = st.text_input(
-        "Session label",
-        value=st.session_state.get("focus_form_label", label_default),
-        key="focus_form_label",
-        help=(
-            "Shown on the active session card and in the time log. "
-            "Defaults to the task summary when a task is selected."
-        ),
-    )
-
-    mode_label = st.radio(
-        "Mode",
-        ["Count down", "Count up"],
-        index=0 if st.session_state.get("focus_form_mode", "Count down") == "Count down" else 1,
-        key="focus_form_mode",
-        horizontal=True,
-    )
-    is_countdown = mode_label == "Count down"
-
-    duration = st.number_input(
-        "Duration (minutes)",
-        min_value=1,
-        max_value=240,
-        value=int(st.session_state.get("focus_form_duration", 25)),
-        key="focus_form_duration",
-        disabled=not is_countdown,
-        help="Target session length when counting down.",
-    )
-
-    if st.button("Start session", type="primary", key="focus_start_btn"):
-        label_clean = (label or "").strip()
-        if not label_clean:
-            st.error("Session label is required.")
-            return
-        mode = TimeLogMode.COUNTDOWN if is_countdown else TimeLogMode.COUNTUP
-        entry = caldav.create_time_log_entry(
-            _start_session(
-                label=label_clean,
-                task=selected_task,
-                mode=mode,
-                countdown_minutes=int(duration) if is_countdown else None,
-            )
-        )
-        st.toast(f"Started: {entry.label}")
-        st.rerun(scope="app")
+    The dialog reads ``task.title`` for display, not the session
+    label, so we re-fetch the task rather than reusing ``s.label``.
+    A task that disappeared between session start and stop is a
+    legitimate race (deleted on another device); in that case the
+    completion prompt is silently skipped.
+    """
+    if not session.task_id:
+        return
+    task = caldav.get_task(session.task_id)
+    if task is None:
+        return
+    st.session_state[FOCUS_COMPLETION_PENDING_KEY] = {
+        "task_uid": task.uid,
+        "task_title": task.title,
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -193,13 +118,12 @@ def _render_active_sessions() -> None:
                 completed_at=now,
                 category=category,
             )
-            st.toast(f"Auto-stopped: {s.label} ({category.value})", duration="long")
-            # Return without a rerun so the toast has time to render
-            # against the current fragment state. Any rerun (app or
-            # fragment) discards the queued toast before the user can
-            # see it. The next run_every tick (1s later) will pick up
-            # the now-COMPLETED session and remove it from the card
-            # list.
+            _set_completion_pending(s)
+            # Rerun at app scope so the parent script picks up the
+            # completion-pending flag and pops the dialog. We lose
+            # the previous "Auto-stopped" toast on the rerun; the
+            # completion dialog is the more useful signal here.
+            st.rerun(scope="app")
             return
 
     if not sessions:
@@ -276,14 +200,14 @@ def _render_session_card(s, now: datetime) -> None:
         btn_cols = st.columns(2)
         with btn_cols[0]:
             if st.button("Stop", key=f"focus_stop_{s.uid}", type="primary"):
-                actual_due = now if is_countdown else now
                 category = _resolve_category(s)
                 caldav.stop_time_log_entry(
                     s.uid,
-                    actual_due=actual_due,
+                    actual_due=now,
                     completed_at=now,
                     category=category,
                 )
+                _set_completion_pending(s)
                 st.rerun(scope="app")
         with btn_cols[1]:
             if st.button("Discard", key=f"focus_discard_{s.uid}"):
@@ -299,7 +223,21 @@ def _render_session_card(s, now: datetime) -> None:
 st.title("Focus")
 st.caption("Start a focus session and watch it tick across all your devices.")
 
-_render_start_form()
+# If a session with a linked task just ended (auto-stop or manual
+# stop), the active-sessions fragment set this flag and triggered an
+# app-level rerun. Pop the flag at the moment we open the dialog so
+# any subsequent on_dismiss rerun does not re-open it. The Yes/No
+# handlers in the dialog also pop the flag as belt-and-suspenders.
+pending = st.session_state.pop(FOCUS_COMPLETION_PENDING_KEY, None)
+if pending is not None:
+    focus_completion_dialog(
+        task_uid=pending["task_uid"],
+        task_title=pending["task_title"],
+    )
+
+if st.button("Start focus session", type="primary", key="focus_open_btn"):
+    focus_create_dialog()
+
 st.divider()
 st.subheader("Active sessions")
 _render_active_sessions()

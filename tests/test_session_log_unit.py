@@ -18,7 +18,7 @@ from genesis.entities import (
     TimeLogMode,
     TimeLogStatus,
 )
-from genesis.ui._render import build_retrospective_entry
+from genesis.ui._render import build_focus_session_entry, build_retrospective_entry
 
 
 def _task() -> Task:
@@ -104,3 +104,56 @@ class TestBuildRetrospectiveEntry:
             task=None,
         )
         assert entry.category == category
+
+
+class TestBuildFocusSessionEntry:
+    """The helper used by the new-session dialog must produce an
+    IN_PROGRESS entry with the chosen category and (for countdown
+    mode) a ``due`` set to start + duration."""
+
+    def test_countdown_sets_due_and_carries_task(self) -> None:
+        before = datetime.now(UTC) - timedelta(seconds=1)
+        task = _task()
+        entry = build_focus_session_entry(
+            label="Deep work",
+            task=task,
+            mode=TimeLogMode.COUNTDOWN,
+            countdown_minutes=25,
+            category=TimeLogCategory.WORK,
+        )
+
+        assert isinstance(entry, TimeLogEntryCreate)
+        assert entry.label == "Deep work"
+        assert entry.task_id == task.uid
+        assert entry.status == TimeLogStatus.IN_PROGRESS
+        assert entry.mode == TimeLogMode.COUNTDOWN
+        assert entry.category == TimeLogCategory.WORK
+        assert entry.start >= before
+        assert entry.due is not None
+        assert entry.due - entry.start == timedelta(minutes=25)
+
+    def test_countup_leaves_due_none(self) -> None:
+        entry = build_focus_session_entry(
+            label="Open ended",
+            task=None,
+            mode=TimeLogMode.COUNTUP,
+            countdown_minutes=None,
+            category=TimeLogCategory.PERSONAL,
+        )
+
+        assert entry.due is None
+        assert entry.task_id is None
+        assert entry.mode == TimeLogMode.COUNTUP
+        assert entry.category == TimeLogCategory.PERSONAL
+
+    def test_unaligned_records_chosen_category(self) -> None:
+        entry = build_focus_session_entry(
+            label="Gym",
+            task=None,
+            mode=TimeLogMode.COUNTUP,
+            countdown_minutes=None,
+            category=TimeLogCategory.WORKOUT,
+        )
+
+        assert entry.category == TimeLogCategory.WORKOUT
+        assert entry.task_id is None

@@ -440,6 +440,10 @@ _SESSION_LOG_DIALOG_TASK_KEY = "_spl_task"
 _SESSION_LOG_DIALOG_START_KEY = "_spl_start"
 _SESSION_LOG_DIALOG_DUR_KEY = "_spl_dur"
 _SESSION_LOG_DIALOG_CAT_KEY = "_spl_cat"
+# When a task is selected, the user can tick this checkbox to also
+# flip the task status to COMPLETED on Log. Cleared on close so
+# each dialog open starts unchecked.
+_SESSION_LOG_DIALOG_COMPLETE_TASK_KEY = "_spl_complete_task"
 
 
 def _clear_session_log_dialog_state() -> None:
@@ -453,6 +457,7 @@ def _clear_session_log_dialog_state() -> None:
         _SESSION_LOG_DIALOG_LABEL_BASELINE_KEY,
         _SESSION_LOG_DIALOG_TASK_KEY,
         _SESSION_LOG_DIALOG_CAT_KEY,
+        _SESSION_LOG_DIALOG_COMPLETE_TASK_KEY,
     ):
         st.session_state.pop(key, None)
 
@@ -497,6 +502,16 @@ def session_log_dialog(*, task: Task | None = None) -> None:
         help="Pick a task to count this session against it, or leave unaligned.",
     )
     selected_task = task_options[task_labels.index(selected_task_label)]
+
+    # Only show the completion checkbox when a task is selected.
+    # Default off: the user opts in to flip the task status to
+    # COMPLETED alongside the session log.
+    if selected_task is not None:
+        st.checkbox(
+            f"Also mark **{selected_task.title}** as completed",
+            key=_SESSION_LOG_DIALOG_COMPLETE_TASK_KEY,
+            help="Tick if this session finished the task. The task status will be set to completed when you click Log.",
+        )
 
     # If a task is supplied (or one was selected on a prior open
     # before the dialog was reset), default the label to the task
@@ -563,8 +578,27 @@ def session_log_dialog(*, task: Task | None = None) -> None:
             task=selected_task,
         )
         facade.caldav.create_time_log_entry(entry)
+        # If the user opted in via the completion checkbox, flip
+        # the linked task to COMPLETED in the same action. The
+        # checkbox only renders when a task is selected, so the
+        # flag is meaningful only in that case.
+        completed_task = False
+        if (
+            selected_task is not None
+            and st.session_state.get(_SESSION_LOG_DIALOG_COMPLETE_TASK_KEY, False)
+        ):
+            from genesis.entities import TaskStatus, TaskUpdate
+
+            facade.caldav.update_task(
+                selected_task.uid,
+                TaskUpdate(status=TaskStatus.COMPLETED),
+            )
+            completed_task = True
         _clear_session_log_dialog_state()
-        st.toast(f"Logged: {label_clean}")
+        if completed_task:
+            st.toast(f"Logged and completed: {selected_task.title if selected_task else label_clean}")
+        else:
+            st.toast(f"Logged: {label_clean}")
         st.rerun()
     if action_cols[1].button("Cancel", key="_spl_cancel"):
         _clear_session_log_dialog_state()

@@ -113,31 +113,34 @@ def _render_detail(uid: str) -> None:
             st.rerun()
         return
 
-    # Back button on its own row
-    back_col, _ = st.columns([1, 8])
-    with back_col:
-        if st.button("← Back", key="pd_back"):
-            st.query_params.pop("project", None)
-            st.rerun()
-
-    # Breadcrumb + title + actions on the next row.
+    # Breadcrumb on the first row.
     st.caption("Productivity > Projects")
-    header_cols = st.columns([8, 1, 1])
-    with header_cols[0]:
-        st.title(project.name)
-        status_badge(project.status)
-    with header_cols[1]:
+    # Subtle back link directly under the breadcrumb, above the title.
+    if st.button(
+        "Back",
+        key="pd_back",
+        icon=":material/arrow_back:",
+        type="tertiary",
+    ):
+        st.query_params.pop("project", None)
+        st.rerun()
+    # Title on its own row.
+    st.title(project.name)
+    # Status badge on its own row.
+    status_badge(project.status)
+
+    if project.description:
+        st.write(project.description)
+
+    # Edit + Delete on a single row beneath the description, left-aligned.
+    with st.container(horizontal=True, horizontal_alignment="left"):
         if st.button("Edit", key="pd_edit"):
             project_edit_dialog(uid)
-    with header_cols[2]:
         if st.button("Delete", key="pd_del"):
             delete_confirm_dialog(
                 f"project '{project.name}'",
                 lambda: caldav.delete_project(uid),
             )
-
-    if project.description:
-        st.write(project.description)
 
     st.write("")
 

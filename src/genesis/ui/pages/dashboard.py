@@ -20,7 +20,7 @@ import streamlit as st
 from genesis.entities import ProjectStatus, TaskStatus
 from genesis.tz import to_utc
 from genesis.ui._state import get_facade
-from genesis.ui._table import render_tasks_table
+from genesis.ui._table import TASK_TABLE_DEFAULT_SORT_KEYS, render_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
@@ -40,18 +40,18 @@ all_tasks = caldav.list_tasks()
 done_statuses = {TaskStatus.COMPLETED, TaskStatus.CANCELED}
 
 # Active assignments: assigned_date <= today, not done/canceled.
+# The table widget owns the sort (cache-based, ADR-023).
 active_assignments = [
     t for t in all_tasks if t.assigned_date is not None and t.assigned_date <= today and t.status not in done_statuses
 ]
-active_assignments.sort(key=lambda t: t.assigned_date or date.min)
 
 # Deadlines: hard_deadline within 7 days or already overdue.
+# The table widget owns the sort (cache-based, ADR-023).
 deadlines = [
     t
     for t in all_tasks
     if t.hard_deadline is not None and t.hard_deadline <= week_end_dt and t.status not in done_statuses
 ]
-deadlines.sort(key=lambda t: t.hard_deadline or today_start)
 
 active_projects = caldav.list_projects(status=ProjectStatus.IN_PROGRESS)
 
@@ -79,7 +79,7 @@ st.divider()
 # --- Active assignments -----------------------------------------------------
 
 st.subheader(f"Active assignments ({len(active_assignments)})")
-st.caption("Assigned today or earlier. Oldest first.")
+st.caption("Assigned today or earlier.")
 if not active_assignments:
     st.info("No overdue or today assignments.")
 else:
@@ -88,6 +88,7 @@ else:
         caldav=caldav,
         key="dashboard_assignments",
         show_project_column=True,
+        sort_keys=TASK_TABLE_DEFAULT_SORT_KEYS,
     )
 
 st.write("")
@@ -104,4 +105,5 @@ else:
         caldav=caldav,
         key="dashboard_deadlines",
         show_project_column=True,
+        sort_keys=TASK_TABLE_DEFAULT_SORT_KEYS,
     )

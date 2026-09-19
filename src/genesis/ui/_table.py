@@ -8,8 +8,8 @@ Edit/Delete actions, and the empty-state message.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import TYPE_CHECKING
+from datetime import UTC, date, datetime, time
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import streamlit as st
@@ -27,6 +27,146 @@ if TYPE_CHECKING:
     from genesis.caldav import CalDAVFacade
 
 
+# Default sort for task tables (project detail, global tasks, dashboard).
+# Each entry is one sort level:
+#
+#   (field_name, none_default)
+#   (field_name, none_default, descending)
+#
+# ``none_default`` substitutes for ``None`` when building the sort key
+# so ``None`` rows land in a deterministic slot. The optional third
+# element flips the direction for that level (True = descending).
+#
+# Levels, in display order:
+#   1. hard_deadline ascending, None -> datetime.max in UTC
+#      (no deadline sorts last; the field is typed as tz-aware UTC
+#      datetime, so the placeholder must also be tz-aware).
+#   2. priority DESCENDING, None -> 5
+#      (larger integer = more urgent task at the top. The genesis
+#      convention is the opposite of RFC 5545 (iCalendar PRIORITY)
+#      where 1 is the highest value; see ``Task.priority``'s
+#      docstring for the full rationale. PRIORITY 9 was historically
+#      rendered above PRIORITY 5 in ``pages/projects.py`` via
+#      ``-(t.priority or 5)``; this constant preserves that UX.)
+#   3. created ascending, None -> datetime.max in UTC
+#      (oldest first; missing creation date sorts last).
+#
+# Pages pass this through the ``sort_keys`` parameter on
+# ``render_tasks_table`` / ``render_filterable_tasks_table`` to enable
+# the cache-based stable sort (ADR-023).
+type SortKey = tuple[str, Any] | tuple[str, Any, bool]
+_DATETIME_MAX_UTC = datetime.max.replace(tzinfo=UTC)
+TASK_TABLE_DEFAULT_SORT_KEYS: list[SortKey] = [
+    ("hard_deadline", _DATETIME_MAX_UTC),
+    ("priority", 5, True),
+    ("created", _DATETIME_MAX_UTC),
+]
+
+
+def _parse_sort_key_entry(entry: tuple) -> tuple[str, Any, bool]:
+    """Split a ``sort_keys`` entry into ``(field, none_default, reverse)``.
+
+    Accepts a 2-tuple ``(field, none_default)`` (ascending) or a 3-tuple
+    ``(field, none_default, reverse)``. Raises ``ValueError`` for any
+    other length so callers get a clear failure rather than a silent
+    mis-sort.
+    """
+    if len(entry) == 2:
+        field, none_default = entry  # type: ignore[misc]
+        return field, none_default, False
+    if len(entry) == 3:
+        field, none_default, reverse = entry  # type: ignore[misc]
+        return field, none_default, bool(reverse)
+    raise ValueError(
+        f"sort_keys entry must be (field, none_default) or "
+        f"(field, none_default, reverse); got {entry!r}",
+    )
+
+
+def _apply_cached_sort(
+    tasks: list[Task],
+    *,
+    cached_uids: list[str] | None,
+    sort_keys: list[SortKey],
+) -> tuple[list[Task], list[str]]:
+    """Pure sort helper: cache-aware stable ordering for tasks.
+
+    With ``cached_uids=None`` (first render), computes the sort from
+    ``sort_keys`` and returns the resulting UID list. The widget writes
+    that list into ``st.session_state``.
+
+    With a non-None ``cached_uids`` (subsequent renders), walks the
+    cached UID list, emits tasks in that order, and appends any tasks
+    whose UID is not in the cache (e.g. a newly created task) at the
+    end. The returned UID list mirrors the emitted order so the caller
+    can keep the cache in sync.
+
+    This is the regression fix for the data_editor row-drift bug
+    (streamlit/streamlit#17026): while the cache is present, the
+    order never shifts under the widget, so positional edits in
+    ``edited_rows`` keep mapping to the same tasks.
+
+    Each level can be ascending or descending (see ``SortKey``). The
+    sort is composed by sorting once per level in reverse order --
+    Python's sort is stable, so this is equivalent to a multi-key
+    sort and supports ``reverse`` per level without custom comparison
+    logic (which would require a lambda, which the page API forbids).
+    """
+    if cached_uids is None:
+        ordered = list(tasks)
+        for entry in reversed(sort_keys):
+            field, none_default, reverse = _parse_sort_key_entry(entry)
+
+            def _single_sort_key(
+                t: Task,
+                f: str = field,
+                n: Any = none_default,
+            ) -> Any:
+                value = getattr(t, f, None)
+                return n if value is None else value
+
+            ordered.sort(key=_single_sort_key, reverse=reverse)
+        return ordered, [t.uid for t in ordered]
+
+    by_uid = {t.uid: t for t in tasks}
+    out: list[Task] = []
+    new_cache: list[str] = []
+    seen: set[str] = set()
+    for uid in cached_uids:
+        if uid in by_uid:
+            out.append(by_uid[uid])
+            new_cache.append(uid)
+            seen.add(uid)
+    for t in tasks:
+        if t.uid not in seen:
+            out.append(t)
+            new_cache.append(t.uid)
+            seen.add(t.uid)
+    return out, new_cache
+
+
+def _stable_sort_first_render(
+    tasks: list[Task],
+    *,
+    sort_keys: list[SortKey],
+    cache_key: str,
+) -> list[Task]:
+    """Session_state wrapper around ``_apply_cached_sort``.
+
+    Reads ``st.session_state[cache_key]`` for the cached UID list,
+    delegates to ``_apply_cached_sort``, writes a new cache only on
+    first render (when the cached list was missing), and returns the
+    ordered tasks.
+    """
+    cached = st.session_state.get(cache_key)
+    ordered, new_cache = _apply_cached_sort(
+        tasks, cached_uids=cached, sort_keys=sort_keys,
+    )
+    if cached is None:
+        st.session_state[cache_key] = new_cache
+    return ordered
+
+
 def render_filterable_tasks_table(
     tasks: list[Task],
     *,
@@ -35,6 +175,7 @@ def render_filterable_tasks_table(
     show_project_column: bool = True,
     filter_key: str | None = None,
     default_statuses: list[TaskStatus] | None = None,
+    sort_keys: list[SortKey] | None = None,
 ) -> None:
     """Render status filter pills above a tasks table.
 
@@ -43,6 +184,11 @@ def render_filterable_tasks_table(
     selected statuses before passing to ``render_tasks_table``.
     ``default_statuses`` seeds the initial pill selection (defaults
     to all statuses when None).
+
+    ``sort_keys`` is forwarded to ``render_tasks_table`` and enables
+    the cache-based stable sort (ADR-023). When provided, the table
+    freezes its display order on first render, does not re-sort on
+    inline edits, and shows a Re-sort button to force a refresh.
     """
     statuses_all = [s.value for s in TaskStatus]
     default = [s.value for s in (default_statuses or TaskStatus)]
@@ -64,6 +210,7 @@ def render_filterable_tasks_table(
         caldav=caldav,
         key=key,
         show_project_column=show_project_column,
+        sort_keys=sort_keys,
     )
 
 
@@ -73,6 +220,7 @@ def render_tasks_table(
     caldav: CalDAVFacade,
     key: str,
     show_project_column: bool = True,
+    sort_keys: list[SortKey] | None = None,
 ) -> None:
     """Render the canonical tasks table.
 
@@ -85,6 +233,18 @@ def render_tasks_table(
         show_project_column: Show the project name column. Pass
             ``False`` on project-detail pages where every row belongs
             to the same project.
+        sort_keys: Optional list of sort-key entries that enables the
+            cache-based stable sort (ADR-023). Each entry is either
+            ``(field_name, none_default)`` (ascending) or
+            ``(field_name, none_default, descending)`` (descending).
+            On first render the widget sorts ``tasks`` by ``sort_keys``
+            and caches the UID list in
+            ``st.session_state[f"{key}__sort"]``. Subsequent renders
+            reuse that cache so the display order does not shift under
+            inline edits — this is the fix for the data_editor
+            row-drift bug (streamlit/streamlit#17026). A "Re-sort"
+            button is shown above the table; clicking it pops the
+            cache and reruns.
 
     Inline edits to Title, Priority, Scheduled, Deadline, Assigned,
     Status, and Project flow through ``on_change``. The on-change
@@ -97,6 +257,19 @@ def render_tasks_table(
     if not tasks:
         st.info("No tasks to show.")
         return
+
+    if sort_keys is not None:
+        sort_cache_key = f"{key}__sort"
+        if st.button(
+            "Re-sort",
+            key=f"{key}__resort_btn",
+            help="Re-sort the table by the configured sort keys.",
+        ):
+            st.session_state.pop(sort_cache_key, None)
+            st.rerun()
+        tasks = _stable_sort_first_render(
+            tasks, sort_keys=sort_keys, cache_key=sort_cache_key,
+        )
 
     statuses_all = [s.value for s in TaskStatus]
 
@@ -119,13 +292,19 @@ def render_tasks_table(
         # Strip tz for the dataframe; on edit, the value comes back as
         # naive local and we convert via to_utc before storing.
         sched = to_local(t.scheduled_start) if t.scheduled_start else None
-        dl = to_local(t.hard_deadline) if t.hard_deadline else None
+        # Deadline is a date-only concept for the user. We still store
+        # a tz-aware UTC datetime on the wire (the entity field is
+        # ``datetime``), with the time fixed to 23:59:59 local so two
+        # tasks with the same calendar date sort to the same slot and
+        # the next level (priority) breaks ties. See _handle_inline_edit
+        # for the write path.
+        dl_local = to_local(t.hard_deadline) if t.hard_deadline else None
         row: dict = {
             "uid": t.uid,
             "Title": t.title,
             "Priority": t.priority if t.priority is not None else 5,
             "Scheduled": sched.replace(tzinfo=None) if sched else None,
-            "Deadline": dl.replace(tzinfo=None) if dl else None,
+            "Deadline": dl_local.date() if dl_local else None,
             "Assigned": t.assigned_date,
             "Status": t.status.value,
         }
@@ -197,8 +376,15 @@ def render_tasks_table(
                 if pd.isna(deadline_ts):
                     deadline: object = None
                 else:
-                    py_dt = deadline_ts.to_pydatetime()
-                    deadline = to_utc(py_dt) if isinstance(py_dt, datetime) else None
+                    # Deadline is a date-only UX: snap the picked date
+                    # to 23:59:59 local before storing. Two tasks with
+                    # the same calendar date then share the same stored
+                    # datetime and the sort's priority level breaks the
+                    # tie, which is what the user expects when scanning
+                    # the table.
+                    py_date: date = deadline_ts.date()  # type: ignore[assignment]
+                    py_dt = datetime.combine(py_date, time(23, 59, 59))
+                    deadline = to_utc(py_dt)
                 update = update.model_copy(update={"hard_deadline": deadline})
                 touched = True
             if "Assigned" in changes:
@@ -235,7 +421,7 @@ def render_tasks_table(
         "Title": st.column_config.TextColumn("Title", width="large"),
         "Priority": st.column_config.NumberColumn("Priority", min_value=1, max_value=9),
         "Scheduled": st.column_config.DatetimeColumn("Scheduled", format="YYYY-MM-DD HH:mm"),
-        "Deadline": st.column_config.DatetimeColumn("Deadline", format="YYYY-MM-DD"),
+        "Deadline": st.column_config.DateColumn("Deadline", format="YYYY-MM-DD"),
         "Assigned": st.column_config.DateColumn("Assigned", format="YYYY-MM-DD"),
         "Status": st.column_config.SelectboxColumn("Status", options=statuses_all, required=True),
     }

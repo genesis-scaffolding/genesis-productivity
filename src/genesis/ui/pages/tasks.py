@@ -14,7 +14,7 @@ import streamlit as st
 from genesis.entities import TaskStatus
 from genesis.ui._render import task_create_dialog
 from genesis.ui._state import get_facade
-from genesis.ui._table import render_filterable_tasks_table
+from genesis.ui._table import TASK_TABLE_DEFAULT_SORT_KEYS, render_filterable_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
@@ -33,4 +33,5 @@ render_filterable_tasks_table(
     key="global_tasks",
     filter_key="tasks_filter_statuses",
     default_statuses=[TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS],
+    sort_keys=TASK_TABLE_DEFAULT_SORT_KEYS,
 )

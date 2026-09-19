@@ -64,11 +64,11 @@ Projects are NOT sub-collections. A project is a VTODO inside `projects`, identi
 | `uid` | str | `UID` | Immutable PK |
 | `summary` | str | `SUMMARY` | Task title |
 | `description` | str \| None | `DESCRIPTION` | Optional notes |
-| `hard_deadline` | datetime \| None | `DUE` | Firm delivery, datetime UTC |
+| `hard_deadline` | datetime \| None | `DUE` | Firm delivery, datetime UTC; the UI treats this as date-only and snaps the picked date to 23:59:59 local on write |
 | `assigned_date` | date \| None | `X-ASSIGNED-DATE` | Day the user plans to work on it |
 | `scheduled_start` | datetime \| None | `DTSTART` | Time-blocked appointment, datetime UTC; triggers shadow VEVENT |
 | `scheduled_duration` | int \| None | `X-SCHEDULED-DURATION` | Duration in minutes; defaults to 30 when shadowing |
-| `priority` | int \| None | `PRIORITY` | 1–9, 1 = highest |
+| `priority` | int \| None | `PRIORITY` | 1–9; genesis UI sorts 9 at the top, so the larger integer is the more urgent task (opposite of the RFC 5545 convention) |
 | `status` | enum | `STATUS` | Same four values as Project |
 | `project_id` | str \| None | `X-PROJECT-ID` | FK to Project.UID, optional |
 | `completed_at` | datetime \| None | `COMPLETED` | Set when status transitions to completed |

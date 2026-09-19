@@ -31,13 +31,23 @@ class Task(BaseModel):
         uid: Unique identifier.
         title: Task title.
         description: Optional detailed description.
-        hard_deadline: The firm delivery date (datetime UTC; stored as DUE).
+        hard_deadline: The firm delivery date (datetime UTC; stored
+            as DUE). The UI treats this as a date-only concept and
+            snaps the picked date to 23:59:59 local on write, so the
+            time component is meaningful only as a stable tiebreaker
+            and is not user-editable.
         assigned_date: The calendar day the user plans to work on the task
             (date, no tz needed).
         scheduled_start: When the task becomes a calendar appointment (UTC).
         scheduled_duration: Appointment length in minutes. Used to compute the
             shadow VEVENT's DTEND. Ignored when scheduled_start is None.
-        priority: 1-9 where 1 is highest. Mirrors iCalendar PRIORITY.
+        priority: 1-9 where 9 is highest. The genesis UI surfaces
+            priorities with 9 at the top of the task table, so the
+            "higher number = more urgent" convention applies here.
+            This is the opposite of RFC 5545 (iCalendar PRIORITY),
+            where 1 is the highest value; the raw iCalendar value is
+            still stored as-is on the wire, but readers of this model
+            should treat the larger integer as the more urgent task.
         status: Current status in the lifecycle.
         project_id: Optional project this task belongs to.
         completed_at: When the task was completed (UTC).

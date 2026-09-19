@@ -145,7 +145,10 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
 
         # Build UTC datetimes from local-naive streamlit widgets.
         scheduled_start_utc = to_utc(scheduled_start) if scheduled_start else None
-        hard_deadline_dt = datetime.combine(hard_deadline_date, time.min) if hard_deadline_date else None
+        # Deadline is a date-only field; snap to 23:59:59 so two tasks
+        # with the same calendar date share the same stored datetime
+        # and sort ties break on the next level (priority).
+        hard_deadline_dt = datetime.combine(hard_deadline_date, time(23, 59, 59)) if hard_deadline_date else None
         hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
 
         facade.caldav.create_task(
@@ -263,7 +266,10 @@ def task_edit_dialog(uid: str) -> None:
         new_status = TaskStatus(status_label)
         # Build UTC datetimes from local-naive streamlit widgets.
         combined_scheduled_utc = to_utc(combined_scheduled) if combined_scheduled else None
-        hard_deadline_dt = datetime.combine(hard_deadline_date, time.min) if hard_deadline_date else None
+        # Deadline is a date-only field; snap to 23:59:59 so two tasks
+        # with the same calendar date share the same stored datetime
+        # and sort ties break on the next level (priority).
+        hard_deadline_dt = datetime.combine(hard_deadline_date, time(23, 59, 59)) if hard_deadline_date else None
         hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
 
         update_kwargs: dict = {

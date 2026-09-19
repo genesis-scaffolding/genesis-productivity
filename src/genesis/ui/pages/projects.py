@@ -21,7 +21,7 @@ from genesis.ui._render import (
     task_create_dialog,
 )
 from genesis.ui._state import get_facade
-from genesis.ui._table import render_filterable_tasks_table
+from genesis.ui._table import TASK_TABLE_DEFAULT_SORT_KEYS, render_filterable_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
@@ -177,14 +177,17 @@ def _render_detail(uid: str) -> None:
     if st.button("+ Add Task", key=f"pd_add_task_{uid}"):
         task_create_dialog(project_id=uid)
 
-    sorted_tasks = sorted(tasks, key=lambda t: (t.status.value, -(t.priority or 5)))
+    # Cache-based stable sort (ADR-023): the table widget freezes
+    # the order on first render and exposes a Re-sort button. We pass
+    # the unsorted tasks and let the widget own the ordering.
     render_filterable_tasks_table(
-        sorted_tasks,
+        tasks,
         caldav=caldav,
         key=f"project_tasks_{uid}",
         show_project_column=False,
         filter_key=f"pd_filter_statuses_{uid}",
         default_statuses=[TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS],
+        sort_keys=TASK_TABLE_DEFAULT_SORT_KEYS,
     )
 
 

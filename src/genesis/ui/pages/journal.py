@@ -162,13 +162,6 @@ def _render_list() -> None:
 def _render_view(uid: str) -> None:
     entry = journal.get_entry(uid)
 
-    # Back button on its own row
-    back_col, _ = st.columns([1, 8])
-    with back_col:
-        if st.button("← Back", key="je_back"):
-            st.query_params.clear()
-            st.rerun()
-
     if entry is None:
         st.title("Entry not found")
         if st.button("Create entry at this UID", key="je_recreate"):
@@ -176,8 +169,18 @@ def _render_view(uid: str) -> None:
             st.rerun()
         return
 
-    # Breadcrumb + title + actions on the next row
+    # Breadcrumb on the first row.
     st.caption(f"Productivity > Journal > {entry.date.isoformat()}")
+    # Subtle back link directly under the breadcrumb, above the title.
+    if st.button(
+        "Back",
+        key="je_back",
+        icon=":material/arrow_back:",
+        type="tertiary",
+    ):
+        st.query_params.clear()
+        st.rerun()
+    # Title + actions on the next row
     header_cols = st.columns([8, 1, 1])
     with header_cols[0]:
         title = entry.title or entry.date.strftime("%A, %B %d, %Y")

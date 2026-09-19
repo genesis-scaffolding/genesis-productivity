@@ -186,11 +186,19 @@ else:
     totals = df.groupby("Date", as_index=False, sort=False)["Hours"].sum()
     totals = totals[totals["Hours"] > 0]
     totals["Total Label"] = totals["Hours"].map(_fmt_hours)
+    seen: set[str] = set()
+    labels_in_order: list[str] = []
+    for p in rollup.daily:
+        label = p.day.strftime("%a %-d")
+        if label not in seen:
+            seen.add(label)
+            labels_in_order.append(label)
+    x_axis = alt.X("Date:N", title="Day", sort=labels_in_order)
     bars = (
         alt.Chart(df)
         .mark_bar()
         .encode(
-            x=alt.X("Date:N", title="Day"),
+            x=x_axis,
             y=alt.Y("Hours:Q", title="Hours", stack=True),
             color=alt.Color("Type:N", legend=alt.Legend(orient="bottom")),
             tooltip=[
@@ -204,7 +212,7 @@ else:
         alt.Chart(totals)
         .mark_text(align="center", baseline="bottom", dy=-4, fontSize=11, color="#9ca3af")
         .encode(
-            x="Date:N",
+            x=x_axis,
             y=alt.Y("Hours:Q"),
             text="Total Label:N",
         )

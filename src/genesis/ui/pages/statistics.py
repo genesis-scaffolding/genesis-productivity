@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -111,6 +112,11 @@ def _fmt_minutes(minutes: float) -> str:
     return f"{m}m"
 
 
+def _fmt_hours(hours: float) -> str:
+    """Render hours as 'Hh Mm' or 'Mm' (rounding to whole minutes)."""
+    return _fmt_minutes(hours * 60)
+
+
 # -----------------------------------------------------------------------------
 # KPI strip
 # -----------------------------------------------------------------------------
@@ -163,13 +169,36 @@ st.divider()
 
 
 st.subheader("Daily activity")
-st.caption(f"Minutes per day, in local time, stacked by category, for {period_label.lower()}.")
+st.caption(f"Hours per day, in local time, stacked by category, for {period_label.lower()}.")
 if not rollup.daily:
     st.info("No completed sessions in this period yet.")
 else:
-    cols = {cat.value: [p.minutes_by_category.get(cat, 0.0) for p in rollup.daily] for cat in TimeLogCategory}
-    df = pd.DataFrame(cols, index=[p.day for p in rollup.daily])
-    st.bar_chart(df, height=240, width="stretch")
+    wide = pd.DataFrame(
+        {
+            cat.value: [round(p.minutes_by_category.get(cat, 0.0) / 60.0, 2) for p in rollup.daily]
+            for cat in TimeLogCategory
+        },
+        index=[p.day.strftime("%a %-d") for p in rollup.daily],
+    )
+    wide.index.name = "Date"
+    df = wide.reset_index().melt(id_vars="Date", var_name="Type", value_name="Hours")
+    df["Hours Label"] = df["Hours"].map(_fmt_hours)
+    chart = (
+        alt.Chart(df)
+        .mark_bar()
+        .encode(
+            x=alt.X("Date:N", title="Day"),
+            y=alt.Y("Hours:Q", title="Hours", stack=True),
+            color=alt.Color("Type:N", legend=alt.Legend(orient="bottom")),
+            tooltip=[
+                alt.Tooltip("Date:N", title="Date"),
+                alt.Tooltip("Type:N", title="Type"),
+                alt.Tooltip("Hours Label:N", title="Hours"),
+            ],
+        )
+        .properties(height=240)
+    )
+    st.altair_chart(chart, width="stretch", theme="streamlit")
 
 st.write("")
 

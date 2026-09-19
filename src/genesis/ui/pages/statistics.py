@@ -183,7 +183,10 @@ else:
     wide.index.name = "Date"
     df = wide.reset_index().melt(id_vars="Date", var_name="Type", value_name="Hours")
     df["Hours Label"] = df["Hours"].map(_fmt_hours)
-    chart = (
+    totals = df.groupby("Date", as_index=False, sort=False)["Hours"].sum()
+    totals = totals[totals["Hours"] > 0]
+    totals["Total Label"] = totals["Hours"].map(_fmt_hours)
+    bars = (
         alt.Chart(df)
         .mark_bar()
         .encode(
@@ -196,8 +199,17 @@ else:
                 alt.Tooltip("Hours Label:N", title="Hours"),
             ],
         )
-        .properties(height=240)
     )
+    totals_text = (
+        alt.Chart(totals)
+        .mark_text(align="center", baseline="bottom", dy=-4, fontSize=11, color="#9ca3af")
+        .encode(
+            x="Date:N",
+            y=alt.Y("Hours:Q"),
+            text="Total Label:N",
+        )
+    )
+    chart = (bars + totals_text).properties(height=360)
     st.altair_chart(chart, width="stretch", theme="streamlit")
 
 st.write("")

@@ -43,6 +43,10 @@ nav: dict[str, list[st.Page]] = {
         _page(_PAGES / "journal.py", "Journal", ":material/article:", "journal"),
         _page(_PAGES / "statistics.py", "Statistics", ":material/analytics:", "statistics"),
     ],
+    "User": [
+        _page(_PAGES / "profile.py", "Profile", ":material/person:", "profile"),
+        _page(_PAGES / "life_story.py", "Life Story", ":material/history_edu:", "life_story"),
+    ],
     "Account": [
         _page(_PAGES / "settings.py", "Settings", ":material/settings:", "settings"),
     ],

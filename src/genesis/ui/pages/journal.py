@@ -8,6 +8,7 @@ and is not editable from the UI (it is the entry's created date).
 
 from __future__ import annotations
 
+import uuid as _uuid
 from datetime import date
 
 import pandas as pd
@@ -26,45 +27,65 @@ journal = facade.journal
 # -----------------------------------------------------------------------------
 
 
+_PERIODIC_TYPES: tuple[EntryType, ...] = (
+    EntryType.DAILY,
+    EntryType.WEEKLY,
+    EntryType.MONTHLY,
+    EntryType.YEARLY,
+)
+
+
 def _render_list() -> None:
     st.title("Journal")
     st.caption("Reflect on your progress and plan your future.")
 
     today = date.today()
-    existing_daily = journal.find_for_period(EntryType.DAILY, today)
-    existing_weekly = journal.find_for_period(EntryType.WEEKLY, today)
-    existing_monthly = journal.find_for_period(EntryType.MONTHLY, today)
-    existing_yearly = journal.find_for_period(EntryType.YEARLY, today)
+    existing = {t: journal.find_for_period(t, today) for t in _PERIODIC_TYPES}
 
-    # Top-right action row. "+ New Entry" is always available so the
-    # user can add any entry type on any day. When the periodic
-    # entry for the current period exists, a button opens it for
-    # editing.
-    import uuid as _uuid
-
-    def _open(existing) -> None:
-        st.query_params["uid"] = existing.uid
-        st.query_params["edit"] = "1"
+    # Primary action row: the single most prominent button is "+ New
+    # Entry". The periodic openers sit below as a quiet "today" row
+    # so the primary action is never competing with four siblings.
+    if st.button(
+        "+ New Entry",
+        key="new_entry_btn",
+        type="primary",
+        icon=":material/add:",
+    ):
+        st.query_params["uid"] = _uuid.uuid4().hex
+        st.query_params["new"] = "1"
         st.rerun()
 
-    with st.container(horizontal=True, horizontal_alignment="right"):
-        if st.button("+ New Entry", key="new_entry_btn"):
-            st.query_params["uid"] = _uuid.uuid4().hex
-            st.query_params["new"] = "1"
-            st.rerun()
-        if existing_daily is not None:
-            if st.button("Open daily", key="open_today_daily_btn"):
-                _open(existing_daily)
-        if existing_weekly is not None:
-            if st.button("Open weekly", key="open_this_week_btn"):
-                _open(existing_weekly)
-        if existing_monthly is not None:
-            if st.button("Open monthly", key="open_this_month_btn"):
-                _open(existing_monthly)
-        if existing_yearly is not None:
-            if st.button("Open yearly", key="open_this_year_btn"):
-                _open(existing_yearly)
+    st.write("")
+    st.markdown("**Today**")
+    st.caption("Jump straight to the entry that owns the current period.")
+    today_cols = st.columns(len(_PERIODIC_TYPES))
+    for col, entry_type in zip(today_cols, _PERIODIC_TYPES, strict=True):
+        with col:
+            label = entry_type.value.capitalize()
+            current = existing[entry_type]
+            if current is not None:
+                if st.button(
+                    f"Open {label}",
+                    key=f"open_this_{entry_type.value}_btn",
+                    type="secondary",
+                    use_container_width=True,
+                ):
+                    st.query_params["uid"] = current.uid
+                    st.query_params["edit"] = "1"
+                    st.rerun()
+            else:
+                if st.button(
+                    f"Write {label}",
+                    key=f"write_this_{entry_type.value}_btn",
+                    type="secondary",
+                    use_container_width=True,
+                ):
+                    st.query_params["uid"] = _uuid.uuid4().hex
+                    st.query_params["new"] = "1"
+                    st.query_params["type"] = entry_type.value
+                    st.rerun()
 
+    st.write("")
     type_options = [t.value for t in EntryType]
     type_filter = st.session_state.get("journal_type_filter", list(type_options))
     type_filter = st.pills(
@@ -83,7 +104,7 @@ def _render_list() -> None:
         entries = [e for e in entries if e.type and e.type.value in selected_types]
 
     if not entries:
-        st.info("No journal entries yet. Use the **+ New Entry** button to start.")
+        _render_list_empty()
         return
 
     df = pd.DataFrame(
@@ -154,6 +175,19 @@ def _render_list() -> None:
     )
 
 
+def _render_list_empty() -> None:
+    """Render the empty state for the list view.
+
+    Mirrors the empty-state pattern from the profile page: a
+    friendly hint + the primary CTA already rendered above, so the
+    user can act without scrolling.
+    """
+    st.write("")
+    st.info(
+        "No journal entries yet. Use **+ New Entry** above to write your first one. Daily entries are a good default."
+    )
+
+
 # -----------------------------------------------------------------------------
 # Entry view
 # -----------------------------------------------------------------------------
@@ -164,14 +198,17 @@ def _render_view(uid: str) -> None:
 
     if entry is None:
         st.title("Entry not found")
-        if st.button("Create entry at this UID", key="je_recreate"):
+        if st.button(
+            "Create entry at this UID",
+            key="je_recreate",
+            type="primary",
+        ):
             st.query_params["new"] = "1"
             st.rerun()
         return
 
-    # Breadcrumb on the first row.
+    # Breadcrumb + back link on the first row.
     st.caption(f"Productivity > Journal > {entry.date.isoformat()}")
-    # Subtle back link directly under the breadcrumb, above the title.
     if st.button(
         "Back",
         key="je_back",
@@ -180,29 +217,43 @@ def _render_view(uid: str) -> None:
     ):
         st.query_params.clear()
         st.rerun()
-    # Title + actions on the next row
-    header_cols = st.columns([8, 1, 1])
-    with header_cols[0]:
-        title = entry.title or entry.date.strftime("%A, %B %d, %Y")
-        st.title(title)
-        if entry.type:
-            st.badge(entry.type.value, color="blue")
-    with header_cols[1]:
-        if st.button("✎ Edit", key="je_edit_btn"):
-            st.query_params["edit"] = "1"
-            st.rerun()
-    with header_cols[2]:
-        if st.button("🗑 Delete", key="je_del_btn"):
-            delete_confirm_dialog(
-                f"entry {entry.date.isoformat()}",
-                lambda: journal.delete_entry(entry.uid),
-            )
 
-    st.divider()
+    # Title row: title + type badge. No actions here; they sit below
+    # the content, matching the profile/life-story page layout.
+    title_text = entry.title or entry.date.strftime("%A, %B %d, %Y")
+    title_row = st.container(horizontal=True, vertical_alignment="center")
+    with title_row:
+        st.markdown(f"## {title_text}")
+        if entry.type is not None:
+            st.badge(entry.type.value, color="blue")
+
     if entry.content.strip():
         st.markdown(entry.content)
     else:
         st.caption("Empty entry.")
+
+    # Action row below the content, separated by a divider.
+    # Matches the profile / life-story page pattern: content first,
+    # then the primary action right where the user finishes reading.
+    st.divider()
+    st.write("")
+    if st.button(
+        "Edit",
+        key="je_edit_btn",
+        icon=":material/edit:",
+        type="primary",
+    ):
+        st.query_params["edit"] = "1"
+        st.rerun()
+    if st.button(
+        "Delete",
+        key="je_del_btn",
+        icon=":material/delete:",
+    ):
+        delete_confirm_dialog(
+            f"entry {entry.date.isoformat()}",
+            lambda: journal.delete_entry(entry.uid),
+        )
 
 
 def _render_edit(uid: str) -> None:
@@ -216,22 +267,36 @@ def _render_edit(uid: str) -> None:
     cur_type_label = entry.type.value if entry.type else "(none)"
     cur_idx = type_labels.index(cur_type_label) if cur_type_label in type_labels else 0
 
-    header_cols = st.columns([1, 6])
-    with header_cols[0]:
-        if st.button("← Back", key="je_edit_back"):
-            st.query_params.pop("edit", None)
-            st.rerun()
-    with header_cols[1]:
-        st.caption(f"Productivity > Journal > {entry.date.isoformat()} > Edit")
-        st.title(f"Edit {entry.date.isoformat()}")
+    st.caption(f"Productivity > Journal > {entry.date.isoformat()} > Edit")
+    if st.button(
+        "Back",
+        key="je_edit_back",
+        icon=":material/arrow_back:",
+        type="tertiary",
+    ):
+        st.query_params.pop("edit", None)
+        st.rerun()
+    st.title(f"Edit {entry.date.isoformat()}")
 
     with st.form(f"je_edit_{uid}"):
         ftitle = st.text_input("Title", value=entry.title or "")
         ftype = st.selectbox("Type", type_labels, index=cur_idx)
         fbody = st.text_area("Content", value=entry.content, height=400)
         st.caption(f"Date: {entry.date.isoformat()} (set at creation, not editable)")
-        cols = st.columns([1, 1, 6])
-        if cols[0].form_submit_button("Save"):
+
+        action_row = st.container(horizontal=True, horizontal_alignment="right")
+        with action_row:
+            save_clicked = st.form_submit_button(
+                "Save",
+                type="primary",
+                icon=":material/save:",
+            )
+            cancel_clicked = st.form_submit_button(
+                "Cancel",
+                type="tertiary",
+            )
+
+        if save_clicked:
             new_type = EntryType(ftype) if ftype != "(none)" else None
             entry.title = ftitle or None
             entry.type = new_type
@@ -243,7 +308,7 @@ def _render_edit(uid: str) -> None:
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
-        if cols[1].form_submit_button("Cancel"):
+        if cancel_clicked:
             st.query_params.pop("edit", None)
             st.rerun()
 
@@ -252,22 +317,42 @@ def _render_create(uid: str) -> None:
     type_labels = ["(none)"] + [t.value for t in EntryType]
     today = date.today()
 
-    header_cols = st.columns([1, 6])
-    with header_cols[0]:
-        if st.button("← Back", key="je_create_back"):
-            st.query_params.clear()
-            st.rerun()
-    with header_cols[1]:
-        st.caption("Productivity > Journal > New Entry")
-        st.title("New Journal Entry")
+    st.caption("Productivity > Journal > New Entry")
+    if st.button(
+        "Back",
+        key="je_create_back",
+        icon=":material/arrow_back:",
+        type="tertiary",
+    ):
+        st.query_params.clear()
+        st.rerun()
+    st.title("New Journal Entry")
+
+    # If the list view routed here with a preselected type, honour it.
+    preselected_type = st.query_params.get("type", "daily")
+    if preselected_type not in type_labels:
+        preselected_type = "daily"
+    cur_idx = type_labels.index(preselected_type)
 
     with st.form("je_create"):
         ftitle = st.text_input("Title")
-        ftype = st.selectbox("Type", type_labels, index=type_labels.index("daily"))
+        ftype = st.selectbox("Type", type_labels, index=cur_idx)
         fbody = st.text_area("Content", height=400, placeholder="What's on your mind?")
         st.caption(f"Date: {today.isoformat()} (set at creation, not editable)")
-        cols = st.columns([1, 1, 6])
-        if cols[0].form_submit_button("Create"):
+
+        action_row = st.container(horizontal=True, horizontal_alignment="right")
+        with action_row:
+            save_clicked = st.form_submit_button(
+                "Create",
+                type="primary",
+                icon=":material/save:",
+            )
+            cancel_clicked = st.form_submit_button(
+                "Cancel",
+                type="tertiary",
+            )
+
+        if save_clicked:
             new_type = EntryType(ftype) if ftype != "(none)" else None
             existing = journal.find_for_period(new_type, today) if new_type is not None else None
             if existing is not None and new_type is not None:
@@ -290,7 +375,7 @@ def _render_create(uid: str) -> None:
                     st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
-        if cols[1].form_submit_button("Cancel"):
+        if cancel_clicked:
             st.query_params.clear()
             st.rerun()
 

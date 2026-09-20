@@ -100,7 +100,7 @@ def test_facade_restart_server_stops_and_starts(monkeypatch: pytest.MonkeyPatch,
     configs_path.write_text("user: alice\n")
 
     facade = Facade(configs_path, ensure_server=False)
-    facade._server = fake  # noqa: SLF001 - simulate "already started"
+    facade._server = fake  # type: ignore[assignment]  # noqa: SLF001 - simulate "already started"
     facade.restart_server()
 
     assert fake.stopped is True  # type: ignore[attr-defined]

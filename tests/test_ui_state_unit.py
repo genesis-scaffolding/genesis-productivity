@@ -8,6 +8,7 @@ become orphaned when the shell sends ``Ctrl+C`` to ``make serve``.
 from __future__ import annotations
 
 import signal
+from collections.abc import Callable
 
 import pytest
 
@@ -42,8 +43,8 @@ def test_sigterm_handler_shuts_down_cached_facades(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(mod.os, "kill", lambda *a, **kw: None)
 
-    handler = signal.getsignal(signal.SIGTERM)
-    assert handler is not None
+    handler: Callable[[int, object], None] | int | None = signal.getsignal(signal.SIGTERM)  # type: ignore[assignment]
+    assert callable(handler)
     handler(signal.SIGTERM, None)
 
     assert fake.shutdown_called == 1

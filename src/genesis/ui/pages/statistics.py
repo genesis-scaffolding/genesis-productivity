@@ -28,7 +28,7 @@ import pandas as pd
 import streamlit as st
 
 from genesis.category.enums import TimeLogCategory
-from genesis.entities import TimeLogEntryUpdate
+from genesis.entities import TimeLogEntry, TimeLogEntryUpdate
 from genesis.stats import Period, compute_rollup
 from genesis.tz import format_local
 from genesis.ui._render import session_log_dialog
@@ -183,9 +183,18 @@ else:
     wide.index.name = "Date"
     df = wide.reset_index().melt(id_vars="Date", var_name="Type", value_name="Hours")
     df["Hours Label"] = df["Hours"].map(_fmt_hours)
-    totals = df.groupby("Date", as_index=False, sort=False)["Hours"].sum()
-    totals = totals[totals["Hours"] > 0]
-    totals["Total Label"] = totals["Hours"].map(_fmt_hours)
+    # Compute the per-day total directly from ``rollup.daily`` so we
+    # avoid the ``df.groupby(...).sum()`` chain whose return type the
+    # pandas stubs over-generalize. Same numbers, simpler types.
+    totals_rows: list[dict[str, object]] = []
+    for p in rollup.daily:
+        label = p.day.strftime("%a %-d")
+        day_hours = sum(p.minutes_by_category.get(cat, 0.0) for cat in TimeLogCategory) / 60.0
+        if day_hours > 0:
+            totals_rows.append({"Date": label, "Hours": round(day_hours, 2)})
+    totals = pd.DataFrame(totals_rows)
+    if not totals.empty:
+        totals["Total Label"] = totals["Hours"].map(_fmt_hours)
     seen: set[str] = set()
     labels_in_order: list[str] = []
     for p in rollup.daily:
@@ -281,7 +290,7 @@ else:
     # category the user sees in the table. Look it up from the
     # already-fetched all_completed set so we don't widen the
     # API/dataclass surface for a UI-only display field.
-    entries_by_uid: dict[str, object] = {e.uid: e for e in all_completed}
+    entries_by_uid: dict[str, TimeLogEntry] = {e.uid: e for e in all_completed}
 
     def _category_for(uid: str) -> str:
         entry = entries_by_uid.get(uid)
@@ -316,9 +325,7 @@ else:
             touched = False
             if "Type" in changes:
                 try:
-                    update = update.model_copy(
-                        update={"category": TimeLogCategory(str(changes["Type"]))}
-                    )
+                    update = update.model_copy(update={"category": TimeLogCategory(str(changes["Type"]))})
                     touched = True
                 except ValueError:
                     pass
@@ -329,9 +336,7 @@ else:
                     pass
                 else:
                     if new_minutes >= 0:
-                        update = update.model_copy(
-                            update={"due": original.start + timedelta(minutes=new_minutes)}
-                        )
+                        update = update.model_copy(update={"due": original.start + timedelta(minutes=new_minutes)})
                         touched = True
             if not touched:
                 continue

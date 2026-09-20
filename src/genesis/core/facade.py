@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from ..caldav.facade import CalDAVFacade
     from ..carddav.facade import CardDAVFacade
     from ..journal.facade import JournalFacade
+    from ..profile.facade import ProfileFacade
 
 
 class Facade:
@@ -55,6 +56,7 @@ class Facade:
         self._carddav: CardDAVFacade | None = None
         self._journal: JournalFacade | None = None
         self._backup: BackupFacade | None = None
+        self._profile: ProfileFacade | None = None
 
         if ensure_server:
             self._ensure_server_running()
@@ -129,6 +131,21 @@ class Facade:
             cfg = self.configs
             self._journal = JournalFacade(cfg.paths.journal_root / cfg.user)
         return self._journal
+
+    @property
+    def profile(self) -> ProfileFacade:
+        """Return the Profile facade for profile and life-story storage.
+
+        ADR-025: per-user profile data lives under
+        ``<data_home>/genesis/<user>/profile``. The facade is
+        constructed lazily so callers that never touch profile
+        data don't pay the directory-mkdir cost.
+        """
+        if self._profile is None:
+            from ..profile.facade import ProfileFacade
+
+            self._profile = ProfileFacade(self._configs.paths.profile_root)
+        return self._profile
 
     @property
     def backup(self) -> BackupFacade:

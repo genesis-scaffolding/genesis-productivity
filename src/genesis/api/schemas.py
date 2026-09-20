@@ -21,11 +21,12 @@ from datetime import datetime as _datetime
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, PlainSerializer
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
 
 from ..category.enums import TimeLogCategory
 from ..entities import ProjectStatus, TaskStatus
 from ..journal.facade import EntryType
+from ..profile import ProfileTarget
 
 # ---------------------------------------------------------------------------
 # Datetime serialization
@@ -331,6 +332,111 @@ class StatisticsOut(BaseModel):
     by_task: list[ByTaskOut]
     by_category: list[ByCategoryOut]
     recent: list[RecentSessionOut]
+
+
+# ---------------------------------------------------------------------------
+# Profile (ADR-025)
+# ---------------------------------------------------------------------------
+
+
+# Wire-side mirror of ProfileTarget. The enum values
+# (``profile`` / ``life_story``) are the on-wire strings; the
+# Python identifier is ``ProfileWireTarget`` to keep import lines
+# short elsewhere.
+ProfileWireTarget = ProfileTarget
+
+
+class ProfileContentOut(BaseModel):
+    """Read response: target + path + trimmed content."""
+
+    target: ProfileWireTarget
+    path: str
+    content: str
+
+
+class ProfileWriteIn(BaseModel):
+    """Overwrite request body."""
+
+    content: str
+    note: str | None = None
+
+
+class ProfileEditIn(BaseModel):
+    """Surgical edit request body.
+
+    ``global_replace`` replaces every occurrence; the default is
+    first-only (matching the storage layer's contract). Empty
+    ``old_text`` is rejected by the storage layer with a 400.
+    """
+
+    old_text: str
+    new_text: str
+    global_replace: bool = False
+    note: str | None = None
+
+
+class ProfileWriteOut(BaseModel):
+    """Write / edit response: what was written + whether a snapshot was taken."""
+
+    target: ProfileWireTarget
+    path: str
+    bytes_written: int
+    replacements: int = 0
+    snapshot: str | None = Field(
+        default=None,
+        description=("Filename of the snapshot taken after the write, or None when dedup skipped it."),
+    )
+
+
+class ProfileListRowOut(BaseModel):
+    """One row of :class:`ProfileListOut`."""
+
+    target: ProfileWireTarget
+    path: str
+    exists: bool
+    bytes: int
+
+
+class ProfileListOut(BaseModel):
+    rows: list[ProfileListRowOut]
+    profile_root: str
+
+
+class ProfileSnapshotOut(BaseModel):
+    """One history row."""
+
+    ts: str
+    filename: str
+    sha: str | None
+    size: int
+    command: str | None
+    note: str | None
+
+
+class ProfileHistoryOut(BaseModel):
+    target: ProfileWireTarget
+    rows: list[ProfileSnapshotOut]
+    total: int
+
+
+class ProfileRestoreIn(BaseModel):
+    """Restore request body."""
+
+    version: str = Field(
+        description=(
+            "Snapshot identifier. Accepts the full UTC timestamp, a unique "
+            "prefix of it, the bare .md filename, or the bare .meta.json filename. "
+            "Errors on ambiguous prefix."
+        ),
+    )
+    note: str | None = None
+
+
+class ProfileRestoreOut(BaseModel):
+    target: ProfileWireTarget
+    applied_filename: str
+    applied_size: int
+    pre_restore_snapshot: str | None
 
 
 # ---------------------------------------------------------------------------

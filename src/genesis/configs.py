@@ -54,6 +54,10 @@ class Paths(BaseModel):
     ``journal_root``, and ``api_secret_key``. They live under
     ``<xdg_data>/<app_name>/`` so one Radicale instance and one
     JWT signing key serve every account (ADR-019).
+
+    ``profile_root`` is per-user (ADR-025): each account gets its
+    own profile and life-story files. Resolves under
+    ``<xdg_data>/<app_name>/<user>/profile``.
     """
 
     config: Path = Field(description="Directory for config files (per-user).")
@@ -68,6 +72,9 @@ class Paths(BaseModel):
     )
     api_secret_key: Path = Field(
         description="Shared JWT signing key. Rotating it invalidates every user's tokens.",
+    )
+    profile_root: Path = Field(
+        description="Per-user profile directory. Resolves under data/, namespaced by user.",
     )
 
 
@@ -227,6 +234,7 @@ def _build_paths(raw: dict, user: str) -> dict:
     radicale_root = yaml_paths.get("radicale_root") or f"{shared_prefix}/radicale"
     journal_root = yaml_paths.get("journal_root") or f"{shared_prefix}/journals"
     api_secret_key = yaml_paths.get("api_secret_key") or f"{shared_prefix}/api_secret.key"
+    profile_root = yaml_paths.get("profile_root") or f"{data_home}/{user_prefix}/profile"
 
     return {
         "config": config_base,
@@ -236,6 +244,7 @@ def _build_paths(raw: dict, user: str) -> dict:
         "radicale_root": radicale_root,
         "journal_root": journal_root,
         "api_secret_key": api_secret_key,
+        "profile_root": profile_root,
     }
 
 

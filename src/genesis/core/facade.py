@@ -25,6 +25,7 @@ from ..configs import Configs
 from ..dav.server import ServerManager
 
 if TYPE_CHECKING:
+    from ..backup.facade import BackupFacade
     from ..caldav.facade import CalDAVFacade
     from ..carddav.facade import CardDAVFacade
     from ..journal.facade import JournalFacade
@@ -53,6 +54,7 @@ class Facade:
         self._caldav: CalDAVFacade | None = None
         self._carddav: CardDAVFacade | None = None
         self._journal: JournalFacade | None = None
+        self._backup: BackupFacade | None = None
 
         if ensure_server:
             self._ensure_server_running()
@@ -127,6 +129,20 @@ class Facade:
             cfg = self.configs
             self._journal = JournalFacade(cfg.paths.journal_root / cfg.user)
         return self._journal
+
+    @property
+    def backup(self) -> BackupFacade:
+        """Return the Backup facade for export and restore.
+
+        See ADR-024. The facade reuses this ``Facade``'s configs,
+        sub-facades, and ``restart_server`` so a destructive restore
+        can invalidate Radicale's in-memory state.
+        """
+        if self._backup is None:
+            from ..backup.facade import BackupFacade
+
+            self._backup = BackupFacade(self)
+        return self._backup
 
     def shutdown(self) -> None:
         """Stop the DAV server if we started it."""

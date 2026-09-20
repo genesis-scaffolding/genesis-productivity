@@ -43,6 +43,9 @@ nav: dict[str, list[st.Page]] = {
         _page(_PAGES / "journal.py", "Journal", ":material/article:", "journal"),
         _page(_PAGES / "statistics.py", "Statistics", ":material/analytics:", "statistics"),
     ],
+    "Account": [
+        _page(_PAGES / "settings.py", "Settings", ":material/settings:", "settings"),
+    ],
 }
 
 from genesis.ui._auth import rehydrate_session, render_logout_button  # noqa: E402

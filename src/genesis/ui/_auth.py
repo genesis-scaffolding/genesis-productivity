@@ -102,9 +102,7 @@ def _emit_session_cookie_js() -> None:
     intent = sign_intent(username)
     _log.info("emitting cookie JS for username=%r intent=%r", username, intent)
     st.html(
-        _COOKIE_FETCH_JS.format(
-            url="'/api/session/login'", body=f'{{"intent": "{intent}"}}'
-        ),
+        _COOKIE_FETCH_JS.format(url="'/api/session/login'", body=f'{{"intent": "{intent}"}}'),
         unsafe_allow_javascript=True,
     )
 
@@ -127,9 +125,7 @@ def logout() -> None:
     """
     st.session_state.pop(_SESSION_KEY, None)
     st.html(
-        _COOKIE_FETCH_JS.format(
-            url="'/api/session/logout'", body="{}"
-        ),
+        _COOKIE_FETCH_JS.format(url="'/api/session/logout'", body="{}"),
         unsafe_allow_javascript=True,
     )
 

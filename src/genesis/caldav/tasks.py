@@ -217,9 +217,7 @@ def list_tasks(
     ``include_completed=True`` is set because the previous full-collection
     walk returned both active and completed tasks.
     """
-    completed_window = (
-        completed_at_start is not None or completed_at_end is not None
-    )
+    completed_window = completed_at_start is not None or completed_at_end is not None
     effective_status = TaskStatus.COMPLETED if completed_window else status
 
     cal = _get_tasks_calendar(facade)
@@ -252,9 +250,7 @@ def list_tasks(
             continue
 
     if completed_window:
-        tasks = [
-            t for t in tasks if _in_completed_window(t, completed_at_start, completed_at_end)
-        ]
+        tasks = [t for t in tasks if _in_completed_window(t, completed_at_start, completed_at_end)]
 
     if sort_by:
         for key in reversed(sort_by):

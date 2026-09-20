@@ -286,9 +286,7 @@ def test_project_cancel_cascades_to_open_tasks(
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "canceled"
 
-    after_t1 = client.get(
-        f"/productivity/tasks/{t1['uid']}", headers=headers
-    ).json()
+    after_t1 = client.get(f"/productivity/tasks/{t1['uid']}", headers=headers).json()
     assert after_t1["status"] == "canceled"
 
     listing = client.get("/productivity/tasks", headers=headers).json()
@@ -469,9 +467,7 @@ def test_list_tasks_passes_completed_at_params_to_facade(
         ).json()["access_token"]
 
         resp = client.get(
-            "/productivity/tasks"
-            "?completed_at_start=2026-03-01T00:00:00.000Z"
-            "&completed_at_end=2026-04-01T00:00:00.000Z",
+            "/productivity/tasks?completed_at_start=2026-03-01T00:00:00.000Z&completed_at_end=2026-04-01T00:00:00.000Z",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -535,9 +531,7 @@ def test_list_tasks_filters_by_completed_at_range(
     )
 
     resp = client.get(
-        "/productivity/tasks"
-        "?completed_at_start=2026-03-01T00:00:00.000Z"
-        "&completed_at_end=2026-04-01T00:00:00.000Z",
+        "/productivity/tasks?completed_at_start=2026-03-01T00:00:00.000Z&completed_at_end=2026-04-01T00:00:00.000Z",
         headers=headers,
     )
 
@@ -609,9 +603,7 @@ def test_list_tasks_filters_by_completed_at_round_trip(
 
     # And a window that excludes "now" returns no rows for this task.
     resp_empty = api_server_real.get(
-        "/productivity/tasks"
-        "?completed_at_start=1970-01-01T00:00:00.000Z"
-        "&completed_at_end=1970-01-02T00:00:00.000Z",
+        "/productivity/tasks?completed_at_start=1970-01-01T00:00:00.000Z&completed_at_end=1970-01-02T00:00:00.000Z",
         headers=headers,
     )
     assert resp_empty.status_code == 200

@@ -589,10 +589,7 @@ def session_log_dialog(*, task: Task | None = None) -> None:
         # checkbox only renders when a task is selected, so the
         # flag is meaningful only in that case.
         completed_task = False
-        if (
-            selected_task is not None
-            and st.session_state.get(_SESSION_LOG_DIALOG_COMPLETE_TASK_KEY, False)
-        ):
+        if selected_task is not None and st.session_state.get(_SESSION_LOG_DIALOG_COMPLETE_TASK_KEY, False):
             from genesis.entities import TaskStatus, TaskUpdate
 
             facade.caldav.update_task(

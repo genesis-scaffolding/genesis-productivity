@@ -65,7 +65,9 @@ def test_first_render_sorts_and_returns_cache() -> None:
         _task("c", priority=1),  # No deadline -> sorts last
     ]
     ordered, cache = _apply_cached_sort(
-        tasks, cached_uids=None, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=None,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["a", "b", "c"]
     assert cache == ["a", "b", "c"]
@@ -82,7 +84,9 @@ def test_first_render_priority_descending_puts_higher_value_first() -> None:
         _task("hi", priority=9),
     ]
     ordered, _ = _apply_cached_sort(
-        tasks, cached_uids=None, sort_keys=sort_keys,
+        tasks,
+        cached_uids=None,
+        sort_keys=sort_keys,
     )
     assert _uids(ordered) == ["hi", "mid", "low"]
 
@@ -112,7 +116,9 @@ def test_first_render_mixed_ascending_descending() -> None:
         _task("no_dl_hi", priority=9),
     ]
     ordered, _ = _apply_cached_sort(
-        tasks, cached_uids=None, sort_keys=sort_keys,
+        tasks,
+        cached_uids=None,
+        sort_keys=sort_keys,
     )
     # Same deadline -> priority descending; within priority 9 ties
     # -> created ascending (older first); tasks with no deadline sort
@@ -122,6 +128,7 @@ def test_first_render_mixed_ascending_descending() -> None:
 
 def test_parse_sort_key_entry_two_tuple_means_ascending() -> None:
     from genesis.ui._table import _parse_sort_key_entry
+
     field, default, reverse = _parse_sort_key_entry(("priority", 5))
     assert field == "priority"
     assert default == 5
@@ -130,6 +137,7 @@ def test_parse_sort_key_entry_two_tuple_means_ascending() -> None:
 
 def test_parse_sort_key_entry_three_tuple_respects_reverse_flag() -> None:
     from genesis.ui._table import _parse_sort_key_entry
+
     field, default, reverse = _parse_sort_key_entry(("priority", 5, True))
     assert field == "priority"
     assert default == 5
@@ -140,6 +148,7 @@ def test_parse_sort_key_entry_three_tuple_respects_reverse_flag() -> None:
 
 def test_parse_sort_key_entry_rejects_bad_length() -> None:
     from genesis.ui._table import _parse_sort_key_entry
+
     with pytest.raises(ValueError, match="must be"):
         _parse_sort_key_entry(("only_one",))  # type: ignore[arg-type]
 
@@ -151,7 +160,9 @@ def test_first_render_uses_none_default_for_missing_fields() -> None:
         _task("high", priority=1, created=a_created),
     ]
     ordered, _ = _apply_cached_sort(
-        tasks, cached_uids=None, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=None,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["high", "low"]
 
@@ -160,7 +171,9 @@ def test_first_render_with_all_none_preserves_input_order() -> None:
     """All sort fields None -> stable sort keeps input order."""
     tasks = [_task("c"), _task("a"), _task("b")]
     ordered, cache = _apply_cached_sort(
-        tasks, cached_uids=None, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=None,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["c", "a", "b"]
     assert cache == ["c", "a", "b"]
@@ -175,7 +188,9 @@ def test_cache_hit_preserves_cached_order() -> None:
     ]
     cached = ["a", "b", "c"]
     ordered, returned_cache = _apply_cached_sort(
-        tasks, cached_uids=cached, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=cached,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["a", "b", "c"]
     assert returned_cache == ["a", "b", "c"]
@@ -196,7 +211,9 @@ def test_cache_hit_preserves_order_even_when_sort_key_changed() -> None:
     ]
     cached = ["a", "b", "c"]
     ordered, _ = _apply_cached_sort(
-        tasks, cached_uids=cached, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=cached,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["a", "b", "c"]
 
@@ -209,7 +226,9 @@ def test_cache_hit_appends_new_task_at_end() -> None:
         _task("c"),  # newly created
     ]
     ordered, returned_cache = _apply_cached_sort(
-        tasks, cached_uids=cached, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=cached,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["a", "b", "c"]
     assert returned_cache == ["a", "b", "c"]
@@ -223,7 +242,9 @@ def test_cache_hit_skips_deleted_task() -> None:
         # 'b' was deleted
     ]
     ordered, returned_cache = _apply_cached_sort(
-        tasks, cached_uids=cached, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=cached,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["a", "c"]
     assert returned_cache == ["a", "c"]
@@ -239,7 +260,9 @@ def test_cache_hit_with_add_and_remove() -> None:
         _task("d"),  # newly created
     ]
     ordered, returned_cache = _apply_cached_sort(
-        tasks, cached_uids=cached, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=cached,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["a", "c", "d"]
     assert returned_cache == ["a", "c", "d"]
@@ -254,7 +277,9 @@ def test_cache_hit_with_multiple_new_tasks_appends_in_input_order() -> None:
         _task("d"),
     ]
     ordered, returned_cache = _apply_cached_sort(
-        tasks, cached_uids=cached, sort_keys=SORT_KEYS,
+        tasks,
+        cached_uids=cached,
+        sort_keys=SORT_KEYS,
     )
     assert _uids(ordered) == ["a", "c", "b", "d"]
     assert returned_cache == ["a", "c", "b", "d"]
@@ -262,7 +287,9 @@ def test_cache_hit_with_multiple_new_tasks_appends_in_input_order() -> None:
 
 def test_first_render_with_empty_tasks_returns_empty_cache() -> None:
     ordered, cache = _apply_cached_sort(
-        [], cached_uids=None, sort_keys=SORT_KEYS,
+        [],
+        cached_uids=None,
+        sort_keys=SORT_KEYS,
     )
     assert ordered == []
     assert cache == []
@@ -271,7 +298,9 @@ def test_first_render_with_empty_tasks_returns_empty_cache() -> None:
 def test_cache_hit_with_empty_tasks_returns_full_cache() -> None:
     cached = ["a", "b", "c"]
     ordered, returned_cache = _apply_cached_sort(
-        [], cached_uids=cached, sort_keys=SORT_KEYS,
+        [],
+        cached_uids=cached,
+        sort_keys=SORT_KEYS,
     )
     assert ordered == []
     # All cached UIDs are skipped (not in empty tasks list), so the
@@ -287,9 +316,7 @@ def test_default_sort_keys_constant_is_three_levels() -> None:
 
 def test_default_sort_keys_priority_is_descending() -> None:
     """Priority is the one level we sort descending (project convention)."""
-    priority_entry = next(
-        entry for entry in TASK_TABLE_DEFAULT_SORT_KEYS if entry[0] == "priority"
-    )
+    priority_entry = next(entry for entry in TASK_TABLE_DEFAULT_SORT_KEYS if entry[0] == "priority")
     assert len(priority_entry) == 3
     assert priority_entry[2] is True
 

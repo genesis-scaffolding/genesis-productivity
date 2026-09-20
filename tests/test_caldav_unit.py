@@ -101,14 +101,10 @@ class TestTaskCRUD:
         assert updated.status == TaskStatus.COMPLETED
         assert updated.completed_at is not None
 
-    def test_update_task_preserves_project_id_when_not_changed(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_task_preserves_project_id_when_not_changed(self, facade: MockCalDAVFacade) -> None:
         """An update with no project fields must leave project_id alone."""
         project = facade.create_project(ProjectCreate(name="Work"))
-        task = facade.create_task(
-            TaskCreate(title="Linked", project_id=project.uid)
-        )
+        task = facade.create_task(TaskCreate(title="Linked", project_id=project.uid))
         # Edit only the title; do not touch project_id or clear_project_id.
         updated = facade.update_task(task.uid, TaskUpdate(title="Renamed"))
         assert updated is not None
@@ -213,12 +209,8 @@ class TestListTasksCompletedAtRange:
 
     def test_in_window(self, facade: MockCalDAVFacade) -> None:
         """Returns tasks whose completed_at is in [start, end)."""
-        in_window = self._complete_at(
-            facade, "In", datetime(2026, 3, 15, 10, 0, tzinfo=UTC)
-        )
-        self._complete_at(
-            facade, "Out", datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
-        )
+        in_window = self._complete_at(facade, "In", datetime(2026, 3, 15, 10, 0, tzinfo=UTC))
+        self._complete_at(facade, "Out", datetime(2026, 4, 1, 10, 0, tzinfo=UTC))
 
         results = facade.list_tasks(
             completed_at_start=datetime(2026, 3, 1, tzinfo=UTC),
@@ -230,12 +222,8 @@ class TestListTasksCompletedAtRange:
 
     def test_only_start(self, facade: MockCalDAVFacade) -> None:
         """Only completed_at_start set: returns tasks with completed_at >= start."""
-        old = self._complete_at(
-            facade, "Old", datetime(2025, 1, 1, tzinfo=UTC)
-        )
-        recent = self._complete_at(
-            facade, "Recent", datetime(2026, 6, 1, tzinfo=UTC)
-        )
+        old = self._complete_at(facade, "Old", datetime(2025, 1, 1, tzinfo=UTC))
+        recent = self._complete_at(facade, "Recent", datetime(2026, 6, 1, tzinfo=UTC))
 
         results = facade.list_tasks(
             completed_at_start=datetime(2026, 1, 1, tzinfo=UTC),
@@ -246,12 +234,8 @@ class TestListTasksCompletedAtRange:
 
     def test_only_end(self, facade: MockCalDAVFacade) -> None:
         """Only completed_at_end set: returns tasks with completed_at < end."""
-        before = self._complete_at(
-            facade, "Before", datetime(2026, 1, 1, tzinfo=UTC)
-        )
-        after = self._complete_at(
-            facade, "After", datetime(2026, 12, 1, tzinfo=UTC)
-        )
+        before = self._complete_at(facade, "Before", datetime(2026, 1, 1, tzinfo=UTC))
+        after = self._complete_at(facade, "After", datetime(2026, 12, 1, tzinfo=UTC))
 
         results = facade.list_tasks(
             completed_at_end=datetime(2026, 6, 1, tzinfo=UTC),
@@ -263,13 +247,13 @@ class TestListTasksCompletedAtRange:
     def test_excludes_uncompleted(self, facade: MockCalDAVFacade) -> None:
         """A NEEDS_ACTION task is never returned even when its
         hard_deadline is in the window. Only completed_at matters."""
-        facade.create_task(TaskCreate(
-            title="Unfinished",
-            hard_deadline=datetime(2026, 3, 15, tzinfo=UTC),
-        ))
-        self._complete_at(
-            facade, "Done", datetime(2026, 3, 15, tzinfo=UTC)
+        facade.create_task(
+            TaskCreate(
+                title="Unfinished",
+                hard_deadline=datetime(2026, 3, 15, tzinfo=UTC),
+            )
         )
+        self._complete_at(facade, "Done", datetime(2026, 3, 15, tzinfo=UTC))
 
         results = facade.list_tasks(
             completed_at_start=datetime(2026, 3, 1, tzinfo=UTC),
@@ -280,9 +264,7 @@ class TestListTasksCompletedAtRange:
 
     def test_empty_window(self, facade: MockCalDAVFacade) -> None:
         """A window that excludes every completed task returns []."""
-        self._complete_at(
-            facade, "Old", datetime(2025, 1, 1, tzinfo=UTC)
-        )
+        self._complete_at(facade, "Old", datetime(2025, 1, 1, tzinfo=UTC))
 
         results = facade.list_tasks(
             completed_at_start=datetime(2026, 3, 1, tzinfo=UTC),
@@ -502,9 +484,7 @@ class TestProjectCRUD:
         assert updated is not None
         assert updated.name == "Updated"
 
-    def test_update_project_to_canceled_cascades_to_open_tasks(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_project_to_canceled_cascades_to_open_tasks(self, facade: MockCalDAVFacade) -> None:
         project = facade.create_project(ProjectCreate(name="Doomed"))
         needs_action = facade.create_task(TaskCreate(title="todo", project_id=project.uid))
         facade.update_task(needs_action.uid, TaskUpdate(status=TaskStatus.IN_PROGRESS))
@@ -521,9 +501,7 @@ class TestProjectCRUD:
         assert after_a is not None and after_a.status == TaskStatus.CANCELED
         assert after_b is not None and after_b.status == TaskStatus.CANCELED
 
-    def test_update_project_to_completed_cascades_to_open_tasks(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_project_to_completed_cascades_to_open_tasks(self, facade: MockCalDAVFacade) -> None:
         project = facade.create_project(ProjectCreate(name="Shipping"))
         needs_action = facade.create_task(TaskCreate(title="todo", project_id=project.uid))
         facade.update_task(needs_action.uid, TaskUpdate(status=TaskStatus.IN_PROGRESS))
@@ -541,9 +519,7 @@ class TestProjectCRUD:
         assert after_a.completed_at is not None
         assert after_b.completed_at is not None
 
-    def test_update_project_terminal_leaves_terminal_tasks_alone(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_project_terminal_leaves_terminal_tasks_alone(self, facade: MockCalDAVFacade) -> None:
         project = facade.create_project(ProjectCreate(name="Mixed"))
         already_canceled = facade.create_task(TaskCreate(title="already", project_id=project.uid))
         facade.update_task(already_canceled.uid, TaskUpdate(status=TaskStatus.CANCELED))
@@ -565,9 +541,7 @@ class TestProjectCRUD:
         assert after_completed.status == TaskStatus.COMPLETED
         assert after_completed.completed_at == completed_at_before
 
-    def test_update_project_terminal_does_not_affect_other_projects(
-        self, facade: MockCalDAVFacade
-    ) -> None:
+    def test_update_project_terminal_does_not_affect_other_projects(self, facade: MockCalDAVFacade) -> None:
         a = facade.create_project(ProjectCreate(name="A"))
         b = facade.create_project(ProjectCreate(name="B"))
         t_a = facade.create_task(TaskCreate(title="on A", project_id=a.uid))

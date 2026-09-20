@@ -78,8 +78,7 @@ def _parse_sort_key_entry(entry: tuple) -> tuple[str, Any, bool]:
         field, none_default, reverse = entry  # type: ignore[misc]
         return field, none_default, bool(reverse)
     raise ValueError(
-        f"sort_keys entry must be (field, none_default) or "
-        f"(field, none_default, reverse); got {entry!r}",
+        f"sort_keys entry must be (field, none_default) or (field, none_default, reverse); got {entry!r}",
     )
 
 
@@ -160,7 +159,9 @@ def _stable_sort_first_render(
     """
     cached = st.session_state.get(cache_key)
     ordered, new_cache = _apply_cached_sort(
-        tasks, cached_uids=cached, sort_keys=sort_keys,
+        tasks,
+        cached_uids=cached,
+        sort_keys=sort_keys,
     )
     if cached is None:
         st.session_state[cache_key] = new_cache
@@ -268,7 +269,9 @@ def render_tasks_table(
             st.session_state.pop(sort_cache_key, None)
             st.rerun()
         tasks = _stable_sort_first_render(
-            tasks, sort_keys=sort_keys, cache_key=sort_cache_key,
+            tasks,
+            sort_keys=sort_keys,
+            cache_key=sort_cache_key,
         )
 
     statuses_all = [s.value for s in TaskStatus]

@@ -521,3 +521,54 @@ class TestFacadeOrchestration:
         facade = self._make_facade()
         ev = facade.record_xp_event(task_id="nonexistent")
         assert ev is None
+
+    def test_retrospective_log_fires_xp(self) -> None:
+        """Regression: the Statistics page's 'Log past session' flow
+        must fire XP just like a live session stop does.
+
+        Before this fix, ``session_log_dialog`` called
+        ``caldav.create_time_log_entry(...)`` directly, bypassing
+        the facade-level XP wiring. Retrospective sessions had no
+        XP events.
+        """
+        from genesis.entities import TimeLogEntryCreate, TimeLogMode, TimeLogStatus
+
+        facade = self._make_facade()
+        start = datetime.now(UTC) - timedelta(minutes=50)
+        end = start + timedelta(minutes=50)
+        # Mimic what ``session_log_dialog`` does after the user's edits.
+        persisted = facade.caldav.create_time_log_entry(
+            TimeLogEntryCreate(
+                label="deep work",
+                mode=TimeLogMode.COUNTDOWN,
+                start=start,
+                due=end,
+                completed_at=end,
+                category=TimeLogCategory.WORK,
+                status=TimeLogStatus.COMPLETED,
+            )
+        )
+        assert persisted is not None
+        # Mirror the dialog's XP-fire call.
+        facade._fire_xp_safely(
+            facade.record_xp_event,
+            session_id=persisted.uid,
+            occurred_at=persisted.completed_at,
+        )
+        events = facade.game.list_xp_events(source_session_id=persisted.uid)
+        assert len(events) == 1
+        assert events[0].stat_id == "discipline"
+        assert events[0].delta == 2  # floor(50 / 25)
+
+    def test_retrospective_log_complete_task_box_fires_xp(self) -> None:
+        """When the dialog's 'Also mark task completed' checkbox is
+        ticked, the task completion should fire XP (via
+        ``facade.complete_task``, which already wires XP).
+        """
+        facade = self._make_facade()
+        task = facade.caldav.create_task(TaskCreate(title="finish paperwork"))
+        facade.complete_task(task.uid)
+        events = facade.game.list_xp_events(source_task_id=task.uid)
+        assert len(events) == 1
+        assert events[0].stat_id == "discipline"
+        assert events[0].delta == 5

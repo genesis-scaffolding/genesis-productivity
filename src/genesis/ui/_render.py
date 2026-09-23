@@ -583,19 +583,27 @@ def session_log_dialog(*, task: Task | None = None) -> None:
             duration_minutes=int(duration),
             task=selected_task,
         )
-        facade.caldav.create_time_log_entry(entry)
+        persisted = facade.caldav.create_time_log_entry(entry)
+
+        # ADR-026: fire the XP event for the retrospective
+        # session. The game facade computes duration from the
+        # entry's ``completed_at - start`` and applies the
+        # category-based stat / delta rules. Failure is best-
+        # effort — the session is logged either way.
+        if persisted is not None:
+            facade._fire_xp_safely(
+                facade.record_xp_event,
+                session_id=persisted.uid,
+                occurred_at=persisted.completed_at,
+            )
+
         # If the user opted in via the completion checkbox, flip
         # the linked task to COMPLETED in the same action. The
         # checkbox only renders when a task is selected, so the
         # flag is meaningful only in that case.
         completed_task = False
         if selected_task is not None and st.session_state.get(_SESSION_LOG_DIALOG_COMPLETE_TASK_KEY, False):
-            from genesis.entities import TaskStatus, TaskUpdate
-
-            facade.caldav.update_task(
-                selected_task.uid,
-                TaskUpdate(status=TaskStatus.COMPLETED),
-            )
+            facade.complete_task(selected_task.uid)
             completed_task = True
         _clear_session_log_dialog_state()
         if completed_task:

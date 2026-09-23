@@ -15,6 +15,7 @@ Endpoints:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -108,9 +109,28 @@ def list_xp_events(
     kind: Annotated[XpEventKindWire | None, Query()] = None,
     source_task_id: Annotated[str | None, Query()] = None,
     source_session_id: Annotated[str | None, Query()] = None,
+    since: Annotated[
+        datetime | None,
+        Query(description="Inclusive lower bound on event.occurred_at. Wire format: YYYY-MM-DDTHH:MM:SS.mmmZ (UTC)."),
+    ] = None,
+    until: Annotated[
+        datetime | None,
+        Query(description="Exclusive upper bound on event.occurred_at. Wire format: YYYY-MM-DDTHH:MM:SS.mmmZ (UTC)."),
+    ] = None,
     offset: Annotated[int | None, Query()] = None,
-    limit: Annotated[int, Query()] = 50,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
 ) -> XpEventListOut:
+    """List XP events with optional filters.
+
+    ``since`` / ``until`` are inclusive / exclusive bounds on the
+    event's ``occurred_at`` (UTC). Server-side date filtering uses
+    the CalDAV REPORT time-range primitive; clients still pass the
+    values as ISO-8601 strings so timezone handling matches the
+    rest of the API.
+
+    ``limit`` defaults to 500 (vs. 50 elsewhere) so a one-week or
+    one-month overview fits in a single page for typical users.
+    """
     facade = _facade(subject)
     try:
         entity_kind = XpEventKind(kind.value) if kind is not None else None
@@ -119,6 +139,8 @@ def list_xp_events(
             kind=entity_kind,
             source_task_id=source_task_id,
             source_session_id=source_session_id,
+            since=since,
+            until=until,
         )
         page, total, offset, limit = _paginate(list(events), offset, limit)
         return XpEventListOut(

@@ -84,6 +84,31 @@ def _build_mock_facade() -> object:
         def shutdown(self) -> None:
             pass
 
+        # ADR-026: API handlers call these on the facade after
+        # task / session writes. The mock backend doesn't enforce
+        # the game layer (tests that care wire up a real Facade
+        # via ``api_server_with_mock`` and use ``facade.caldav``
+        # directly). These no-ops keep the existing test surface
+        # intact.
+        def _fire_xp_safely(self, fn, **kwargs):
+            try:
+                fn(**kwargs)
+            except Exception:
+                pass
+
+        def record_xp_event(self, **kwargs):
+            return None
+
+        def complete_task(self, uid):
+            from genesis.entities import TaskStatus, TaskUpdate
+
+            return self.caldav.update_task(uid, TaskUpdate(status=TaskStatus.COMPLETED))
+
+        def stop_session(self, uid, *, actual_due, completed_at, category=None):
+            return self.caldav.stop_time_log_entry(
+                uid, actual_due=actual_due, completed_at=completed_at, category=category
+            )
+
     return _MockFacade()
 
 

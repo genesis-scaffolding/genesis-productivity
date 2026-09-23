@@ -14,6 +14,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from caldav.lib import error as caldav_error
+
 from ..entities import XpEvent, XpEventCreate, XpEventKind
 from .ical import new_uid, now_utc, xp_event_from_ical, xp_event_to_ical
 
@@ -98,7 +100,17 @@ def list_xp_events(
     if idempotency_key is not None:
         searcher.add_property_filter("X-IDEMPOTENCY-KEY", idempotency_key, operator="==")
 
-    objects = searcher.search()
+    try:
+        objects = searcher.search()
+    except caldav_error.NotFoundError:
+        # The collection doesn't exist on the server yet. This
+        # happens on a fresh user account that hasn't had any XP
+        # events persisted yet — the lazy MKCALENDAR in
+        # ``_get_calendar`` may not actually MKCALENDAR until a
+        # PUT hits the collection URL. Treat as an empty result
+        # so the character page renders zero-state instead of
+        # crashing.
+        return []
 
     events: list[XpEvent] = []
     for obj in objects:

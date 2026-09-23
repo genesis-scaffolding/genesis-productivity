@@ -56,7 +56,13 @@ if _username:
     _cfg = Facade(resolve_config_path(_username), ensure_server=False)
     try:
         if _cfg.configs.game.enabled:
-            _user_pages.append(_page(_PAGES / "character.py", "Character", ":material/star:", "character"))
+            # Character page slots in front of Profile and Life Story
+            # when the game layer is enabled, so the personal-context
+            # pages read top-down: Character → Profile → Life Story.
+            _user_pages.insert(
+                0,
+                _page(_PAGES / "character.py", "Character", ":material/star:", "character"),
+            )
     finally:
         _cfg.shutdown()
 

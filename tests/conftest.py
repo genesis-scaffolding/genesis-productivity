@@ -60,29 +60,128 @@ def _free_port() -> int:
 
 
 def _substitute_facade(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Patch the API router's ``_facade()`` to return a fresh mock facade.
+    """Patch every router's ``_facade()`` to return a fresh mock facade.
 
-    The router signature is ``_facade(subject)``; the mock ignores
-    the subject and returns the same shared facade for the whole
-    test, so per-request state is preserved within a test and
-    isolated between tests.
+    The productivity, profile, and game routers each define their
+    own ``_facade(subject)`` helper that builds a real
+    ``Facade``. The mock ignores the subject and returns the same
+    shared facade for the whole test, so per-request state is
+    preserved within a test and isolated between tests.
     """
+    from genesis.api.routers import game as _game_router
+    from genesis.api.routers import profile as _profile_router
+
     state: dict[str, object] = {"mock": _build_mock_facade()}
 
     def fake_facade(subject: str) -> object:
+        import sys
+
+        print(f"DEBUG fake_facade called id={id(state['mock'])}", file=sys.stderr)
         return state["mock"]
 
     monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
+    monkeypatch.setattr(_game_router, "_facade", fake_facade)
+    monkeypatch.setattr(_profile_router, "_facade", fake_facade)
 
 
 def _build_mock_facade() -> object:
+    class _MockConfigs:
+        """Lightweight stand-in for ``genesis.configs.Configs`` so
+        tests can flip ``game.enabled`` in place."""
+
+        def __init__(self) -> None:
+            from genesis.configs import GameConfig
+
+            self.game = GameConfig(enabled=True)
+
     class _MockFacade:
         def __init__(self) -> None:
             self.caldav = MockCalDAVFacade()
             self.journal = InMemoryJournalFacade()
+            # Lazy wrapper so list/get_character routes don't blow up.
+            # Not a full GameFacade — record_xp_event below writes
+            # to the mock caldav directly for the same reason.
+            self._game = None
+            self._configs = None
+            # Expose configs on the caldav too so tests that yield
+            # ``mock.caldav`` can still toggle ``game.enabled``.
+            self.caldav.__dict__["configs"] = self.configs
+
+        @property
+        def game(self):
+            if self._game is None:
+                from genesis.configs import GameConfig
+                from genesis.game.facade import GameFacade
+
+                self._game = GameFacade(self.caldav, GameConfig(enabled=True))  # type: ignore[arg-type]
+            return self._game
+
+        @property
+        def configs(self):
+            """Expose configs so tests can flip ``game.enabled``."""
+
+            if self._configs is None:
+                self._configs = _MockConfigs()
+            return self._configs
 
         def shutdown(self) -> None:
             pass
+
+        # ADR-026: API handlers call these on the facade after
+        # task / session writes. The mock backend doesn't enforce
+        # the game layer (tests that care wire up a real Facade
+        # via ``api_server_with_mock`` and use ``facade.caldav``
+        # directly). These no-ops keep the existing test surface
+        # intact.
+        def _fire_xp_safely(self, fn, **kwargs):
+            try:
+                fn(**kwargs)
+            except Exception:
+                pass
+
+        def record_xp_event(self, **kwargs):
+            # Persist a minimal event into the mock so the API can
+            # return 201 instead of "source not found". Mirrors the
+            # validation ``Facade.record_xp_event`` does so the
+            # router's 400-mapping fires correctly when callers omit
+            # required fields.
+            from datetime import UTC, datetime
+
+            from genesis.entities import XpEventCreate, XpEventKind
+            from genesis.game.facade import GameDisabled
+
+            # Honour ``game.enabled`` like the real facade.
+            if not self.configs.game.enabled:
+                raise GameDisabled("game layer is disabled in configs.game.enabled")
+
+            # Reason source requires an explicit idempotency_key;
+            # the real ``Facade.record_xp_event`` raises ValueError
+            # in that case. Replicate so the router maps to 400.
+            if kwargs.get("reason") is not None and not kwargs.get("idempotency_key"):
+                raise ValueError("reason source requires an explicit idempotency_key")
+
+            stat_id = kwargs.get("stat_id") or "discipline"
+            delta = int(kwargs.get("delta") or 5)
+            return self.caldav.create_xp_event(
+                XpEventCreate(
+                    stat_id=stat_id,
+                    delta=delta,
+                    kind=XpEventKind.GAIN if delta >= 0 else XpEventKind.LOSS,
+                    occurred_at=kwargs.get("occurred_at") or datetime.now(UTC),
+                    idempotency_key=kwargs.get("idempotency_key") or "",
+                    reason=kwargs.get("reason") or "mock",
+                )
+            )
+
+        def complete_task(self, uid):
+            from genesis.entities import TaskStatus, TaskUpdate
+
+            return self.caldav.update_task(uid, TaskUpdate(status=TaskStatus.COMPLETED))
+
+        def stop_session(self, uid, *, actual_due, completed_at, category=None):
+            return self.caldav.stop_time_log_entry(
+                uid, actual_due=actual_due, completed_at=completed_at, category=category
+            )
 
     return _MockFacade()
 
@@ -121,6 +220,9 @@ def api_server_with_mock(
     Use when a test needs to seed time log entries (no POST endpoint
     exists for them) or otherwise mutate backend state directly.
     """
+    from genesis.api.routers import game as _game_router
+    from genesis.api.routers import profile as _profile_router
+
     store_path = tmp_path / "users.yaml"
     _seed_default_user(store_path)
     monkeypatch.setattr("genesis.users.store._default_store", UserStore(store_path))
@@ -131,6 +233,8 @@ def api_server_with_mock(
         return state["mock"]
 
     monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
+    monkeypatch.setattr(_game_router, "_facade", fake_facade)
+    monkeypatch.setattr(_profile_router, "_facade", fake_facade)
     with TestClient(app) as client:
         yield client, mock.caldav  # type: ignore[1]
 

@@ -31,6 +31,8 @@ from ..entities import (
     TimeLogEntry,
     TimeLogMode,
     TimeLogStatus,
+    XpEvent,
+    XpEventKind,
 )
 
 # -----------------------------------------------------------------------------
@@ -321,6 +323,85 @@ def time_log_to_ical(entry: TimeLogEntry) -> icalendar.Component:
         component.add("created", entry.created)
     if entry.modified:
         component.add("last-modified", entry.modified)
+    return component
+
+
+# -----------------------------------------------------------------------------
+# XpEvent
+# -----------------------------------------------------------------------------
+
+
+def xp_event_from_ical(component: icalendar.Component) -> XpEvent:
+    """Build an XpEvent entity from a VEVENT ical component.
+
+    Required: UID, X-STAT-ID, X-DELTA, X-KIND, X-IDEMPOTENCY-KEY,
+    DTSTART. ``reason`` falls back to an empty string if missing
+    rather than failing the round trip.
+    """
+    uid = to_str(component.get("uid"))
+    stat_id = to_str(component.get("x-stat-id"))
+    delta = to_int(component.get("x-delta"))
+    kind_str = to_str(component.get("x-kind"))
+    idempotency_key = to_str(component.get("x-idempotency-key"))
+    occurred_at = to_datetime(component.get("dtstart"))
+    if uid is None:
+        raise ValueError("xp_event VEVENT missing UID")
+    if stat_id is None:
+        raise ValueError(f"xp_event VEVENT {uid} is missing X-STAT-ID")
+    if delta is None:
+        raise ValueError(f"xp_event VEVENT {uid} is missing X-DELTA")
+    if kind_str is None:
+        raise ValueError(f"xp_event VEVENT {uid} is missing X-KIND")
+    if idempotency_key is None:
+        raise ValueError(f"xp_event VEVENT {uid} is missing X-IDEMPOTENCY-KEY")
+    if occurred_at is None:
+        raise ValueError(f"xp_event VEVENT {uid} is missing DTSTART")
+    try:
+        kind = XpEventKind(kind_str)
+    except ValueError as e:
+        raise ValueError(f"xp_event VEVENT {uid} has invalid X-KIND {kind_str!r}") from e
+    return XpEvent(
+        uid=uid,
+        stat_id=stat_id,
+        delta=delta,
+        kind=kind,
+        source_task_id=to_str(component.get("x-source-task-id")) or None,
+        source_session_id=to_str(component.get("x-source-session-id")) or None,
+        reason=to_str(component.get("x-reason")) or "",
+        occurred_at=occurred_at,
+        idempotency_key=idempotency_key,
+        created=to_datetime(component.get("created")),
+        modified=to_datetime(component.get("last-modified")),
+    )
+
+
+def xp_event_to_ical(event: XpEvent) -> icalendar.Component:
+    """Build a VEVENT ical component from an XpEvent.
+
+    DTSTART carries the ``occurred_at`` timestamp. SUMMARY is the
+    reason string so the event is human-readable in a CalDAV
+    viewer. No DTEND: events are instantaneous.
+    """
+    component = icalendar.Event()
+    component.add("uid", event.uid)
+    component.add("summary", event.reason or event.stat_id)
+    component.add("dtstart", event.occurred_at)
+    component.add("dtend", event.occurred_at)
+    component.add("x-stat-id", event.stat_id)
+    component.add("x-delta", event.delta)
+    component.add("x-kind", event.kind.value)
+    component.add("x-idempotency-key", event.idempotency_key)
+    if event.source_task_id:
+        component.add("x-source-task-id", event.source_task_id)
+    if event.source_session_id:
+        component.add("x-source-session-id", event.source_session_id)
+    if event.reason:
+        component.add("x-reason", event.reason)
+    component.add("dtstamp", event.modified or now_utc())
+    if event.created:
+        component.add("created", event.created)
+    if event.modified:
+        component.add("last-modified", event.modified)
     return component
 
 

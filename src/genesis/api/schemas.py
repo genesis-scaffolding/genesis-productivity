@@ -453,3 +453,95 @@ class TokenOut(BaseModel):
 
 class RefreshIn(BaseModel):
     refresh_token: str
+
+
+# ---------------------------------------------------------------------------
+# Game (ADR-026)
+# ---------------------------------------------------------------------------
+
+
+class XpEventKindWire(StrEnum):
+    """Wire-side mirror of ``XpEventKind``."""
+
+    GAIN = "gain"
+    LOSS = "loss"
+
+
+class StatOut(BaseModel):
+    """One stat in the user's stat config."""
+
+    id: str
+    name: str
+
+
+class StatListOut(BaseModel):
+    items: list[StatOut]
+
+
+class StatUpdateIn(BaseModel):
+    """PATCH body for updating a stat's display name."""
+
+    name: str
+
+
+class XpEventOut(BaseModel):
+    """One XP event for the wire."""
+
+    uid: str
+    stat_id: str
+    delta: int
+    kind: XpEventKindWire
+    source_task_id: str | None
+    source_session_id: str | None
+    reason: str
+    occurred_at: UtcDateTime
+    idempotency_key: str
+
+
+class XpEventListOut(BaseModel):
+    items: list[XpEventOut]
+    total: int
+    offset: int
+    limit: int
+
+
+class XpEventCreateIn(BaseModel):
+    """Body for POST /game/character/xp-events.
+
+    Exactly one of ``task_id``, ``session_id``, ``reason`` is
+    required. ``stat_id`` and ``delta`` are optional; when omitted
+    the game facade infers from the source. ``idempotency_key`` is
+    optional for task/session (auto-derived) and required for
+    reason.
+    """
+
+    task_id: str | None = None
+    session_id: str | None = None
+    reason: str | None = None
+    stat_id: str | None = None
+    delta: int | None = None
+    idempotency_key: str | None = None
+    occurred_at: UtcDateTime | None = None
+
+
+class XpCurvePointOut(BaseModel):
+    level: int
+    cumulative_xp: int
+
+
+class XpCurveOut(BaseModel):
+    items: list[XpCurvePointOut]
+
+
+class StatProgressOut(BaseModel):
+    stat_id: str
+    name: str
+    xp: int
+    level: int
+    label: str
+    xp_to_next: int | None = None
+
+
+class CharacterStateOut(BaseModel):
+    progress: list[StatProgressOut]
+    recent_events: list[XpEventOut]

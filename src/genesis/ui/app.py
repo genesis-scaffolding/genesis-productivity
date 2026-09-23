@@ -33,6 +33,39 @@ st.set_page_config(
     page_icon=":material/bolt:",
 )
 
+from genesis.ui._auth import rehydrate_session, render_logout_button  # noqa: E402
+
+# Restore session_state from the signed session cookie before any
+# gate check, so a returning browser (e.g. phone just woken from
+# sleep) lands on the app instead of the login form. ADR-021.
+rehydrate_session()
+render_logout_button()
+
+# Build nav after auth rehydration so we can read configs.game.enabled
+# from the authenticated Facade (ADR-026). The Character page only
+# appears in the User group when the game layer is on.
+from genesis.configs import resolve_config_path  # noqa: E402
+from genesis.core.facade import Facade  # noqa: E402
+
+_user_pages: list[st.Page] = [
+    _page(_PAGES / "profile.py", "Profile", ":material/person:", "profile"),
+    _page(_PAGES / "life_story.py", "Life Story", ":material/history_edu:", "life_story"),
+]
+_username = st.session_state.get("username")
+if _username:
+    _cfg = Facade(resolve_config_path(_username), ensure_server=False)
+    try:
+        if _cfg.configs.game.enabled:
+            # Character page slots in front of Profile and Life Story
+            # when the game layer is enabled, so the personal-context
+            # pages read top-down: Character → Profile → Life Story.
+            _user_pages.insert(
+                0,
+                _page(_PAGES / "character.py", "Character", ":material/star:", "character"),
+            )
+    finally:
+        _cfg.shutdown()
+
 nav: dict[str, list[st.Page]] = {
     "Productivity": [
         _page(_PAGES / "dashboard.py", "Dashboard", ":material/dashboard:", "dashboard"),
@@ -43,21 +76,10 @@ nav: dict[str, list[st.Page]] = {
         _page(_PAGES / "journal.py", "Journal", ":material/article:", "journal"),
         _page(_PAGES / "statistics.py", "Statistics", ":material/analytics:", "statistics"),
     ],
-    "User": [
-        _page(_PAGES / "profile.py", "Profile", ":material/person:", "profile"),
-        _page(_PAGES / "life_story.py", "Life Story", ":material/history_edu:", "life_story"),
-    ],
+    "User": _user_pages,
     "Account": [
         _page(_PAGES / "settings.py", "Settings", ":material/settings:", "settings"),
     ],
 }
-
-from genesis.ui._auth import rehydrate_session, render_logout_button  # noqa: E402
-
-# Restore session_state from the signed session cookie before any
-# gate check, so a returning browser (e.g. phone just woken from
-# sleep) lands on the app instead of the login form. ADR-021.
-rehydrate_session()
-render_logout_button()
 
 st.navigation(nav).run()

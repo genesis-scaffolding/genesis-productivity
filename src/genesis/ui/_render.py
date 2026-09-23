@@ -583,19 +583,27 @@ def session_log_dialog(*, task: Task | None = None) -> None:
             duration_minutes=int(duration),
             task=selected_task,
         )
-        facade.caldav.create_time_log_entry(entry)
+        persisted = facade.caldav.create_time_log_entry(entry)
+
+        # ADR-026: fire the XP event for the retrospective
+        # session. The game facade computes duration from the
+        # entry's ``completed_at - start`` and applies the
+        # category-based stat / delta rules. Failure is best-
+        # effort — the session is logged either way.
+        if persisted is not None:
+            facade._fire_xp_safely(
+                facade.record_xp_event,
+                session_id=persisted.uid,
+                occurred_at=persisted.completed_at,
+            )
+
         # If the user opted in via the completion checkbox, flip
         # the linked task to COMPLETED in the same action. The
         # checkbox only renders when a task is selected, so the
         # flag is meaningful only in that case.
         completed_task = False
         if selected_task is not None and st.session_state.get(_SESSION_LOG_DIALOG_COMPLETE_TASK_KEY, False):
-            from genesis.entities import TaskStatus, TaskUpdate
-
-            facade.caldav.update_task(
-                selected_task.uid,
-                TaskUpdate(status=TaskStatus.COMPLETED),
-            )
+            facade.complete_task(selected_task.uid)
             completed_task = True
         _clear_session_log_dialog_state()
         if completed_task:
@@ -820,8 +828,9 @@ def focus_completion_dialog(*, task_uid: str, task_title: str) -> None:
 
     Triggered by the Focus page after a session with a linked
     task ends (auto-stop or manual stop). Accepting marks the
-    linked task ``COMPLETED`` via ``update_task``; declining
-    leaves the task untouched. Both branches clear the
+    linked task ``COMPLETED`` via ``facade.complete_task``; this
+    also fires the XP event (ADR-026). Declining leaves the
+    task untouched. Both branches clear the
     ``focus_completion_pending`` flag so the dialog does not
     re-open on the next render.
     """
@@ -829,12 +838,7 @@ def focus_completion_dialog(*, task_uid: str, task_title: str) -> None:
     st.write(f"Mark task **{task_title}** as completed now that the focus session on it has ended?")
     cols = st.columns(2)
     if cols[0].button("Yes, complete", type="primary", key="_focpl_yes"):
-        from genesis.entities import TaskStatus, TaskUpdate
-
-        facade.caldav.update_task(
-            task_uid,
-            TaskUpdate(status=TaskStatus.COMPLETED),
-        )
+        facade.complete_task(task_uid)
         st.session_state.pop(FOCUS_COMPLETION_PENDING_KEY, None)
         st.toast(f"Completed: {task_title}")
         st.rerun()

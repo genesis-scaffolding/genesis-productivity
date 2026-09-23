@@ -10,6 +10,7 @@ from .time_log import (
     TimeLogMode,
     TimeLogStatus,
 )
+from .xp_event import XpEvent, XpEventCreate, XpEventKind
 
 __all__ = [
     "Event",
@@ -29,4 +30,7 @@ __all__ = [
     "TimeLogEntryUpdate",
     "TimeLogMode",
     "TimeLogStatus",
+    "XpEvent",
+    "XpEventCreate",
+    "XpEventKind",
 ]

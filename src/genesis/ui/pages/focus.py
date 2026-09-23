@@ -112,7 +112,7 @@ def _render_active_sessions() -> None:
             and s.status != TimeLogStatus.COMPLETED
         ):
             category = _resolve_category(s)
-            caldav.stop_time_log_entry(
+            facade.stop_session(
                 s.uid,
                 actual_due=s.due,
                 completed_at=now,
@@ -201,7 +201,7 @@ def _render_session_card(s, now: datetime) -> None:
         with btn_cols[0]:
             if st.button("Stop", key=f"focus_stop_{s.uid}", type="primary"):
                 category = _resolve_category(s)
-                caldav.stop_time_log_entry(
+                facade.stop_session(
                     s.uid,
                     actual_due=now,
                     completed_at=now,

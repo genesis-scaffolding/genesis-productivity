@@ -18,6 +18,8 @@ Usage:
 
 from __future__ import annotations
 
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,8 +30,12 @@ if TYPE_CHECKING:
     from ..backup.facade import BackupFacade
     from ..caldav.facade import CalDAVFacade
     from ..carddav.facade import CardDAVFacade
+    from ..game.facade import GameClassificationError, GameDisabled, GameFacade
     from ..journal.facade import JournalFacade
     from ..profile.facade import ProfileFacade
+from ..game.facade import GameClassificationError, GameDisabled
+
+logger = logging.getLogger(__name__)
 
 
 class Facade:
@@ -57,6 +63,7 @@ class Facade:
         self._journal: JournalFacade | None = None
         self._backup: BackupFacade | None = None
         self._profile: ProfileFacade | None = None
+        self._game: GameFacade | None = None
 
         if ensure_server:
             self._ensure_server_running()
@@ -160,6 +167,169 @@ class Facade:
 
             self._backup = BackupFacade(self)
         return self._backup
+
+    @property
+    def game(self) -> GameFacade:
+        """Return the Game facade for life-gamification.
+
+        See ADR-026. Lazy-initialized on first access so callers
+        who never touch the game layer don't pay the construction
+        cost. Honours ``configs.game.enabled``: when False, every
+        ``record_xp_event`` call raises ``GameDisabled``.
+        """
+        if self._game is None:
+            from ..game.config import load_game_config
+            from ..game.facade import GameFacade
+
+            self._game = GameFacade(self.caldav, load_game_config(self._configs.game))
+        return self._game
+
+    # -------------------------------------------------------------------------
+    # Facade-level orchestration for the game layer
+    # -------------------------------------------------------------------------
+
+    def record_xp_event(
+        self,
+        *,
+        task_id: str | None = None,
+        session_id: str | None = None,
+        reason: str | None = None,
+        stat_id: str | None = None,
+        delta: int | None = None,
+        idempotency_key: str | None = None,
+        occurred_at: datetime | None = None,
+    ):
+        """Record an XP event for a task, session, or ad-hoc reason.
+
+        Exactly one of ``task_id``, ``session_id``, ``reason`` must
+        be supplied. The facade fetches the entity from caldav,
+        builds the appropriate ``XpSource``, and delegates to
+        ``game.record_xp_event``.
+
+        Idempotency keys auto-derive for tasks/sessions
+        (``task:{uid}:completed``, ``session:{uid}:stopped``);
+        reason callers must supply an explicit key.
+
+        Returns the persisted ``XpEvent``, or ``None`` if the
+        source entity could not be found. ``GameDisabled`` and
+        ``GameClassificationError`` propagate to the caller.
+        """
+        from ..category.enums import TimeLogCategory
+        from ..game.source import ReasonSource, SessionSource, TaskSource
+
+        provided = [
+            name
+            for name, val in (
+                ("task_id", task_id),
+                ("session_id", session_id),
+                ("reason", reason),
+            )
+            if val is not None
+        ]
+        if len(provided) != 1:
+            raise ValueError(f"exactly one of task_id, session_id, reason is required (got: {provided or 'none'})")
+
+        if task_id is not None:
+            task = self.caldav.get_task(task_id)
+            if task is None:
+                return None
+            source = TaskSource(
+                task_uid=task.uid,
+                title=task.title,
+                description=task.description,
+            )
+            key = idempotency_key or f"task:{task.uid}:completed"
+        elif session_id is not None:
+            entry = self.caldav.get_time_log_entry(session_id)
+            if entry is None:
+                return None
+            source = SessionSource(
+                session_uid=entry.uid,
+                label=entry.label,
+                category=TimeLogCategory(entry.category),
+            )
+            key = idempotency_key or f"session:{entry.uid}:stopped"
+        else:
+            assert reason is not None  # guarded by the provided check above
+            if idempotency_key is None:
+                raise ValueError("reason source requires an explicit idempotency_key")
+            source = ReasonSource(reason=reason)
+            key = idempotency_key
+
+        return self.game.record_xp_event(
+            source=source,
+            stat_id=stat_id,
+            delta=delta,
+            idempotency_key=key,
+            occurred_at=occurred_at,
+        )
+
+    def complete_task(self, uid: str):
+        """Mark a task COMPLETED and fire the XP event.
+
+        Equivalent to ``caldav.update_task(uid, status=COMPLETED)``
+        plus ``record_xp_event(task_id=uid, ...)``. XP failure is
+        logged but does not propagate; the task is completed either
+        way. Productivity writes are the source of truth.
+        """
+        from ..entities import TaskStatus, TaskUpdate
+
+        updated = self.caldav.update_task(uid, TaskUpdate(status=TaskStatus.COMPLETED))
+        if updated is not None:
+            self._fire_xp_safely(
+                self.record_xp_event,
+                task_id=uid,
+                occurred_at=datetime.now(UTC),
+            )
+        return updated
+
+    def stop_session(
+        self,
+        uid: str,
+        *,
+        actual_due: datetime | None,
+        completed_at: datetime | None,
+        category=None,
+    ):
+        """Stop a session and fire the XP event.
+
+        Equivalent to ``caldav.stop_time_log_entry(uid, ...)`` plus
+        ``record_xp_event(session_id=uid, ...)``. XP failure is
+        logged but does not propagate.
+        """
+        updated = self.caldav.stop_time_log_entry(
+            uid,
+            actual_due=actual_due,
+            completed_at=completed_at,
+            category=category,
+        )
+        if updated is not None:
+            self._fire_xp_safely(
+                self.record_xp_event,
+                session_id=uid,
+                occurred_at=completed_at or datetime.now(UTC),
+            )
+        return updated
+
+    def _fire_xp_safely(self, fn, **kwargs) -> None:
+        """Run ``fn(**kwargs)``. Swallow exceptions, log them.
+
+        Used by ``complete_task`` and ``stop_session`` so XP layer
+        failures never roll back the productivity write.
+        """
+        try:
+            fn(**kwargs)
+        except GameDisabled:
+            # User has the game layer off. Expected.
+            pass
+        except GameClassificationError as exc:
+            # Inference failed. Logged because it usually points to
+            # a session/task the keyword engine couldn't classify.
+            logger.warning("XP classification failed: %s", exc)
+        except Exception as exc:
+            # Anything else: log loudly so we see it, but do not
+            # break the caller.
+            logger.warning("XP event fire failed: %s", exc)
 
     def shutdown(self) -> None:
         """Stop the DAV server if we started it."""

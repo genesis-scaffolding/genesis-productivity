@@ -92,6 +92,49 @@ class DAV(BaseModel):
         return f"http://{self.host}:{self.port}"
 
 
+class StatConfig(BaseModel):
+    """One stat tracked by the game layer (ADR-026).
+
+    Attributes:
+        id: Stable identifier referenced by XP events and game
+            facade calls. Snake_case ASCII; renaming an id is a
+            breaking change to stored events.
+        name: Display name shown in the UI. Renaming is safe; it
+            does not affect event storage.
+    """
+
+    id: str
+    name: str
+
+
+# Default stat set from the Real-Life-Persona-System design note.
+# Editable per-user via configs.yaml; this is just the starter.
+DEFAULT_GAME_STATS: list[StatConfig] = [
+    StatConfig(id="courage", name="Courage"),
+    StatConfig(id="discipline", name="Discipline"),
+    StatConfig(id="charisma", name="Charisma"),
+    StatConfig(id="knowledge", name="Knowledge"),
+    StatConfig(id="vitality", name="Vitality"),
+]
+
+
+class GameConfig(BaseModel):
+    """Life-gamification layer settings (ADR-026).
+
+    ``enabled`` gates every aspect of the layer: when False, the
+    game facade raises ``GameDisabled`` and no XP events are
+    written. ``stats`` is the set of stats the user tracks; per-user
+    defaults from ``DEFAULT_GAME_STATS``.
+
+    Level labels, the XP curve, and per-event XP magnitudes are
+    intentionally NOT configurable per user — they are hardcoded
+    constants in ``genesis.game``. Changing them is a code release.
+    """
+
+    enabled: bool = True
+    stats: list[StatConfig] = Field(default_factory=lambda: list(DEFAULT_GAME_STATS))
+
+
 class Configs(BaseSettings):
     """Root configuration object.
 
@@ -106,6 +149,7 @@ class Configs(BaseSettings):
     user: str = Field(default=DEFAULT_USER)
     paths: Paths = Field(description="XDG-based directory paths.")
     dav: DAV = Field(description="CalDAV and CardDAV settings.")
+    game: GameConfig = Field(default_factory=GameConfig)
 
     model_config = {
         "extra": "ignore",

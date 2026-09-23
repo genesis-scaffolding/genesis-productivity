@@ -26,6 +26,7 @@ from ...entities import (
     ProjectCreate,
     ProjectUpdate,
     TaskCreate,
+    TaskStatus,
     TaskUpdate,
 )
 from ...journal.facade import Entry, EntryType
@@ -527,7 +528,21 @@ def update_task(
         if not kwargs:
             return _task_to_wire(existing)
 
+        # Capture the completion intent BEFORE the caldav write so
+        # we know whether to fire XP afterwards (ADR-026). The body
+        # already declared ``status`` in the model dump if it was
+        # changed.
+        completing = body.status is not None and wire_to_task_status(body.status) == TaskStatus.COMPLETED
+
         task = facade.caldav.update_task(uid, TaskUpdate(**kwargs))
+
+        if completing and task is not None and task.status == TaskStatus.COMPLETED:
+            facade._fire_xp_safely(
+                facade.record_xp_event,
+                task_id=uid,
+                occurred_at=task.completed_at,
+            )
+
         return _task_to_wire(task)
     finally:
         facade.shutdown()

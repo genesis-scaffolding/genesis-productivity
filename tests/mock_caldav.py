@@ -30,6 +30,9 @@ from genesis.entities import (
     TimeLogEntryCreate,
     TimeLogEntryUpdate,
     TimeLogStatus,
+    XpEvent,
+    XpEventCreate,
+    XpEventKind,
 )
 
 
@@ -47,6 +50,7 @@ class MockCalDAVFacade:
         self._tasks: dict[str, Task] = {}
         self._events: dict[str, Event] = {}
         self._time_log: dict[str, TimeLogEntry] = {}
+        self._xp_events: dict[str, XpEvent] = {}
 
     # -------------------------------------------------------------------------
     # Helpers
@@ -410,6 +414,75 @@ class MockCalDAVFacade:
         if uid not in self._time_log:
             return False
         del self._time_log[uid]
+        return True
+
+    # -------------------------------------------------------------------------
+    # XP events (ADR-026)
+    # -------------------------------------------------------------------------
+
+    def create_xp_event(self, data: XpEventCreate) -> XpEvent:
+        now = self._now()
+        event = XpEvent(
+            uid=self._new_uid("x"),
+            stat_id=data.stat_id,
+            delta=data.delta,
+            kind=data.kind,
+            source_task_id=data.source_task_id,
+            source_session_id=data.source_session_id,
+            reason=data.reason,
+            occurred_at=data.occurred_at,
+            idempotency_key=data.idempotency_key,
+            created=now,
+            modified=now,
+        )
+        self._xp_events[event.uid] = event
+        return event
+
+    def get_xp_event(self, uid: str) -> XpEvent | None:
+        return self._xp_events.get(uid)
+
+    def list_xp_events(
+        self,
+        *,
+        stat_id: str | None = None,
+        kind: XpEventKind | None = None,
+        source_task_id: str | None = None,
+        source_session_id: str | None = None,
+        idempotency_key: str | None = None,
+        since=None,
+        until=None,
+        sort_by=None,
+        sort_order: str = "desc",
+    ) -> list[XpEvent]:
+        events = list(self._xp_events.values())
+        if stat_id is not None:
+            events = [e for e in events if e.stat_id == stat_id]
+        if kind is not None:
+            events = [e for e in events if e.kind == kind]
+        if source_task_id is not None:
+            events = [e for e in events if e.source_task_id == source_task_id]
+        if source_session_id is not None:
+            events = [e for e in events if e.source_session_id == source_session_id]
+        if idempotency_key is not None:
+            events = [e for e in events if e.idempotency_key == idempotency_key]
+        if since is not None:
+            events = [e for e in events if e.occurred_at >= since]
+        if until is not None:
+            events = [e for e in events if e.occurred_at <= until]
+        if sort_by:
+            for key in reversed(sort_by):
+                events.sort(
+                    key=lambda e, k=key: getattr(e, k, "") or "",
+                    reverse=(sort_order == "desc"),
+                )
+        else:
+            events.sort(key=lambda e: (e.occurred_at, e.uid), reverse=True)
+        return events
+
+    def delete_xp_event(self, uid: str) -> bool:
+        if uid not in self._xp_events:
+            return False
+        del self._xp_events[uid]
         return True
 
     # -------------------------------------------------------------------------

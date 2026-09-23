@@ -820,8 +820,9 @@ def focus_completion_dialog(*, task_uid: str, task_title: str) -> None:
 
     Triggered by the Focus page after a session with a linked
     task ends (auto-stop or manual stop). Accepting marks the
-    linked task ``COMPLETED`` via ``update_task``; declining
-    leaves the task untouched. Both branches clear the
+    linked task ``COMPLETED`` via ``facade.complete_task``; this
+    also fires the XP event (ADR-026). Declining leaves the
+    task untouched. Both branches clear the
     ``focus_completion_pending`` flag so the dialog does not
     re-open on the next render.
     """
@@ -829,12 +830,7 @@ def focus_completion_dialog(*, task_uid: str, task_title: str) -> None:
     st.write(f"Mark task **{task_title}** as completed now that the focus session on it has ended?")
     cols = st.columns(2)
     if cols[0].button("Yes, complete", type="primary", key="_focpl_yes"):
-        from genesis.entities import TaskStatus, TaskUpdate
-
-        facade.caldav.update_task(
-            task_uid,
-            TaskUpdate(status=TaskStatus.COMPLETED),
-        )
+        facade.complete_task(task_uid)
         st.session_state.pop(FOCUS_COMPLETION_PENDING_KEY, None)
         st.toast(f"Completed: {task_title}")
         st.rerun()

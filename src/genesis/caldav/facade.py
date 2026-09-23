@@ -12,12 +12,13 @@ from datetime import datetime
 from typing import Any
 
 from ..category.enums import TimeLogCategory
-from . import events, projects, tasks, time_log
+from . import events, projects, tasks, time_log, xp_events
 from .constants import (
     EVENTS_COLLECTION,
     PROJECTS_COLLECTION,
     TASKS_COLLECTION,
     TIME_LOG_COLLECTION,
+    XP_EVENTS_COLLECTION,
 )
 from .ical import now_utc
 
@@ -34,6 +35,7 @@ class CalDAVFacade:
     TASKS_COLLECTION: str = TASKS_COLLECTION
     EVENTS_COLLECTION: str = EVENTS_COLLECTION
     TIME_LOG_COLLECTION: str = TIME_LOG_COLLECTION
+    XP_EVENTS_COLLECTION: str = XP_EVENTS_COLLECTION
 
     def __init__(
         self,
@@ -219,3 +221,41 @@ class CalDAVFacade:
 
     def delete_time_log_entry(self, uid: str) -> bool:
         return time_log.delete_time_log_entry(self, uid)
+
+    # -------------------------------------------------------------------------
+    # XP event delegations
+    # -------------------------------------------------------------------------
+
+    def create_xp_event(self, data):
+        return xp_events.create_xp_event(self, data)
+
+    def get_xp_event(self, uid: str):
+        return xp_events.get_xp_event(self, uid)
+
+    def list_xp_events(
+        self,
+        stat_id: str | None = None,
+        kind=None,
+        source_task_id: str | None = None,
+        source_session_id: str | None = None,
+        idempotency_key: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        sort_by: list[str] | None = None,
+        sort_order: str = "desc",
+    ):
+        return xp_events.list_xp_events(
+            self,
+            stat_id=stat_id,
+            kind=kind,
+            source_task_id=source_task_id,
+            source_session_id=source_session_id,
+            idempotency_key=idempotency_key,
+            since=since,
+            until=until,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+
+    def delete_xp_event(self, uid: str) -> bool:
+        return xp_events.delete_xp_event(self, uid)

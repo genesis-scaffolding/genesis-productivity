@@ -354,6 +354,7 @@ def render_tasks_table(
 
             update: TaskUpdate = TaskUpdate()
             touched = False
+            completing = False
             if "Title" in changes:
                 update = update.model_copy(update={"title": str(changes["Title"])})
                 touched = True
@@ -361,8 +362,10 @@ def render_tasks_table(
                 update = update.model_copy(update={"priority": int(changes["Priority"])})
                 touched = True
             if "Status" in changes:
-                update = update.model_copy(update={"status": TaskStatus(str(changes["Status"]))})
+                new_status = TaskStatus(str(changes["Status"]))
+                update = update.model_copy(update={"status": new_status})
                 touched = True
+                completing = new_status == TaskStatus.COMPLETED
             if "Scheduled" in changes:
                 new_val = changes["Scheduled"]
                 scheduled_ts = pd.Timestamp(new_val)
@@ -408,6 +411,19 @@ def render_tasks_table(
             if not touched:
                 continue
             caldav.update_task(original.uid, update)
+            # ADR-026: if the user just transitioned this task to
+            # COMPLETED via inline edit, fire the XP event. The
+            # intent is read from the changes dict (already known
+            # above), so no extra get_task round-trip is needed.
+            if completing:
+                from genesis.ui._state import get_facade
+
+                facade = get_facade()
+                facade._fire_xp_safely(
+                    facade.record_xp_event,
+                    task_id=original.uid,
+                    occurred_at=datetime.now(UTC),
+                )
         # Clear in-flight edits so they are not re-applied to the new
         # df on the next render. data_editor preserves edited_rows in
         # widget state and reapplies them to row positions on each

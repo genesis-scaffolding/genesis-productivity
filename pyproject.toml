@@ -14,6 +14,7 @@ dependencies = [
     "radicale>=3.7.8",
     "fastapi>=0.141.1",
     "argon2-cffi>=25.1.0",
+    "nltk>=3.10.3",
 ]
 
 [project.scripts]

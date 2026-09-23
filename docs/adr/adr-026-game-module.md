@@ -303,6 +303,32 @@ free from the hook surfaces in the previous section: the focus
 completion dialog and the focus stop handlers get XP for free;
 no extra toast / animation is wired this round.
 
+## Migration
+
+A one-time backfill populates `xp_events` from completed tasks
+and completed sessions that pre-date this layer. See
+`scripts/backfill_xp.py`. Run dry-run first to preview the
+plan, then drop `--dry-run` to apply. Idempotency keys match
+live events (`task:{uid}:completed`, `session:{uid}:stopped`)
+so re-runs are safe and live events fired after this layer
+shipped aren't duplicated.
+
+The script duplicates `GameFacade._resolve`'s inference logic
+intentionally, for performance: the backfill iterates over
+historical data and would be slow if every event went through
+the facade. If the inference rules ever change, update the
+script's copy of `_resolve_task` / `_resolve_session` in
+lock-step with `src/genesis/game/xp.py` and
+`src/genesis/game/classify.py`.
+
+Backfilled events carry `reason="backfill: <source>"` so the
+events list shows where each XP came from. Future agents
+reading the events log can distinguish backfilled events from
+live ones by inspecting the reason. We do not rewrite the
+historical `created` / `modified` on the source tasks or
+sessions — only `occurred_at` on the new XP event carries the
+historical timestamp.
+
 ## Non-goals
 
 - No telemetry ingestion (iOS Shortcuts, screen time, HealthKit).

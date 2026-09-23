@@ -35,9 +35,22 @@ character = facade.game.get_character()
 cols = st.columns(len(character.progress), gap="medium")
 for col, progress in zip(cols, character.progress, strict=True):
     with col:
+        in_deficit = progress.xp < 0
         with st.container(border=True):
-            st.caption(progress.name)
-            st.markdown(f"## L{progress.level} · {progress.label}")
+            # Warning icon next to the stat name when in deficit;
+            # subtle but visible cue that this stat needs attention.
+            if in_deficit:
+                st.caption(f":material/warning: {progress.name}")
+            else:
+                st.caption(progress.name)
+            # The level/label line is rendered red when in deficit
+            # so the worst-case persona label (Cowardly, Chaotic,
+            # Fragile, etc.) reads as a warning rather than a
+            # neutral state.
+            if in_deficit:
+                st.markdown(f"## :red[L{progress.level} · {progress.label}]")
+            else:
+                st.markdown(f"## L{progress.level} · {progress.label}")
             st.caption(f"{progress.xp} XP total")
             if progress.xp_to_next is None:
                 st.progress(1.0)

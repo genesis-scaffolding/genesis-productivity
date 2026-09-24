@@ -11,6 +11,8 @@ Priority (lowest to highest):
 from __future__ import annotations
 
 import os
+import re
+import socket
 from pathlib import Path
 
 import yaml
@@ -37,6 +39,10 @@ DEFAULT_CONFIG_HOME = Path.home() / ".config"
 DEFAULT_DATA_HOME = Path.home() / ".local" / "share"
 DEFAULT_STATE_HOME = Path.home() / ".local" / "state"
 DEFAULT_CACHE_HOME = Path.home() / ".cache"
+
+# ntfy defaults. ADR-027.
+DEFAULT_NTFY_URL = "http://p3:8092"
+DEFAULT_NTFY_TOPIC_HOST = "localhost"
 
 
 # -----------------------------------------------------------------------------
@@ -135,6 +141,60 @@ class GameConfig(BaseModel):
     stats: list[StatConfig] = Field(default_factory=lambda: list(DEFAULT_GAME_STATS))
 
 
+class NtfyConfig(BaseModel):
+    """ntfy notification server settings. ADR-027.
+
+    ``url`` is the ntfy server base URL. ``topic`` is the channel
+    name the focus page POSTs to. Both are per-user because
+    ``configs.yaml`` is per-user; a user can override the URL
+    when running ntfy on a different host, and can override the
+    topic to disambiguate two machines sharing one ntfy server.
+
+    Topic defaults are resolved at Facade construction time (see
+    :meth:`resolved_topic` and ``_build_ntfy`` below): when the
+    field is empty, the runtime default is
+    ``genesis-<safe-host>-<user>``. The field stays empty in
+    YAML/env to signal "use the default".
+    """
+
+    url: str = Field(default=DEFAULT_NTFY_URL, description="ntfy server base URL.")
+    topic: str = Field(default="", description="ntfy topic name. Empty means use the runtime default.")
+
+    def resolved_topic(self, user: str) -> str:
+        """Return the topic to POST to, resolving the default when empty.
+
+        The default is ``genesis-<safe_host>-<user>``. ``user``
+        is the per-user namespace, supplied by the caller
+        (``Configs.user``); the safe host comes from
+        :func:`_safe_hostname`.
+        """
+        if self.topic:
+            return self.topic
+        return f"genesis-{_safe_hostname()}-{user}"
+
+
+def _safe_hostname() -> str:
+    """Return a normalised hostname suitable for the ntfy topic.
+
+    Lowercases the first label of ``socket.gethostname()`` and
+    restricts it to ``[a-z0-9-]``. Falls back to
+    :data:`DEFAULT_NTFY_TOPIC_HOST` on any failure (empty
+    hostname, ``socket.error``, no alphanumerics left after
+    sanitisation).
+
+    Used by :meth:`NtfyConfig.resolved_topic` so two machines
+    sharing one ntfy server get different topic names by default
+    (FQDN suffixes and docker / kubernetes suffixes are dropped).
+    """
+    try:
+        raw = socket.gethostname() or ""
+    except OSError:
+        return DEFAULT_NTFY_TOPIC_HOST
+    first = raw.split(".", 1)[0].lower()
+    cleaned = re.sub(r"[^a-z0-9-]", "-", first).strip("-")
+    return cleaned or DEFAULT_NTFY_TOPIC_HOST
+
+
 class Configs(BaseSettings):
     """Root configuration object.
 
@@ -150,6 +210,7 @@ class Configs(BaseSettings):
     paths: Paths = Field(description="XDG-based directory paths.")
     dav: DAV = Field(description="CalDAV and CardDAV settings.")
     game: GameConfig = Field(default_factory=GameConfig)
+    ntfy: NtfyConfig = Field(default_factory=NtfyConfig)
 
     model_config = {
         "extra": "ignore",
@@ -181,6 +242,9 @@ class Configs(BaseSettings):
 
         # Build dav config
         yaml_data["dav"] = _build_dav(yaml_data, user)
+
+        # Build ntfy config
+        yaml_data["ntfy"] = _build_ntfy(yaml_data)
 
         # Merge: yaml_data < env_vars < explicit kwargs
         merged = {**yaml_data, **kwargs}
@@ -302,3 +366,21 @@ def _build_dav(raw: dict, user: str) -> dict:
         or yaml_dav.get("username", user),  # Default to extracted user
         "password": os.environ.get("GENESIS__DAV__PASSWORD") or yaml_dav.get("password", DEFAULT_DAV_PASSWORD),
     }
+
+
+def _build_ntfy(raw: dict) -> dict:
+    """Build the ntfy config dict from YAML or defaults. ADR-027.
+
+    ``url`` resolves env var → YAML → ``DEFAULT_NTFY_URL`` and
+    is stripped of any trailing slash so the focus page builds
+    ``{url}/{topic}`` without double slashes. ``topic`` resolves
+    env var → YAML → empty string; an empty topic means
+    "use the runtime default" and is resolved by
+    :meth:`NtfyConfig.resolved_topic` at Facade construction
+    (when the username is known).
+    """
+    yaml_ntfy = raw.get("ntfy", {})
+    url = os.environ.get("GENESIS__NTFY__URL") or yaml_ntfy.get("url") or DEFAULT_NTFY_URL
+    url = url.rstrip("/") or DEFAULT_NTFY_URL
+    topic = os.environ.get("GENESIS__NTFY__TOPIC") or yaml_ntfy.get("topic") or ""
+    return {"url": url, "topic": topic}

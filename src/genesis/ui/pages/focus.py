@@ -23,6 +23,8 @@ script and pops the completion dialog.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import streamlit as st
@@ -31,12 +33,37 @@ from genesis.caldav.ical import now_utc
 from genesis.category.enums import TimeLogCategory
 from genesis.category.facade import CategoryFacade
 from genesis.entities import TimeLogMode, TimeLogStatus
+from genesis.notify import messages
 from genesis.ui._render import (
     FOCUS_COMPLETION_PENDING_KEY,
     focus_completion_dialog,
     focus_create_dialog,
 )
 from genesis.ui._state import get_facade
+
+logger = logging.getLogger(__name__)
+
+
+def _notify_safely(builder: Callable[[], tuple[str, str, list[str]]]) -> None:
+    """Run a message builder and POST to ntfy. Never raises.
+
+    A dead ntfy server (DNS failure, connection timeout, HTTP
+    error) must not break the focus page's one-second tick or
+    the focus create dialog's Start handler. We log a warning
+    so the operator can see the failure but otherwise swallow
+    the exception. ADR-027.
+
+    The ``builder`` is invoked lazily so the focus page only
+    builds the payload string when ntfy is actually reachable
+    (or at least the HTTP attempt succeeds) — but building the
+    tuple is cheap, so this is mostly a structural nicety.
+    """
+    try:
+        title, message, tags = builder()
+        facade.notify.send(title, message, tags=tags)
+    except Exception as exc:
+        logger.warning("ntfy notification failed: %s", exc)
+
 
 facade = get_facade()
 caldav = facade.caldav
@@ -93,6 +120,27 @@ def _set_completion_pending(session) -> None:
     }
 
 
+def _task_title_for_session(session) -> str | None:
+    """Return the title of the task aligned to ``session``, if any.
+
+    Used by the notification builders so an aligned session's
+    notification body disambiguates from other sessions. Returns
+    ``None`` when the session is unaligned or the task was
+    deleted (legitimate race). ADR-027.
+    """
+    if not session.task_id:
+        return None
+    task = caldav.get_task(session.task_id)
+    return task.title if task is not None else None
+
+
+# Milestone notifications fire on each 30-minute crossing. We
+# track which crossings have already fired per session in
+# ``st.session_state`` so a rerun after a manual interaction
+# cannot double-fire. ADR-027.
+_MILESTONE_MINUTES = 30
+
+
 # -----------------------------------------------------------------------------
 # Live active sessions fragment
 # -----------------------------------------------------------------------------
@@ -118,6 +166,12 @@ def _render_active_sessions() -> None:
                 completed_at=now,
                 category=category,
             )
+            # Notify the user the countdown finished. Manual Stop
+            # on a still-running countdown does not get this
+            # notification — the user is at the page and already
+            # knows. ADR-027.
+            finished_task_title = _task_title_for_session(s)
+            _notify_safely(lambda s=s, t=finished_task_title: messages.session_finished(s, task_title=t))
             _set_completion_pending(s)
             # Rerun at app scope so the parent script picks up the
             # completion-pending flag and pops the dialog. We lose
@@ -131,7 +185,37 @@ def _render_active_sessions() -> None:
         return
 
     for s in sessions:
+        _maybe_fire_milestone(s, now)
         _render_session_card(s, now)
+
+
+def _maybe_fire_milestone(s, now: datetime) -> None:
+    """Fire a 30-minute milestone notification if a crossing just happened.
+
+    We track which multiples of 30 minutes have already been
+    notified per session in ``st.session_state`` so a rerun after
+    a manual interaction cannot re-fire. On first render of a
+    long-running session we may need to back-fire several
+    milestones; we issue one POST per crossing, sequenced, so
+    the network cost is predictable. ADR-027.
+    """
+    elapsed_seconds = (now - s.start).total_seconds()
+    if elapsed_seconds < _MILESTONE_MINUTES * 60:
+        return
+    elapsed_minutes = int(elapsed_seconds // 60)
+    milestone = elapsed_minutes // _MILESTONE_MINUTES
+    if milestone <= 0:
+        return
+    fired_key = f"focus_notify_milestones_{s.uid}"
+    fired = st.session_state.setdefault(fired_key, set())
+    new_milestones = [m for m in range(1, milestone + 1) if m not in fired]
+    if not new_milestones:
+        return
+    task_title = _task_title_for_session(s)
+    for m in new_milestones:
+        minutes_elapsed = m * _MILESTONE_MINUTES
+        _notify_safely(lambda s=s, n=minutes_elapsed: messages.session_milestone(s, n, task_title=task_title))
+        fired.add(m)
 
 
 def _resolve_category(s) -> TimeLogCategory:

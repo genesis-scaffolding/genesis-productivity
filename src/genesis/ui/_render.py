@@ -10,6 +10,7 @@ cleanly.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
@@ -25,8 +26,11 @@ from genesis.entities import (
     TimeLogMode,
     TimeLogStatus,
 )
+from genesis.notify import messages
 from genesis.tz import to_utc
 from genesis.ui._state import get_facade
+
+logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
 # Status badges
@@ -814,6 +818,20 @@ def focus_create_dialog(*, task: Task | None = None) -> None:
                 category=chosen_category,
             )
         )
+        # Manual-testing convenience: notify on Start so the user
+        # does not have to wait 30 minutes to see the wiring
+        # work. ADR-027. ``_notify_safely`` is the same
+        # try/except wrapper the focus page uses; we duplicate
+        # the one-line try/except here rather than cross-import
+        # from the page module because that would create a
+        # ui-pages -> ui-shared circular import.
+        try:
+            task_title = selected_task.title if selected_task is not None else None
+            payload = messages.session_started(entry, task_title=task_title)
+            title, body, tags = payload
+            facade.notify.send(title, body, tags=tags)
+        except Exception as exc:
+            logger.warning("ntfy notification failed: %s", exc)
         _clear_focus_dialog_state()
         st.toast(f"Started: {entry.label}")
         st.rerun(scope="app")

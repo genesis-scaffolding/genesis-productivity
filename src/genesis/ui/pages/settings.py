@@ -182,3 +182,34 @@ with st.expander("Restore from backup", expanded=False):
                         # redownload the previous build right under
                         # the new restore report.
                         st.session_state.pop("settings_backup_bytes", None)
+
+
+# -----------------------------------------------------------------------------
+# Notifications (ntfy)
+# -----------------------------------------------------------------------------
+
+
+with st.expander("Notifications", expanded=False):
+    """Show the resolved ntfy URL and topic. Read-only this round.
+
+    The focus page POSTs to ``{url.rstrip('/')}/{topic}`` when a
+    session starts, every 30 minutes, and when a countdown
+    auto-stops. The URL and topic are configured in
+    ``configs.yaml`` under the ``ntfy:`` key; changes take effect
+    on the next Facade construction. There is no edit surface
+    in the UI this round (ADR-027).
+
+    ``resolved_topic`` returns the explicit topic when set and
+    otherwise builds ``genesis-<safe_host>-<user>`` so two
+    machines sharing one ntfy server get different topics by
+    default.
+    """
+    ntfy_cfg = facade.configs.ntfy
+    resolved_topic = ntfy_cfg.resolved_topic(facade.configs.user)
+    st.markdown(f"**Server URL:** `{ntfy_cfg.url}`")
+    st.markdown(f"**Topic:** `{resolved_topic}`")
+    st.caption(
+        "Edit `ntfy.url` and `ntfy.topic` in `configs.yaml` under the "
+        "`ntfy:` key, or override with `GENESIS__NTFY__URL` / "
+        "`GENESIS__NTFY__TOPIC`. Changes apply on the next session."
+    )

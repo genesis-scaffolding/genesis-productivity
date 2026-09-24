@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from ..carddav.facade import CardDAVFacade
     from ..game.facade import GameClassificationError, GameDisabled, GameFacade
     from ..journal.facade import JournalFacade
+    from ..notify.facade import NotifyFacade
     from ..profile.facade import ProfileFacade
 from ..game.facade import GameClassificationError, GameDisabled
 
@@ -64,6 +65,7 @@ class Facade:
         self._backup: BackupFacade | None = None
         self._profile: ProfileFacade | None = None
         self._game: GameFacade | None = None
+        self._notify: NotifyFacade | None = None
 
         if ensure_server:
             self._ensure_server_running()
@@ -153,6 +155,31 @@ class Facade:
 
             self._profile = ProfileFacade(self._configs.paths.profile_root)
         return self._profile
+
+    @property
+    def notify(self) -> NotifyFacade:
+        """Return the Notify facade for ntfy POSTs.
+
+        See ADR-027. Lazy-initialised on first access. The URL
+        and topic are resolved at construction time from
+        :class:`genesis.configs.NtfyConfig`, so the consumer
+        never has to touch the configs object to send a
+        notification.
+
+        The facade does NOT swallow errors. Callers (the focus
+        page and the focus create dialog) wrap every call in a
+        ``try/except`` so a dead ntfy server cannot break the
+        page.
+        """
+        if self._notify is None:
+            from ..notify.facade import NotifyFacade
+
+            cfg = self.configs.ntfy
+            self._notify = NotifyFacade(
+                url=cfg.url,
+                topic=cfg.resolved_topic(self.configs.user),
+            )
+        return self._notify
 
     @property
     def backup(self) -> BackupFacade:

@@ -26,6 +26,7 @@ from genesis.entities import (
     TimeLogMode,
     TimeLogStatus,
 )
+from genesis.journal.facade import Entry
 from genesis.notify import messages
 from genesis.tz import to_utc
 from genesis.ui._state import get_facade
@@ -863,3 +864,73 @@ def focus_completion_dialog(*, task_uid: str, task_title: str) -> None:
     if cols[1].button("Not yet", key="_focpl_no"):
         st.session_state.pop(FOCUS_COMPLETION_PENDING_KEY, None)
         st.rerun()
+
+
+# -----------------------------------------------------------------------------
+# Journal view helper
+# -----------------------------------------------------------------------------
+
+
+def render_journal_entry_view(
+    entry: Entry,
+    *,
+    on_edit: Callable[[Entry], None] | None = None,
+    show_delete: bool = False,
+) -> None:
+    """Render the view-only display of a journal entry.
+
+    Shared between the journal page (its own detail view) and the
+    dashboard's daily-journal expander, so the two surfaces stay in
+    lockstep. Renders the title row (``## {title}`` plus a type
+    badge when the entry has a type), the markdown body (or an
+    "Empty entry." caption), and an Edit button. With
+    ``show_delete=True`` also renders a Delete button that opens
+    :func:`delete_confirm_dialog`.
+
+    The Edit button calls ``on_edit(entry)`` when supplied;
+    otherwise it falls back to the same-page behaviour of setting
+    ``?edit=1`` and rerunning, which is what the journal page
+    itself uses to swap into its edit mode. Callers that surface
+    the entry outside the journal page (the dashboard) pass a
+    callback that calls :func:`streamlit.switch_page` to navigate
+    to the journal page in edit mode.
+
+    Widget keys are namespaced with ``jev_`` and the entry UID so
+    the helper can be invoked multiple times on the same page
+    without key collisions.
+    """
+    title_text = entry.title or entry.date.strftime("%A, %B %d, %Y")
+    title_row = st.container(horizontal=True, vertical_alignment="center")
+    with title_row:
+        st.markdown(f"## {title_text}")
+        if entry.type is not None:
+            st.badge(entry.type.value, color="blue")
+
+    if entry.content.strip():
+        st.markdown(entry.content)
+    else:
+        st.caption("Empty entry.")
+
+    st.divider()
+    st.write("")
+    if st.button(
+        "Edit",
+        key=f"jev_edit_{entry.uid}",
+        icon=":material/edit:",
+        type="primary",
+    ):
+        if on_edit is not None:
+            on_edit(entry)
+        else:
+            st.query_params["edit"] = "1"
+            st.rerun()
+    if show_delete:
+        if st.button(
+            "Delete",
+            key=f"jev_del_{entry.uid}",
+            icon=":material/delete:",
+        ):
+            delete_confirm_dialog(
+                f"entry {entry.date.isoformat()}",
+                lambda: get_facade().journal.delete_entry(entry.uid),
+            )

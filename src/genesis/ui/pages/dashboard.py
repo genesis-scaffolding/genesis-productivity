@@ -9,21 +9,31 @@ Surfaces two forward-looking tasks views plus a project count:
 
 Both exclude tasks with status COMPLETED or CANCELED. A task may
 appear in both lists if both fields are set.
+
+The bottom of the page also hosts a closed-by-default expander
+that shows today's daily journal entry (when one exists). The
+entry is rendered read-only via the shared
+:func:`render_journal_entry_view` helper; clicking Edit switches
+to the Journal page in edit mode rather than editing inline.
 """
 
 from __future__ import annotations
 
+import uuid as _uuid
 from datetime import date, datetime, time, timedelta
 
 import streamlit as st
 
 from genesis.entities import ProjectStatus, TaskStatus
+from genesis.journal.facade import EntryType
 from genesis.tz import to_utc
+from genesis.ui._render import render_journal_entry_view
 from genesis.ui._state import get_facade
 from genesis.ui._table import TASK_TABLE_DEFAULT_SORT_KEYS, render_tasks_table
 
 facade = get_facade()
 caldav = facade.caldav
+journal = facade.journal
 
 st.title("Dashboard")
 st.caption("What's on your plate.")
@@ -107,3 +117,52 @@ else:
         show_project_column=True,
         sort_keys=TASK_TABLE_DEFAULT_SORT_KEYS,
     )
+
+st.write("")
+
+# --- Daily journal ----------------------------------------------------------
+
+daily_entry = journal.find_for_period(EntryType.DAILY, today)
+
+
+def _open_journal_edit(entry) -> None:
+    """Navigate to the journal page in edit mode for ``entry``.
+
+    Used as the ``on_edit`` callback for the dashboard's daily
+    journal expander so the Edit button switches pages instead of
+    editing inline. The journal page's own dispatch picks up the
+    ``uid`` + ``edit`` query params and renders its edit form.
+
+    ``st.switch_page`` resolves the target relative to the main
+    script (``src/genesis/ui/app.py``), so the journal page lives
+    at ``pages/journal.py`` from that base — not at its
+    ``url_path``.
+    """
+    st.switch_page("pages/journal.py", query_params={"uid": entry.uid, "edit": "1"})
+
+
+with st.expander(f"Daily journal — {today.isoformat()}", expanded=False):
+    if daily_entry is None:
+        st.caption("No daily entry yet for today.")
+        if st.button(
+            "+ Write daily entry",
+            key="dashboard_write_daily",
+            type="primary",
+            icon=":material/edit:",
+        ):
+            # Land directly on the journal page's create form with
+            # ``type=daily`` preselected, mirroring the journal
+            # page's own "Write Daily" affordance. ``st.switch_page``
+            # resolves the target relative to the main script
+            # (``src/genesis/ui/app.py``), so the journal page lives
+            # at ``pages/journal.py`` from that base.
+            st.switch_page(
+                "pages/journal.py",
+                query_params={
+                    "uid": _uuid.uuid4().hex,
+                    "new": "1",
+                    "type": EntryType.DAILY.value,
+                },
+            )
+    else:
+        render_journal_entry_view(daily_entry, on_edit=_open_journal_edit)

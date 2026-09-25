@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from genesis.journal.facade import Entry, EntryType
-from genesis.ui._render import delete_confirm_dialog
+from genesis.ui._render import delete_confirm_dialog, render_journal_entry_view
 from genesis.ui._state import get_facade
 
 facade = get_facade()
@@ -218,42 +218,11 @@ def _render_view(uid: str) -> None:
         st.query_params.clear()
         st.rerun()
 
-    # Title row: title + type badge. No actions here; they sit below
-    # the content, matching the profile/life-story page layout.
-    title_text = entry.title or entry.date.strftime("%A, %B %d, %Y")
-    title_row = st.container(horizontal=True, vertical_alignment="center")
-    with title_row:
-        st.markdown(f"## {title_text}")
-        if entry.type is not None:
-            st.badge(entry.type.value, color="blue")
-
-    if entry.content.strip():
-        st.markdown(entry.content)
-    else:
-        st.caption("Empty entry.")
-
-    # Action row below the content, separated by a divider.
-    # Matches the profile / life-story page pattern: content first,
-    # then the primary action right where the user finishes reading.
-    st.divider()
-    st.write("")
-    if st.button(
-        "Edit",
-        key="je_edit_btn",
-        icon=":material/edit:",
-        type="primary",
-    ):
-        st.query_params["edit"] = "1"
-        st.rerun()
-    if st.button(
-        "Delete",
-        key="je_del_btn",
-        icon=":material/delete:",
-    ):
-        delete_confirm_dialog(
-            f"entry {entry.date.isoformat()}",
-            lambda: journal.delete_entry(entry.uid),
-        )
+    # Title row + content + actions are shared with the dashboard's
+    # daily-journal expander via the helper. Edit defaults to the
+    # same-page behaviour (sets ?edit=1 and reruns); Delete is shown
+    # only on this full-page view.
+    render_journal_entry_view(entry, show_delete=True)
 
 
 def _render_edit(uid: str) -> None:

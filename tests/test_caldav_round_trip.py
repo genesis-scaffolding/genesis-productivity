@@ -63,6 +63,55 @@ def test_time_log_round_trip_legacy_entry_defaults_to_other() -> None:
     assert legacy.category == TimeLogCategory.OTHER
 
 
+def test_time_log_round_trip_preserves_last_milestone_minutes() -> None:
+    """The milestone dedup state is the whole point of ADR-028:
+    a written X-LAST-MILESTONE-MINUTES must come back unchanged
+    after a round trip through the iCal layer so a page refresh
+    on a long-running session does not re-fire already-notified
+    milestones.
+    """
+    original = TimeLogEntry(
+        uid="l-milestone1",
+        label="Cooking",
+        start=datetime(2026, 9, 9, 21, 55, 4, tzinfo=UTC),
+        due=datetime(2026, 9, 9, 23, 29, 11, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 9, 23, 29, 11, tzinfo=UTC),
+        status=TimeLogStatus.IN_PROGRESS,
+        mode=TimeLogMode.COUNTUP,
+        task_id=None,
+        category=TimeLogCategory.PERSONAL,
+        last_milestone_minutes=60,
+    )
+    component = time_log_to_ical(original)
+    restored = time_log_from_ical(component)
+    assert restored.last_milestone_minutes == 60
+
+
+def test_time_log_round_trip_zero_milestone_minutes_omits_property() -> None:
+    """``0`` is the "no milestone notified yet" sentinel. Writing
+    it back keeps the VTODO lean: no ``X-LAST-MILESTONE-MINUTES``
+    line, so the wire diff against a pre-ADR-028 entry is empty.
+    """
+    original = TimeLogEntry(
+        uid="l-milestone2",
+        label="Fresh",
+        start=datetime(2026, 9, 9, 21, 55, 4, tzinfo=UTC),
+        status=TimeLogStatus.IN_PROGRESS,
+        mode=TimeLogMode.COUNTUP,
+    )
+    component = time_log_to_ical(original)
+    assert "X-LAST-MILESTONE-MINUTES" not in [str(p).upper() for p in component.walk()]
+
+
+def test_time_log_round_trip_legacy_entry_defaults_milestone_minutes_to_zero() -> None:
+    """A pre-ADR-028 VTODO without ``X-LAST-MILESTONE-MINUTES``
+    reads back as ``0`` so legacy active sessions do not falsely
+    look "already notified" on the first render after deploy.
+    """
+    legacy = time_log_from_ical(_build_legacy_vtodo())
+    assert legacy.last_milestone_minutes == 0
+
+
 def _build_legacy_vtodo():
     """Build a VTODO component without X-CATEGORY, the way
     Radicale's storage writes it for entries created before the

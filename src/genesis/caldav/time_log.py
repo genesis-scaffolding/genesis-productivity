@@ -55,6 +55,7 @@ def _populate(component: Component, entry: TimeLogEntry) -> None:
     set_or_delete("x-mode", entry.mode.value)
     set_or_delete("x-task-id", entry.task_id)
     set_or_delete("x-category", entry.category.value)
+    set_or_delete("x-last-milestone-minutes", entry.last_milestone_minutes or None)
     set_or_delete("description", entry.description)
 
 

@@ -261,6 +261,7 @@ class TimeLogEntryOut(BaseModel):
     description: str | None
     created: UtcDateTime | None
     modified: UtcDateTime | None
+    last_milestone_minutes: int = 0
 
 
 class TimeLogListOut(BaseModel):

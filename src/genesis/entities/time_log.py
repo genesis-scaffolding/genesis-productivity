@@ -60,6 +60,12 @@ class TimeLogEntry(BaseModel):
         description: Optional session notes.
         created: When the entry was created.
         modified: When the entry was last modified.
+        last_milestone_minutes: Highest elapsed minute value at which a
+            30-minute milestone notification has already fired for this
+            session. Maps to iCal X-LAST-MILESTONE-MINUTES. Defaults to
+            ``0`` so legacy VTODOs without the property (and fresh
+            sessions that have not yet crossed 30 minutes) read back as
+            "no milestone notified yet". See ADR-028.
     """
 
     uid: str
@@ -74,6 +80,7 @@ class TimeLogEntry(BaseModel):
     description: str | None = None
     created: datetime | None = None
     modified: datetime | None = None
+    last_milestone_minutes: int = 0
 
     model_config = {
         "extra": "ignore",
@@ -114,6 +121,7 @@ class TimeLogEntryCreate(BaseModel):
     task_id: str | None = None
     category: TimeLogCategory = TimeLogCategory.OTHER
     description: str | None = None
+    last_milestone_minutes: int = 0
 
     model_config = {"extra": "ignore"}
 
@@ -150,6 +158,7 @@ class TimeLogEntryUpdate(BaseModel):
     task_id: str | None = None
     category: TimeLogCategory | None = None
     description: str | None = None
+    last_milestone_minutes: int | None = None
 
     model_config = {"extra": "ignore"}
 

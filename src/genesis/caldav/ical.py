@@ -297,6 +297,7 @@ def time_log_from_ical(component: icalendar.Component) -> TimeLogEntry:
         description=to_str(component.get("description")),
         created=to_datetime(component.get("created")),
         modified=to_datetime(component.get("last-modified")),
+        last_milestone_minutes=to_int(component.get("x-last-milestone-minutes")) or 0,
     )
 
 
@@ -316,6 +317,8 @@ def time_log_to_ical(entry: TimeLogEntry) -> icalendar.Component:
         component.add("x-task-id", entry.task_id)
     if entry.category != TimeLogCategory.OTHER:
         component.add("x-category", entry.category.value)
+    if entry.last_milestone_minutes > 0:
+        component.add("x-last-milestone-minutes", entry.last_milestone_minutes)
     if entry.description:
         component.add("description", entry.description)
     component.add("dtstamp", entry.modified or now_utc())

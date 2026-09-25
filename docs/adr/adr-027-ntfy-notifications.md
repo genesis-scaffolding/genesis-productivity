@@ -209,13 +209,17 @@ Two integration points, both inside `_render_active_sessions`
   `elapsed_minutes = int(elapsed.total_seconds() // 60)`. The
   notification fires on the *crossing* of each multiple of 30:
   at elapsed = 30, 60, 90, ..., a notification fires. We track
-  which multiples have already fired per session in
-  `st.session_state[f"focus_notify_milestones_{s.uid}"]:
-  set[int]` so a rerun after a manual interaction does not
-  double-fire. We fire only the new milestones — if a session is
-  90 minutes old on first render, we fire for 30, 60, and 90 in
-  a single batch (one HTTP POST per milestone; the calls are
-  sequenced, not parallel).
+  which multiples have already fired per session on the
+  TimeLogEntry itself as
+  `last_milestone_minutes` (`X-LAST-MILESTONE-MINUTES`); a
+  per-page-load `st.session_state[f"focus_notify_max_{s.uid}"]`
+  cache suppresses redundant CalDAV PUTs across the
+  one-second tick. ADR-028 supersedes the original
+  `st.session_state`-only dedup, which was wiped by page
+  refresh and phone wake. We fire only the new milestones —
+  if a session is 90 minutes old on first render, we fire for
+  30, 60, and 90 in a single batch (one HTTP POST per
+  milestone; the calls are sequenced, not parallel).
 - **Countdown finished.** The existing auto-stop loop already
   fires when a countdown reaches its `due`. After the existing
   `facade.stop_session(...)` call succeeds, fire a finished

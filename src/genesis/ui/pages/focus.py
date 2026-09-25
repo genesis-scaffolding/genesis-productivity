@@ -32,7 +32,7 @@ import streamlit as st
 from genesis.caldav.ical import now_utc
 from genesis.category.enums import TimeLogCategory
 from genesis.category.facade import CategoryFacade
-from genesis.entities import TimeLogMode, TimeLogStatus
+from genesis.entities import TimeLogEntryUpdate, TimeLogMode, TimeLogStatus
 from genesis.notify import messages
 from genesis.ui._render import (
     FOCUS_COMPLETION_PENDING_KEY,
@@ -134,10 +134,12 @@ def _task_title_for_session(session) -> str | None:
     return task.title if task is not None else None
 
 
-# Milestone notifications fire on each 30-minute crossing. We
-# track which crossings have already fired per session in
-# ``st.session_state`` so a rerun after a manual interaction
-# cannot double-fire. ADR-027.
+# Milestone notifications fire on each 30-minute crossing. The
+# durable "highest minute value we already notified for" lives
+# on the TimeLogEntry itself as ``X-LAST-MILESTONE-MINUTES``;
+# the per-page-load ``st.session_state`` cache below is purely a
+# per-second-tick optimisation to avoid a CalDAV PUT every tick
+# in the steady state. ADR-027, ADR-028.
 _MILESTONE_MINUTES = 30
 
 
@@ -192,30 +194,63 @@ def _render_active_sessions() -> None:
 def _maybe_fire_milestone(s, now: datetime) -> None:
     """Fire a 30-minute milestone notification if a crossing just happened.
 
-    We track which multiples of 30 minutes have already been
-    notified per session in ``st.session_state`` so a rerun after
-    a manual interaction cannot re-fire. On first render of a
-    long-running session we may need to back-fire several
-    milestones; we issue one POST per crossing, sequenced, so
-    the network cost is predictable. ADR-027.
+    The source of truth is ``s.last_milestone_minutes`` on the
+    TimeLogEntry itself (ADR-028): the highest elapsed-minute
+    value at which a milestone notification has already fired.
+    Reading from this field survives page refresh, phone sleep,
+    and multi-device access — every device agrees on what has
+    been notified because they read the same persisted value.
+
+    The per-page-load ``st.session_state`` cache
+    (``focus_notify_max_{uid}``) is a per-second-tick
+    optimisation only: it suppresses the CalDAV PUT in the
+    steady state so we don't write on every tick. The cache is
+    populated lazily from the persisted field on first read.
+
+    On first render of a long-running session we may need to
+    back-fire several crossings; we issue one POST per
+    crossing, sequenced, so the network cost is predictable.
+    We persist BEFORE notifying: if the CalDAV PUT fails
+    (network, 412 race, 404) we skip the notify rather than
+    fire twice. A subsequent render catches up on transient
+    failures; a multi-device race winner is detected by
+    refetching and seeing the field has already moved. ADR-027,
+    ADR-028.
     """
     elapsed_seconds = (now - s.start).total_seconds()
     if elapsed_seconds < _MILESTONE_MINUTES * 60:
         return
     elapsed_minutes = int(elapsed_seconds // 60)
-    milestone = elapsed_minutes // _MILESTONE_MINUTES
-    if milestone <= 0:
+
+    fired_max_key = f"focus_notify_max_{s.uid}"
+    cached_max = st.session_state.get(fired_max_key, 0)
+    effective_max = max(s.last_milestone_minutes, cached_max)
+    crossings = list(range(effective_max + _MILESTONE_MINUTES, elapsed_minutes + 1, _MILESTONE_MINUTES))
+    if not crossings:
         return
-    fired_key = f"focus_notify_milestones_{s.uid}"
-    fired = st.session_state.setdefault(fired_key, set())
-    new_milestones = [m for m in range(1, milestone + 1) if m not in fired]
-    if not new_milestones:
+
+    new_max = crossings[-1]
+    result = facade.caldav.update_time_log_entry(
+        s.uid,
+        TimeLogEntryUpdate(last_milestone_minutes=new_max),
+    )
+    if result is None:
+        refetched = facade.caldav.get_time_log_entry(s.uid)
+        if refetched is not None and refetched.last_milestone_minutes >= new_max:
+            # Another device already persisted and fired for
+            # these crossings. Update the cache so we don't
+            # refetch again next tick.
+            st.session_state[fired_max_key] = max(cached_max, refetched.last_milestone_minutes)
+            return
+        # Transient PUT failure: skip this tick's notify, let
+        # the next tick retry.
         return
+
+    st.session_state[fired_max_key] = max(cached_max, new_max)
+
     task_title = _task_title_for_session(s)
-    for m in new_milestones:
-        minutes_elapsed = m * _MILESTONE_MINUTES
-        _notify_safely(lambda s=s, n=minutes_elapsed: messages.session_milestone(s, n, task_title=task_title))
-        fired.add(m)
+    for c in crossings:
+        _notify_safely(lambda s=s, n=c: messages.session_milestone(s, n, task_title=task_title))
 
 
 def _resolve_category(s) -> TimeLogCategory:

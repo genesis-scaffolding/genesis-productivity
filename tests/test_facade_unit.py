@@ -56,6 +56,13 @@ def test_facade_calls_ensure_user_even_when_server_already_running(
     from genesis.core import facade as facade_module
 
     monkeypatch.setattr(facade_module, "ServerManager", lambda *a, **kw: fake)
+    # Disable the focus scheduler too; otherwise the Facade's
+    # ``ensure_server=True`` path would start a daemon thread
+    # for ``alice`` and leak it across tests. ADR-029.
+    monkeypatch.setattr(
+        "genesis.focus_scheduler.runtime.ensure_scheduler_running",
+        lambda user: None,
+    )
 
     configs_path = tmp_path / "config" / "genesis" / "alice" / "configs.yaml"
     configs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,6 +101,12 @@ def test_facade_restart_server_stops_and_starts(monkeypatch: pytest.MonkeyPatch,
     from genesis.core import facade as facade_module
 
     monkeypatch.setattr(facade_module, "ServerManager", lambda *a, **kw: fake)
+    # Disable the focus scheduler; this test does not exercise
+    # it and we do not want a daemon thread leaked. ADR-029.
+    monkeypatch.setattr(
+        "genesis.focus_scheduler.runtime.ensure_scheduler_running",
+        lambda user: None,
+    )
 
     configs_path = tmp_path / "config" / "genesis" / "alice" / "configs.yaml"
     configs_path.parent.mkdir(parents=True, exist_ok=True)

@@ -68,6 +68,24 @@ the freshly-written rights file.
 
 See ADR-019 for the full story.
 
+## Focus session notifications
+
+Focus session timing (countdown auto-stop and 30-minute milestone
+notifications) runs in a per-process daemon thread spawned by
+the ``Facade``. As long as *some* long-lived process holds a
+``Facade`` for your user, notifications fire even when every
+browser tab is closed.
+
+- ``make serve`` runs UI + API; both host a scheduler thread.
+- ``make ui`` alone (Streamlit only) is enough for the
+  scheduler — the daemon thread lives in the Streamlit worker
+  process.
+- ``genesis scheduler start`` runs the scheduler in the
+  foreground for headless / systemd deployments. ``Ctrl+C`` to
+  stop.
+
+See ADR-029 for the design.
+
 ## Architecture
 
 - **core**: Facade and shared infrastructure

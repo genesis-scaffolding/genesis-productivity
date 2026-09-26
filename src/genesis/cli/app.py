@@ -10,11 +10,13 @@ import typer
 
 from ..configs import CONFIG_PATH_ENV, DEFAULT_USER, resolve_config_path
 from ..core.facade import Facade
+from .scheduler import scheduler_app
 from .server import server_app
 from .user import user_app
 
 app = typer.Typer(help="CLI for genesis productivity system.")
 app.add_typer(server_app, name="server")
+app.add_typer(scheduler_app, name="scheduler")
 app.add_typer(user_app, name="user")
 
 _user_option = typer.Option(

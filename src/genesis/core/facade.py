@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from ..backup.facade import BackupFacade
     from ..caldav.facade import CalDAVFacade
     from ..carddav.facade import CardDAVFacade
+    from ..focus_scheduler.scheduler import FocusScheduler
     from ..game.facade import GameClassificationError, GameDisabled, GameFacade
     from ..journal.facade import JournalFacade
     from ..notify.facade import NotifyFacade
@@ -66,9 +67,11 @@ class Facade:
         self._profile: ProfileFacade | None = None
         self._game: GameFacade | None = None
         self._notify: NotifyFacade | None = None
+        self._focus_scheduler: FocusScheduler | None = None
 
         if ensure_server:
             self._ensure_server_running()
+            self._ensure_scheduler_running()
 
     def _ensure_server_running(self) -> None:
         """Start the shared Radicale server if not already running.
@@ -358,8 +361,47 @@ class Facade:
             # break the caller.
             logger.warning("XP event fire failed: %s", exc)
 
+    def _ensure_scheduler_running(self) -> None:
+        """Start the focus scheduler thread for this user.
+
+        Lazy import keeps the dependency direction one-way:
+        ``genesis.core`` does not import ``genesis.focus_scheduler``
+        at module load. Tests that mock :class:`ServerManager`
+        also patch
+        :func:`genesis.focus_scheduler.runtime.ensure_scheduler_running`
+        to a no-op so the Facade stays cheap to construct and
+        does not leak threads across test cases.
+
+        ADR-029.
+        """
+        from ..focus_scheduler.runtime import ensure_scheduler_running
+        self._focus_scheduler = ensure_scheduler_running(self._configs.user)
+
+    @property
+    def focus_scheduler(self) -> FocusScheduler | None:
+        """Return the focus scheduler for this user.
+
+        Plain read of ``_focus_scheduler``, which is set
+        eagerly in :meth:`__init__` when ``ensure_server=True``.
+        Returns ``None`` when the Facade was constructed with
+        ``ensure_server=False`` (a one-shot CLI read, the UI's
+        nav peek, etc.).
+
+        ADR-029.
+        """
+        return self._focus_scheduler
+
     def shutdown(self) -> None:
-        """Stop the DAV server if we started it."""
+        """Stop the focus scheduler and the DAV server if we started them.
+
+        Order matters: the scheduler's tick relies on Radicale,
+        so we stop the scheduler first. If Radicale were stopped
+        first, an in-flight tick would fail.
+        """
+        if self._focus_scheduler is not None:
+            from ..focus_scheduler.runtime import stop_for_user
+            stop_for_user(self._configs.user)
+            self._focus_scheduler = None
         if self._server is not None:
             self._server.stop()
             self._server = None

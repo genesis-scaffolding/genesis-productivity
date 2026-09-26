@@ -11,20 +11,20 @@ The page renders:
   Tasks page's per-row "Focus" action; here it opens with no
   pre-selected task.
 - A live fragment that shows all active sessions, ticking every
-  second, with Stop and Discard buttons. Countdown sessions
-  auto-stop in-fragment when their target elapses.
+  second, with Stop and Discard buttons.
 
-When a session with a linked task ends (either via the auto-stop
-path or via manual Stop), the page sets
-``st.session_state["focus_completion_pending"]`` and triggers an
-app-level rerun. The next render reads the flag at the top of this
-script and pops the completion dialog.
+Timing-driven work (countdown auto-stop, 30-minute milestone
+notifications) lives in the server-side :class:`FocusScheduler`
+(ADR-029). The page is purely a viewer: it lists active sessions
+each tick, computes elapsed time locally, and renders the cards.
+The scheduler runs the auto-stop and notification machinery out
+of band, so the user can close every browser tab and still get
+the same notifications.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import streamlit as st
@@ -32,8 +32,7 @@ import streamlit as st
 from genesis.caldav.ical import now_utc
 from genesis.category.enums import TimeLogCategory
 from genesis.category.facade import CategoryFacade
-from genesis.entities import TimeLogEntryUpdate, TimeLogMode, TimeLogStatus
-from genesis.notify import messages
+from genesis.entities import TimeLogMode
 from genesis.ui._render import (
     FOCUS_COMPLETION_PENDING_KEY,
     focus_completion_dialog,
@@ -42,27 +41,6 @@ from genesis.ui._render import (
 from genesis.ui._state import get_facade
 
 logger = logging.getLogger(__name__)
-
-
-def _notify_safely(builder: Callable[[], tuple[str, str, list[str]]]) -> None:
-    """Run a message builder and POST to ntfy. Never raises.
-
-    A dead ntfy server (DNS failure, connection timeout, HTTP
-    error) must not break the focus page's one-second tick or
-    the focus create dialog's Start handler. We log a warning
-    so the operator can see the failure but otherwise swallow
-    the exception. ADR-027.
-
-    The ``builder`` is invoked lazily so the focus page only
-    builds the payload string when ntfy is actually reachable
-    (or at least the HTTP attempt succeeds) — but building the
-    tuple is cheap, so this is mostly a structural nicety.
-    """
-    try:
-        title, message, tags = builder()
-        facade.notify.send(title, message, tags=tags)
-    except Exception as exc:
-        logger.warning("ntfy notification failed: %s", exc)
 
 
 facade = get_facade()
@@ -103,11 +81,18 @@ def _format_elapsed(elapsed: timedelta) -> str:
 def _set_completion_pending(session) -> None:
     """If ``session`` was aligned to a task, queue the completion dialog.
 
-    The dialog reads ``task.title`` for display, not the session
-    label, so we re-fetch the task rather than reusing ``s.label``.
-    A task that disappeared between session start and stop is a
+    Called from the manual Stop button only. The dialog reads
+    ``task.title`` for display, not the session label, so we
+    re-fetch the task rather than reusing ``s.label``. A task
+    that disappeared between session start and stop is a
     legitimate race (deleted on another device); in that case the
     completion prompt is silently skipped.
+
+    Auto-stopped sessions (driven by the server-side
+    :class:`FocusScheduler`, ADR-029) do NOT set this flag; the
+    user was not watching the page when the countdown ended, so
+    the prompt would arrive after the fact. Manual Stop is the
+    only path that pops the dialog now.
     """
     if not session.task_id:
         return
@@ -120,29 +105,6 @@ def _set_completion_pending(session) -> None:
     }
 
 
-def _task_title_for_session(session) -> str | None:
-    """Return the title of the task aligned to ``session``, if any.
-
-    Used by the notification builders so an aligned session's
-    notification body disambiguates from other sessions. Returns
-    ``None`` when the session is unaligned or the task was
-    deleted (legitimate race). ADR-027.
-    """
-    if not session.task_id:
-        return None
-    task = caldav.get_task(session.task_id)
-    return task.title if task is not None else None
-
-
-# Milestone notifications fire on each 30-minute crossing. The
-# durable "highest minute value we already notified for" lives
-# on the TimeLogEntry itself as ``X-LAST-MILESTONE-MINUTES``;
-# the per-page-load ``st.session_state`` cache below is purely a
-# per-second-tick optimisation to avoid a CalDAV PUT every tick
-# in the steady state. ADR-027, ADR-028.
-_MILESTONE_MINUTES = 30
-
-
 # -----------------------------------------------------------------------------
 # Live active sessions fragment
 # -----------------------------------------------------------------------------
@@ -153,104 +115,12 @@ def _render_active_sessions() -> None:
     now = now_utc()
     sessions = caldav.list_time_log(active_only=True)
 
-    # Auto-stop any countdown sessions whose target has passed.
-    for s in sessions:
-        if (
-            s.mode == TimeLogMode.COUNTDOWN
-            and s.due is not None
-            and now >= s.due
-            and s.status != TimeLogStatus.COMPLETED
-        ):
-            category = _resolve_category(s)
-            facade.stop_session(
-                s.uid,
-                actual_due=s.due,
-                completed_at=now,
-                category=category,
-            )
-            # Notify the user the countdown finished. Manual Stop
-            # on a still-running countdown does not get this
-            # notification — the user is at the page and already
-            # knows. ADR-027.
-            finished_task_title = _task_title_for_session(s)
-            _notify_safely(lambda s=s, t=finished_task_title: messages.session_finished(s, task_title=t))
-            _set_completion_pending(s)
-            # Rerun at app scope so the parent script picks up the
-            # completion-pending flag and pops the dialog. We lose
-            # the previous "Auto-stopped" toast on the rerun; the
-            # completion dialog is the more useful signal here.
-            st.rerun(scope="app")
-            return
-
     if not sessions:
         st.info("No active sessions. Start one above.")
         return
 
     for s in sessions:
-        _maybe_fire_milestone(s, now)
         _render_session_card(s, now)
-
-
-def _maybe_fire_milestone(s, now: datetime) -> None:
-    """Fire a 30-minute milestone notification if a crossing just happened.
-
-    The source of truth is ``s.last_milestone_minutes`` on the
-    TimeLogEntry itself (ADR-028): the highest elapsed-minute
-    value at which a milestone notification has already fired.
-    Reading from this field survives page refresh, phone sleep,
-    and multi-device access — every device agrees on what has
-    been notified because they read the same persisted value.
-
-    The per-page-load ``st.session_state`` cache
-    (``focus_notify_max_{uid}``) is a per-second-tick
-    optimisation only: it suppresses the CalDAV PUT in the
-    steady state so we don't write on every tick. The cache is
-    populated lazily from the persisted field on first read.
-
-    On first render of a long-running session we may need to
-    back-fire several crossings; we issue one POST per
-    crossing, sequenced, so the network cost is predictable.
-    We persist BEFORE notifying: if the CalDAV PUT fails
-    (network, 412 race, 404) we skip the notify rather than
-    fire twice. A subsequent render catches up on transient
-    failures; a multi-device race winner is detected by
-    refetching and seeing the field has already moved. ADR-027,
-    ADR-028.
-    """
-    elapsed_seconds = (now - s.start).total_seconds()
-    if elapsed_seconds < _MILESTONE_MINUTES * 60:
-        return
-    elapsed_minutes = int(elapsed_seconds // 60)
-
-    fired_max_key = f"focus_notify_max_{s.uid}"
-    cached_max = st.session_state.get(fired_max_key, 0)
-    effective_max = max(s.last_milestone_minutes, cached_max)
-    crossings = list(range(effective_max + _MILESTONE_MINUTES, elapsed_minutes + 1, _MILESTONE_MINUTES))
-    if not crossings:
-        return
-
-    new_max = crossings[-1]
-    result = facade.caldav.update_time_log_entry(
-        s.uid,
-        TimeLogEntryUpdate(last_milestone_minutes=new_max),
-    )
-    if result is None:
-        refetched = facade.caldav.get_time_log_entry(s.uid)
-        if refetched is not None and refetched.last_milestone_minutes >= new_max:
-            # Another device already persisted and fired for
-            # these crossings. Update the cache so we don't
-            # refetch again next tick.
-            st.session_state[fired_max_key] = max(cached_max, refetched.last_milestone_minutes)
-            return
-        # Transient PUT failure: skip this tick's notify, let
-        # the next tick retry.
-        return
-
-    st.session_state[fired_max_key] = max(cached_max, new_max)
-
-    task_title = _task_title_for_session(s)
-    for c in crossings:
-        _notify_safely(lambda s=s, n=c: messages.session_milestone(s, n, task_title=task_title))
 
 
 def _resolve_category(s) -> TimeLogCategory:
@@ -342,11 +212,12 @@ def _render_session_card(s, now: datetime) -> None:
 st.title("Focus")
 st.caption("Start a focus session and watch it tick across all your devices.")
 
-# If a session with a linked task just ended (auto-stop or manual
-# stop), the active-sessions fragment set this flag and triggered an
-# app-level rerun. Pop the flag at the moment we open the dialog so
-# any subsequent on_dismiss rerun does not re-open it. The Yes/No
-# handlers in the dialog also pop the flag as belt-and-suspenders.
+# If a session with a linked task just ended via manual Stop,
+# the active-sessions fragment set this flag and triggered an
+# app-level rerun. Pop the flag at the moment we open the
+# dialog so any subsequent on_dismiss rerun does not re-open
+# it. Auto-stopped sessions (by the server-side scheduler)
+# do not set this flag — see ``_set_completion_pending``.
 pending = st.session_state.pop(FOCUS_COMPLETION_PENDING_KEY, None)
 if pending is not None:
     focus_completion_dialog(

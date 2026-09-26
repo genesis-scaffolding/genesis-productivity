@@ -31,6 +31,15 @@ _facade_cache: dict[str, Facade] = {}
 
 def _shutdown_all() -> None:
     """Shut down every cached Facade. Best-effort; never raises."""
+    # Stop the focus scheduler threads first so an in-flight
+    # tick does not hit a half-stopped Radicale. ``stop_all``
+    # is idempotent and a no-op when the runtime cache is
+    # empty. ADR-029.
+    try:
+        from genesis.focus_scheduler.runtime import stop_all
+        stop_all()
+    except Exception:
+        pass
     for facade in list(_facade_cache.values()):
         try:
             facade.shutdown()

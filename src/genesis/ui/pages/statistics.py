@@ -74,11 +74,10 @@ if period_label is None:
 
 all_completed = caldav.list_time_log()
 
-task_ids = {e.task_id for e in all_completed if e.task_id is not None}
-task_titles: dict[str, str] = {}
-for tid in task_ids:
-    task = caldav.get_task(tid)
-    task_titles[tid] = task.title if task else "(deleted)"
+# One request for the whole tasks collection; a uid missing from the
+# map means the task was deleted (or is unparseable), so we label it
+# "(deleted)" the same way the per-task GETs did before.
+task_titles = {t.uid: t.title for t in caldav.list_tasks()}
 
 rollup = compute_rollup(
     entries=all_completed,

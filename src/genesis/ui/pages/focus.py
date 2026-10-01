@@ -32,7 +32,7 @@ import streamlit as st
 from genesis.caldav.ical import now_utc
 from genesis.category.enums import TimeLogCategory
 from genesis.category.facade import CategoryFacade
-from genesis.entities import TimeLogMode
+from genesis.entities import TimeLogEntryCreate, TimeLogMode, TimeLogStatus
 from genesis.ui._render import (
     FOCUS_COMPLETION_PENDING_KEY,
     focus_completion_dialog,
@@ -225,8 +225,29 @@ if pending is not None:
         task_title=pending["task_title"],
     )
 
-if st.button("Start focus session", type="primary", key="focus_open_btn"):
-    focus_create_dialog()
+def _start_break(minutes: int, label: str) -> None:
+    """Create and start a predefined countdown break session."""
+    now = now_utc()
+    caldav.create_time_log_entry(
+        TimeLogEntryCreate(
+            label=label,
+            start=now,
+            due=now + timedelta(minutes=minutes),
+            mode=TimeLogMode.COUNTDOWN,
+            status=TimeLogStatus.IN_PROGRESS,
+            category=TimeLogCategory.PERSONAL,
+        )
+    )
+    st.rerun(scope="app")
+
+
+with st.container(horizontal=True):
+    if st.button("Start focus session", type="primary", key="focus_open_btn"):
+        focus_create_dialog()
+    if st.button("Short break", key="focus_short_break_btn", help="5 minute countdown break"):
+        _start_break(5, "Break")
+    if st.button("Long break", key="focus_long_break_btn", help="15 minute countdown break"):
+        _start_break(15, "Long break")
 
 st.divider()
 st.subheader("Active sessions")

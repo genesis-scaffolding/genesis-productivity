@@ -22,6 +22,7 @@ from genesis.category.enums import TimeLogCategory
 from genesis.entities import (
     Task,
     TaskStatus,
+    TaskUpdate,
     TimeLogEntryCreate,
     TimeLogMode,
     TimeLogStatus,
@@ -833,9 +834,16 @@ def focus_create_dialog(*, task: Task | None = None) -> None:
             facade.notify.send(title, body, tags=tags)
         except Exception as exc:
             logger.warning("ntfy notification failed: %s", exc)
+        # Starting a session against a task means the task is now
+        # being worked on; flip it to IN_PROGRESS so the task list
+        # reflects it. Skip the write when it is already there.
+        if selected_task is not None and selected_task.status != TaskStatus.IN_PROGRESS:
+            caldav.update_task(selected_task.uid, TaskUpdate(status=TaskStatus.IN_PROGRESS))
         _clear_focus_dialog_state()
         st.toast(f"Started: {entry.label}")
-        st.rerun(scope="app")
+        # Land on the Focus page so the user sees the session ticking.
+        # No-op when started from the Focus page itself.
+        st.switch_page("pages/focus.py")
     if action_cols[1].button("Cancel", key="_foc_cancel"):
         _clear_focus_dialog_state()
         st.rerun()

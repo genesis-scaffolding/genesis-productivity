@@ -29,6 +29,7 @@ journal = facade.journal
 
 _PERIODIC_TYPES: tuple[EntryType, ...] = (
     EntryType.DAILY,
+    EntryType.BRIEFING,
     EntryType.WEEKLY,
     EntryType.MONTHLY,
     EntryType.YEARLY,

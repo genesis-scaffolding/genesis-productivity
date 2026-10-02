@@ -11,10 +11,12 @@ Both exclude tasks with status COMPLETED or CANCELED. A task may
 appear in both lists if both fields are set.
 
 The bottom of the page also hosts a closed-by-default expander
-that shows today's daily journal entry (when one exists). The
-entry is rendered read-only via the shared
-:func:`render_journal_entry_view` helper; clicking Edit switches
-to the Journal page in edit mode rather than editing inline.
+that shows today's briefing entry (when one exists). Briefings
+are agent-written morning/nightly summaries; the user's daily
+journal entry stays separate. The entry is rendered read-only
+via the shared :func:`render_journal_entry_view` helper;
+clicking Edit switches to the Journal page in edit mode rather
+than editing inline.
 """
 
 from __future__ import annotations
@@ -120,9 +122,9 @@ else:
 
 st.write("")
 
-# --- Daily journal ----------------------------------------------------------
+# --- Daily briefing ---------------------------------------------------------
 
-daily_entry = journal.find_for_period(EntryType.DAILY, today)
+briefing_entry = journal.find_for_period(EntryType.BRIEFING, today)
 
 
 def _open_journal_edit(entry) -> None:
@@ -141,18 +143,17 @@ def _open_journal_edit(entry) -> None:
     st.switch_page("pages/journal.py", query_params={"uid": entry.uid, "edit": "1"})
 
 
-with st.expander(f"Daily journal — {today.isoformat()}", expanded=False):
-    if daily_entry is None:
-        st.caption("No daily entry yet for today.")
+with st.expander(f"Daily briefing — {today.isoformat()}", expanded=False):
+    if briefing_entry is None:
+        st.caption("No briefing yet for today.")
         if st.button(
-            "+ Write daily entry",
-            key="dashboard_write_daily",
+            "+ Write briefing",
+            key="dashboard_write_briefing",
             type="primary",
             icon=":material/edit:",
         ):
             # Land directly on the journal page's create form with
-            # ``type=daily`` preselected, mirroring the journal
-            # page's own "Write Daily" affordance. ``st.switch_page``
+            # ``type=briefing`` preselected. ``st.switch_page``
             # resolves the target relative to the main script
             # (``src/genesis/ui/app.py``), so the journal page lives
             # at ``pages/journal.py`` from that base.
@@ -161,8 +162,8 @@ with st.expander(f"Daily journal — {today.isoformat()}", expanded=False):
                 query_params={
                     "uid": _uuid.uuid4().hex,
                     "new": "1",
-                    "type": EntryType.DAILY.value,
+                    "type": EntryType.BRIEFING.value,
                 },
             )
     else:
-        render_journal_entry_view(daily_entry, on_edit=_open_journal_edit)
+        render_journal_entry_view(briefing_entry, on_edit=_open_journal_edit)

@@ -274,6 +274,26 @@ class TestReferenceDate:
         assert loaded is not None
         assert loaded.reference_date == date(2026, 1, 1)
 
+    def test_briefing_save_stores_reference_date_equal_to_date(self, tmp_path: Path) -> None:
+        facade = JournalFacade(tmp_path)
+        entry = Entry(date=date(2026, 9, 5), type=EntryType.BRIEFING, content="b")
+        facade.save_entry(entry)
+        loaded = facade.get_entry(entry.uid)
+        assert loaded is not None
+        assert loaded.reference_date == date(2026, 9, 5)
+        assert facade.find_for_period(EntryType.BRIEFING, date(2026, 9, 5)) is not None
+
+    def test_briefing_uniqueness_blocks_second_save_same_day(self, tmp_path: Path) -> None:
+        facade = JournalFacade(tmp_path)
+        a = Entry(date=date(2026, 9, 5), type=EntryType.BRIEFING, content="a")
+        facade.save_entry(a)
+        b = Entry(date=date(2026, 9, 5), type=EntryType.BRIEFING, content="b")
+        with pytest.raises(ValueError, match="briefing entry for 2026-09-05"):
+            facade.save_entry(b)
+        # A daily entry for the same day is unaffected
+        d = Entry(date=date(2026, 9, 5), type=EntryType.DAILY, content="d")
+        facade.save_entry(d)
+
     def test_project_and_misc_save_omit_reference_date(self, tmp_path: Path) -> None:
         facade = JournalFacade(tmp_path)
         for type_ in (EntryType.PROJECT, EntryType.MISC):

@@ -50,6 +50,7 @@ class EntryType(StrEnum):
 
     DAILY = "daily"
     WEEKLY = "weekly"
+    BRIEFING = "briefing"
     MONTHLY = "monthly"
     YEARLY = "yearly"
     PROJECT = "project"
@@ -59,7 +60,7 @@ class EntryType(StrEnum):
 # Entry types that have a period anchor and therefore participate in
 # uniqueness checks. ``project`` and ``misc`` are free-form notes.
 _PERIODIC_TYPES: frozenset[EntryType] = frozenset(
-    {EntryType.DAILY, EntryType.WEEKLY, EntryType.MONTHLY, EntryType.YEARLY}
+    {EntryType.DAILY, EntryType.WEEKLY, EntryType.MONTHLY, EntryType.YEARLY, EntryType.BRIEFING}
 )
 
 
@@ -102,7 +103,7 @@ def _normalize_reference_date(
 ) -> date_cls | None:
     """Return the period anchor for ``entry_type`` applied to ``on``.
 
-    - daily   -> ``on`` (the day itself)
+    - daily, briefing -> ``on`` (the day itself)
     - weekly  -> Monday of ``on``'s ISO week
     - monthly -> 1st of ``on``'s month
     - yearly  -> January 1 of ``on``'s year
@@ -110,7 +111,7 @@ def _normalize_reference_date(
     """
     if entry_type is None:
         return None
-    if entry_type == EntryType.DAILY:
+    if entry_type == EntryType.DAILY or entry_type == EntryType.BRIEFING:
         return on
     if entry_type == EntryType.WEEKLY:
         return on - timedelta(days=on.isoweekday() - 1)

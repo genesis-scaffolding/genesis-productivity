@@ -6,6 +6,9 @@ under ``<data_home>/<app_name>/`` (ADR-019):
 - ``MANIFEST.json`` at the root
 - ``radicale/...`` = ``<radicale_root>/...``
 - ``journals/...`` = ``<journal_root>/...``
+- ``<user>/profile/...`` = the per-user profile directory
+  (profile.md, life-story.md and their ``.versions`` snapshots;
+  ADR-025)
 
 We do not re-serialize items. The ``.ics`` files in the archive are
 literal copies of what Radicale wrote; the markdown files in the
@@ -59,6 +62,7 @@ _RADICALE_COLLECTION_ROOT = "collection-root"
 # names so the archive mirrors what the operator sees on disk.
 _ARC_RADICALE = "radicale"
 _ARC_JOURNAL = "journals"
+_ARC_PROFILE = "profile"  # section tag for the per-user profile tree
 
 # Cap on sample validation: parse this many .ics files per collection
 # to catch gross archive corruption without paying the cost of parsing
@@ -189,6 +193,33 @@ class BackupFacade:
         return self._journal_root / self._username
 
     @property
+    def _profile_root(self) -> Path:
+        """Path to this user's profile directory (ADR-025)."""
+        return Path(self._parent.configs.paths.profile_root)
+
+    @property
+    def _user_root(self) -> Path:
+        """The per-user data directory that owns the profile root.
+
+        ``profile_root`` is ``<data_home>/<app>/<user>/profile`` by
+        default, so its parent is the per-user directory. Used to
+        keep the export scope honest: a YAML-overridden
+        ``profile_root`` that escapes the user root is rejected.
+        """
+        return self._profile_root.parent
+
+    @property
+    def _app_root(self) -> Path:
+        """The per-app data root (``<data_home>/<app>``).
+
+        Parent of the per-user directory. The profile arcname base:
+        arcnames are anchored here so ``profile`` files land at
+        ``<user>/profile/...`` inside the archive and extract back
+        to the same on-disk location.
+        """
+        return self._user_root.parent
+
+    @property
     def _common_base(self) -> Path:
         """The shared parent that owns both the radicale and journal
         roots. Required to be the same path for both because the
@@ -215,12 +246,16 @@ class BackupFacade:
         """
         caldav = self._parent.caldav
         journal = self._parent.journal
+        profile_files = 0
+        if self._profile_root.exists():
+            profile_files = sum(1 for p in self._profile_root.rglob("*") if p.is_file())
         return Counts(
             projects=len(caldav.list_projects()),
             tasks=len(caldav.list_tasks()),
             events=len(caldav.list_events()),
             time_log=len(caldav.list_time_log()),
             journal=len(journal.list_entries()),
+            profile=profile_files,
         )
 
     # -------------------------------------------------------------------------
@@ -268,6 +303,22 @@ class BackupFacade:
             for path in sorted(self._journal_user_root.rglob("*")):
                 if path.is_file():
                     yield path, self._arcname_for(path, base)
+
+        # Profile files (profile.md, life-story.md) and their
+        # ``.versions`` snapshots. The arcname base is the per-app
+        # data root so files land at ``<user>/profile/...`` inside
+        # the archive and extract back to the same on-disk location;
+        # a YAML-overridden ``profile_root`` that escapes the user
+        # root is rejected loudly rather than silently dropped.
+        if self._profile_root.exists():
+            if not self._profile_root.is_relative_to(self._user_root):
+                raise ArchiveError(
+                    f"profile_root ({self._profile_root}) is not under the user "
+                    f"data root ({self._user_root}); cannot include it in the archive"
+                )
+            for path in sorted(self._profile_root.rglob("*")):
+                if path.is_file():
+                    yield path, self._arcname_for(path, self._app_root)
 
     # -------------------------------------------------------------------------
     # Export
@@ -356,6 +407,8 @@ class BackupFacade:
                     present_sections.add(_ARC_RADICALE)
                 if _ARC_JOURNAL in top_dirs:
                     present_sections.add(_ARC_JOURNAL)
+                if self._username in top_dirs:
+                    present_sections.add(_ARC_PROFILE)
         except zipfile.BadZipFile as exc:
             issues.append(f"not a valid zip: {exc}")
 
@@ -497,6 +550,13 @@ class BackupFacade:
             shutil.rmtree(self._radicale_user_root)
         if self._journal_user_root.exists():
             shutil.rmtree(self._journal_user_root)
+        if self._profile_root.exists():
+            # The profile root lives under the journal user root's
+            # parent in the default layout; rmtree it independently so
+            # a non-default profile_root (under the user root) is
+            # wiped too. The journal rmtree above never touches it
+            # because the two roots are siblings.
+            shutil.rmtree(self._profile_root)
 
     def _extract_archive(self, data: bytes) -> None:
         """Unpack the validated archive into the shared data directory.

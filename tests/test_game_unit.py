@@ -24,7 +24,6 @@ from genesis.entities import (
 )
 from genesis.game import classify, labels, xp
 from genesis.game.facade import (
-    GameClassificationError,
     GameDisabled,
     GameFacade,
 )
@@ -330,14 +329,27 @@ class TestGameFacade:
         assert ev.delta == -1  # floor(180 / 120) = 1, negated
         assert ev.kind == XpEventKind.LOSS
 
-    def test_session_personal_no_match_raises(self) -> None:
+    def test_session_personal_no_match_defaults_discipline(self) -> None:
         h = _Harness()
         session_uid = h.make_session("zzz qqq", TimeLogCategory.PERSONAL, duration_minutes=30)
-        with pytest.raises(GameClassificationError):
-            h.facade.record_xp_event(
-                source=SessionSource(session_uid=session_uid, label="zzz qqq", category=TimeLogCategory.PERSONAL),
-                idempotency_key=f"session:{session_uid}:stopped",
-            )
+        ev = h.facade.record_xp_event(
+            source=SessionSource(session_uid=session_uid, label="zzz qqq", category=TimeLogCategory.PERSONAL),
+            idempotency_key=f"session:{session_uid}:stopped",
+        )
+        assert ev is not None
+        assert ev.stat_id == "discipline"
+        assert ev.delta == 1  # floor(30 / 25)
+
+    def test_session_other_no_match_defaults_discipline(self) -> None:
+        h = _Harness()
+        session_uid = h.make_session("zzz qqq", TimeLogCategory.OTHER, duration_minutes=25)
+        ev = h.facade.record_xp_event(
+            source=SessionSource(session_uid=session_uid, label="zzz qqq", category=TimeLogCategory.OTHER),
+            idempotency_key=f"session:{session_uid}:stopped",
+        )
+        assert ev is not None
+        assert ev.stat_id == "discipline"
+        assert ev.delta == 1  # floor(25 / 25)
 
     def test_explicit_overrides_inference(self) -> None:
         h = _Harness()

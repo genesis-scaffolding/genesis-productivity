@@ -67,6 +67,8 @@ def radicale_layout() -> Generator[SimpleNamespace, None, None]:
         rad_root.mkdir(parents=True)
         jrn_root.mkdir(parents=True)
         (jrn_root / username).mkdir()
+        profile_root = data_path / username / "profile"
+        profile_root.mkdir(parents=True)
 
         dav_config = DAV(
             host=host,
@@ -89,6 +91,7 @@ def radicale_layout() -> Generator[SimpleNamespace, None, None]:
                 rad_root=rad_root,
                 jrn_root=jrn_root,
                 jrn_user=jrn_root / username,
+                profile_root=profile_root,
                 username=username,
                 password=password,
                 server_url=f"http://{host}:{port}",
@@ -133,6 +136,7 @@ def backup_facade(
                 paths=SimpleNamespace(
                     radicale_root=str(radicale_layout.rad_root),
                     journal_root=str(radicale_layout.jrn_root),
+                    profile_root=str(radicale_layout.profile_root),
                 ),
             ),
             caldav=caldav,

@@ -43,8 +43,9 @@ class GameDisabled(Exception):
 class GameClassificationError(Exception):
     """Raised when the keyword engine cannot pin a stat.
 
-    Used for PERSONAL/OTHER sessions where guessing is worse than
-    failing. Tasks default to discipline on miss instead.
+    Kept for API-compat; the game layer now falls back to
+    ``discipline`` on a no-match (sessions and tasks alike), so this
+    is no longer raised by :meth:`GameFacade.record_xp_event`.
     """
 
 
@@ -105,9 +106,6 @@ class GameFacade:
         Raises:
             GameDisabled: when ``game.enabled`` is False.
             ValueError: when ``stat_id`` or ``delta`` is invalid.
-            GameClassificationError: when ``stat_id`` cannot be
-                inferred (PERSONAL/OTHER session with no keyword
-                hits).
         """
         if not self._config.enabled:
             raise GameDisabled("game layer is disabled in configs.game.enabled")
@@ -180,9 +178,10 @@ class GameFacade:
     def _resolve(self, source: XpSource, stat_id: str | None, delta: int | None) -> tuple[str, int]:
         """Fill in any missing ``stat_id`` / ``delta`` from the source.
 
-        Returns ``(stat_id, delta)``. Raises ``GameClassificationError``
-        when no stat can be inferred (PERSONAL/OTHER session with
-        no keyword hits).
+        Returns ``(stat_id, delta)``. Session PERSONAL/OTHER with no
+        keyword hit falls back to ``discipline`` (same default as
+        tasks) so a plain focus session with a neutral label is not
+        silently dropped by the XP layer.
         """
         if stat_id is not None and delta is not None:
             return stat_id, delta
@@ -194,10 +193,9 @@ class GameFacade:
                 if tier1_stat is not None:
                     stat_id = tier1_stat
                 else:
-                    candidate = classify.infer_stat_from_text(text, config=self._config, fail_on_no_match=True)
-                    if candidate is None:
-                        raise GameClassificationError(f"cannot classify stat from session label {text!r}")
-                    stat_id = candidate
+                    stat_id = classify.infer_stat_from_text(text, config=self._config, default_stat_id="discipline")
+                    if stat_id is None:
+                        stat_id = "discipline"
             if delta is None:
                 duration = self._session_duration(source)
                 delta = xp.delta_from_session_duration(duration, source.category)

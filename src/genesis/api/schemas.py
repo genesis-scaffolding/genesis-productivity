@@ -271,6 +271,47 @@ class TimeLogListOut(BaseModel):
     limit: int
 
 
+class FocusSessionStartIn(BaseModel):
+    """Body for POST /productivity/sessions.
+
+    Starts a new focus session. ``mode`` is ``countdown`` (bounded,
+    requires ``duration_minutes``) or ``countup`` (unbounded).
+    """
+
+    label: str = Field(..., min_length=1, description="Session label.")
+    mode: TimeLogMode = Field(..., description="countdown or countup.")
+    duration_minutes: int | None = Field(None, ge=1, description="Countdown length. Required for countdown mode.")
+    category: TimeLogCategory | None = Field(None, description="Session category.")
+    task_id: str | None = Field(None, description="Aligned task uid, if any.")
+    description: str | None = Field(None, description="Session notes.")
+
+
+class FocusSessionLodgeIn(BaseModel):
+    """Body for POST /productivity/sessions/completed.
+
+    Lodges a completed focus session (retrospective logging). The
+    session is recorded as already finished: ``due`` and
+    ``completed_at`` are both ``start + duration_minutes``.
+    """
+
+    label: str = Field(..., min_length=1, description="Session label.")
+    start: UtcDateTime = Field(..., description="Session start (UTC).")
+    duration_minutes: int = Field(..., ge=1, description="Session length in minutes.")
+    category: TimeLogCategory | None = Field(None, description="Session category.")
+    task_id: str | None = Field(None, description="Aligned task uid, if any.")
+    description: str | None = Field(None, description="Session notes.")
+
+
+class FocusSessionStopIn(BaseModel):
+    """Body for POST /productivity/sessions/{uid}/stop.
+
+    All fields optional. Missing ``completed_at`` defaults to now.
+    """
+
+    completed_at: UtcDateTime | None = Field(None, description="Stop time. Defaults to now.")
+    category: TimeLogCategory | None = Field(None, description="Override the session category.")
+
+
 # ---------------------------------------------------------------------------
 # Statistics
 # ---------------------------------------------------------------------------

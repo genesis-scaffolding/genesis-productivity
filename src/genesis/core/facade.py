@@ -19,7 +19,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -341,6 +341,111 @@ class Facade:
             )
         return updated
 
+    def start_session(
+        self,
+        *,
+        label: str,
+        mode: str,
+        duration_minutes: int | None = None,
+        category: str | None = None,
+        task_id: str | None = None,
+        description: str | None = None,
+    ):
+        """Start a new focus session.
+
+        Creates a time log entry with status IN_PROGRESS. For
+        countdown mode, ``duration_minutes`` is required and sets
+        the due time. Optionally flips an aligned task to
+        IN_PROGRESS.
+
+        Returns the created entry.
+        """
+        from ..caldav.ical import now_utc
+        from ..category.enums import TimeLogCategory
+        from ..entities import TimeLogEntryCreate, TimeLogMode, TimeLogStatus
+
+        now = now_utc()
+        mode_enum = TimeLogMode(mode)
+        due = None
+        if mode_enum == TimeLogMode.COUNTDOWN:
+            if duration_minutes is None:
+                raise ValueError("duration_minutes is required for countdown mode")
+            due = now + timedelta(minutes=duration_minutes)
+
+        category_enum = TimeLogCategory(category) if category is not None else TimeLogCategory.OTHER
+
+        entry = self.caldav.create_time_log_entry(
+            TimeLogEntryCreate(
+                label=label,
+                start=now,
+                due=due,
+                mode=mode_enum,
+                status=TimeLogStatus.IN_PROGRESS,
+                task_id=task_id,
+                category=category_enum,
+                description=description,
+            )
+        )
+
+        # Flip aligned task to IN_PROGRESS (mirrors the focus page).
+        if task_id is not None:
+            from ..entities import TaskStatus, TaskUpdate
+
+            task = self.caldav.get_task(task_id)
+            if task is not None and task.status != TaskStatus.IN_PROGRESS:
+                self.caldav.update_task(task_id, TaskUpdate(status=TaskStatus.IN_PROGRESS))
+
+        return entry
+
+    def lodge_completed_session(
+        self,
+        *,
+        label: str,
+        start: datetime,
+        duration_minutes: int,
+        category: str | None = None,
+        task_id: str | None = None,
+        description: str | None = None,
+    ):
+        """Lodge a completed focus session (retrospective logging).
+
+        Creates a time log entry that is already COMPLETED: both
+        ``due`` and ``completed_at`` are ``start + duration``.
+        Fires the XP event. Returns the created entry.
+        """
+        from ..category.enums import TimeLogCategory
+        from ..entities import TimeLogEntryCreate, TimeLogMode, TimeLogStatus
+
+        start_utc = start if start.tzinfo else start.replace(tzinfo=UTC)
+        end_utc = start_utc + timedelta(minutes=duration_minutes)
+
+        category_enum = TimeLogCategory(category) if category is not None else TimeLogCategory.OTHER
+
+        entry = self.caldav.create_time_log_entry(
+            TimeLogEntryCreate(
+                label=label,
+                start=start_utc,
+                due=end_utc,
+                completed_at=end_utc,
+                mode=TimeLogMode.COUNTDOWN,
+                status=TimeLogStatus.COMPLETED,
+                task_id=task_id,
+                category=category_enum,
+                description=description,
+            )
+        )
+
+        self._fire_xp_safely(
+            self.record_xp_event,
+            session_id=entry.uid,
+            occurred_at=end_utc,
+        )
+        return entry
+
+    def discard_session(self, uid: str) -> bool:
+        """Delete an active session. Returns True if deleted."""
+        return self.caldav.delete_time_log_entry(uid)
+
     def _fire_xp_safely(self, fn, **kwargs) -> None:
         """Run ``fn(**kwargs)``. Swallow exceptions, log them.
 
@@ -375,6 +480,7 @@ class Facade:
         ADR-029.
         """
         from ..focus_scheduler.runtime import ensure_scheduler_running
+
         self._focus_scheduler = ensure_scheduler_running(self._configs.user)
 
     @property
@@ -400,6 +506,7 @@ class Facade:
         """
         if self._focus_scheduler is not None:
             from ..focus_scheduler.runtime import stop_for_user
+
             stop_for_user(self._configs.user)
             self._focus_scheduler = None
         if self._server is not None:

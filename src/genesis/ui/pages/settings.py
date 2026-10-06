@@ -105,10 +105,11 @@ with st.expander("Download backup", expanded=False):
 with st.expander("Restore from backup", expanded=False):
     st.warning(
         "Restoring from a backup **overwrites** every task, project, "
-        "calendar event, time log entry, and journal entry currently "
-        "on your account. A snapshot of your current data is saved "
-        "automatically before the overwrite, so you can recover if the "
-        "archive turns out to be wrong."
+        "calendar event, time log entry, journal entry, and your profile "
+        "and life story (including their edit history) currently on your "
+        "account. A snapshot of your current data is saved automatically "
+        "before the overwrite, so you can recover if the archive turns "
+        "out to be wrong."
     )
     st.write(
         "We strongly recommend downloading the current state from the Download backup section above before restoring."

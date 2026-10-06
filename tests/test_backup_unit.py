@@ -80,12 +80,16 @@ def layout(tmp_path: Path) -> SimpleNamespace:
     jrn_user = jrn_root / username
     jrn_user.mkdir()
 
+    profile_root = common / username / "profile"
+    profile_root.mkdir(parents=True)
+
     return SimpleNamespace(
         common=common,
         rad_root=rad_root,
         jrn_root=jrn_root,
         rad_user=rad_user,
         jrn_user=jrn_user,
+        profile_root=profile_root,
         username=username,
         sample_ics=sample_ics_path,
     )
@@ -122,6 +126,7 @@ def backup(layout: SimpleNamespace) -> BackupFacade:
             paths=SimpleNamespace(
                 radicale_root=str(layout.rad_root),
                 journal_root=str(layout.jrn_root),
+                profile_root=str(layout.profile_root),
             ),
         ),
         caldav=caldav,
@@ -211,6 +216,7 @@ class TestExport:
                 paths=SimpleNamespace(
                     radicale_root=str(rad_root),
                     journal_root=str(jrn_root),
+                    profile_root=str(common / "alice" / "profile"),
                 ),
             ),
             caldav=MockCalDAVFacade(),
@@ -367,6 +373,43 @@ class TestImport:
         fresh = JournalFacade(str(layout.jrn_user))
         titles = sorted(e.title or "" for e in fresh.list_entries())
         assert titles == ["Day one", "Day two"]
+
+    def test_profile_files_and_snapshots_round_trip(self, backup: BackupFacade, layout: SimpleNamespace) -> None:
+        """Profile + life story + their .versions snapshots survive an
+        export/wipe/import cycle verbatim.
+        """
+        profile_root = layout.profile_root
+        profile_file = profile_root / "profile.md"
+        story_file = profile_root / "life-story.md"
+        versions = profile_root / ".versions" / "profile"
+        versions.mkdir(parents=True)
+        snap_file = versions / "2026-01-01T000000000Z.md"
+        snap_meta = versions / "2026-01-01T000000000Z.meta.json"
+
+        profile_file.write_text("# Me\nI am a person.\n")
+        story_file.write_text("# Story\nOnce upon a time.\n")
+        snap_file.write_text("# Me\nOld content.\n")
+        snap_meta.write_text('{"ts": "2026-01-01T000000000Z", "command": "write"}')
+
+        archive = backup.export_to_bytes()
+
+        # The archive carries the profile tree under <user>/profile/.
+        with zipfile.ZipFile(BytesIO(archive)) as zf:
+            names = zf.namelist()
+        assert f"{layout.username}/profile/profile.md" in names
+        assert f"{layout.username}/profile/life-story.md" in names
+        assert f"{layout.username}/profile/.versions/profile/2026-01-01T000000000Z.md" in names
+        assert f"{layout.username}/profile/.versions/profile/2026-01-01T000000000Z.meta.json" in names
+
+        # Wipe removes the profile subtree; import restores it verbatim.
+        backup._wipe_user_data()
+        assert not profile_root.exists()
+
+        backup.import_from_bytes(archive)
+        assert profile_file.read_text() == "# Me\nI am a person.\n"
+        assert story_file.read_text() == "# Story\nOnce upon a time.\n"
+        assert snap_file.read_text() == "# Me\nOld content.\n"
+        assert snap_meta.read_text() == '{"ts": "2026-01-01T000000000Z", "command": "write"}'
 
     def test_import_skips_path_that_escapes_shared_base(self, backup: BackupFacade, layout: SimpleNamespace) -> None:
         """An archive containing an entry like ``../escape`` would

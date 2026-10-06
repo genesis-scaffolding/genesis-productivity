@@ -74,9 +74,6 @@ def _substitute_facade(monkeypatch: pytest.MonkeyPatch) -> None:
     state: dict[str, object] = {"mock": _build_mock_facade()}
 
     def fake_facade(subject: str) -> object:
-        import sys
-
-        print(f"DEBUG fake_facade called id={id(state['mock'])}", file=sys.stderr)
         return state["mock"]
 
     monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
@@ -162,6 +159,7 @@ def _build_mock_facade() -> object:
 
             stat_id = kwargs.get("stat_id") or "discipline"
             delta = int(kwargs.get("delta") or 5)
+            session_id = kwargs.get("session_id")
             return self.caldav.create_xp_event(
                 XpEventCreate(
                     stat_id=stat_id,
@@ -170,6 +168,7 @@ def _build_mock_facade() -> object:
                     occurred_at=kwargs.get("occurred_at") or datetime.now(UTC),
                     idempotency_key=kwargs.get("idempotency_key") or "",
                     reason=kwargs.get("reason") or "mock",
+                    source_session_id=session_id,
                 )
             )
 
@@ -179,9 +178,74 @@ def _build_mock_facade() -> object:
             return self.caldav.update_task(uid, TaskUpdate(status=TaskStatus.COMPLETED))
 
         def stop_session(self, uid, *, actual_due, completed_at, category=None):
-            return self.caldav.stop_time_log_entry(
+            updated = self.caldav.stop_time_log_entry(
                 uid, actual_due=actual_due, completed_at=completed_at, category=category
             )
+            if updated is not None:
+                self._fire_xp_safely(
+                    self.record_xp_event,
+                    session_id=uid,
+                    occurred_at=completed_at,
+                )
+            return updated
+
+        def start_session(self, *, label, mode, duration_minutes=None, category=None, task_id=None, description=None):
+            from datetime import timedelta as _td
+
+            from genesis.caldav.ical import now_utc
+            from genesis.entities import TimeLogEntryCreate, TimeLogMode, TimeLogStatus
+
+            now = now_utc()
+            mode_enum = TimeLogMode(mode)
+            due = None
+            if mode_enum == TimeLogMode.COUNTDOWN:
+                if duration_minutes is None:
+                    raise ValueError("duration_minutes is required for countdown mode")
+                due = now + _td(minutes=duration_minutes)
+            from genesis.category.enums import TimeLogCategory
+
+            return self.caldav.create_time_log_entry(
+                TimeLogEntryCreate(
+                    label=label,
+                    start=now,
+                    due=due,
+                    mode=mode_enum,
+                    status=TimeLogStatus.IN_PROGRESS,
+                    task_id=task_id,
+                    category=TimeLogCategory(category) if category is not None else TimeLogCategory.OTHER,
+                    description=description,
+                )
+            )
+
+        def lodge_completed_session(
+            self, *, label, start, duration_minutes, category=None, task_id=None, description=None
+        ):
+            from datetime import timedelta as _td
+
+            from genesis.category.enums import TimeLogCategory
+            from genesis.entities import TimeLogEntryCreate, TimeLogMode, TimeLogStatus
+            from genesis.tz import to_utc
+
+            start_utc = to_utc(start)
+            end_utc = start_utc + _td(minutes=duration_minutes)
+            entry = self.caldav.create_time_log_entry(
+                TimeLogEntryCreate(
+                    label=label,
+                    start=start_utc,
+                    due=end_utc,
+                    completed_at=end_utc,
+                    mode=TimeLogMode.COUNTDOWN,
+                    status=TimeLogStatus.COMPLETED,
+                    task_id=task_id,
+                    category=TimeLogCategory(category) if category is not None else TimeLogCategory.OTHER,
+                    description=description,
+                )
+            )
+            self._fire_xp_safely(self.record_xp_event, session_id=entry.uid, occurred_at=end_utc)
+            return entry
+
+        def discard_session(self, uid):
+            return self.caldav.delete_time_log_entry(uid)
 
     return _MockFacade()
 

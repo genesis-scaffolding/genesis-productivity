@@ -28,6 +28,7 @@ from ...entities import (
     TaskCreate,
     TaskStatus,
     TaskUpdate,
+    TimeLogStatus,
 )
 from ...journal.facade import Entry, EntryType
 from ...stats import Period as StatsPeriod
@@ -39,6 +40,9 @@ from ..schemas import (
     ByCategoryOut,
     ByTaskOut,
     DailyPointOut,
+    FocusSessionLodgeIn,
+    FocusSessionStartIn,
+    FocusSessionStopIn,
     JournalEntryCreateIn,
     JournalEntryOut,
     JournalEntryUpdateIn,
@@ -802,6 +806,117 @@ def read_time_log(
         if entry is None:
             raise HTTPException(status_code=404, detail="Time log entry not found")
         return _time_log_to_wire(entry)
+    finally:
+        facade.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Focus sessions (start / stop / lodge / discard)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/sessions", response_model=TimeLogEntryOut, status_code=status.HTTP_201_CREATED)
+def start_focus_session(
+    body: FocusSessionStartIn,
+    subject: Annotated[str, Depends(current_subject)],
+) -> TimeLogEntryOut:
+    """Start a new focus session (countdown or countup).
+
+    Countdown sessions auto-stop when the due time passes (the
+    server-side focus scheduler). An aligned task is flipped to
+    IN_PROGRESS.
+    """
+    facade = _facade(subject)
+    try:
+        try:
+            entry = facade.start_session(
+                label=body.label,
+                mode=body.mode.value,
+                duration_minutes=body.duration_minutes,
+                category=body.category.value if body.category is not None else None,
+                task_id=body.task_id,
+                description=body.description,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _time_log_to_wire(entry)
+    finally:
+        facade.shutdown()
+
+
+@router.post("/sessions/completed", response_model=TimeLogEntryOut, status_code=status.HTTP_201_CREATED)
+def lodge_completed_focus_session(
+    body: FocusSessionLodgeIn,
+    subject: Annotated[str, Depends(current_subject)],
+) -> TimeLogEntryOut:
+    """Lodge a completed focus session (retrospective logging).
+
+    Records a session that has already finished, e.g. to backfill a
+    session the user did not track live. Fires the XP event for the
+    session duration.
+    """
+    facade = _facade(subject)
+    try:
+        entry = facade.lodge_completed_session(
+            label=body.label,
+            start=body.start,
+            duration_minutes=body.duration_minutes,
+            category=body.category.value if body.category is not None else None,
+            task_id=body.task_id,
+            description=body.description,
+        )
+        return _time_log_to_wire(entry)
+    finally:
+        facade.shutdown()
+
+
+@router.post("/sessions/{uid}/stop", response_model=TimeLogEntryOut)
+def stop_focus_session(
+    uid: str,
+    body: FocusSessionStopIn | None,
+    subject: Annotated[str, Depends(current_subject)],
+) -> TimeLogEntryOut:
+    """Stop a running focus session and fire its XP event.
+
+    Returns 409 when the session was stopped concurrently by
+    another device (If-Match race loss).
+    """
+    facade = _facade(subject)
+    try:
+        existing = facade.caldav.get_time_log_entry(uid)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if existing.status == TimeLogStatus.COMPLETED:
+            raise HTTPException(status_code=409, detail="Session already completed")
+        completed_at = body.completed_at if body is not None and body.completed_at is not None else datetime.now(UTC)
+        actual_due = existing.due if existing.due is not None else completed_at
+        category = body.category.value if body is not None and body.category is not None else None
+        updated = facade.stop_session(
+            uid,
+            actual_due=actual_due,
+            completed_at=completed_at,
+            category=category,
+        )
+        if updated is None:
+            raise HTTPException(status_code=409, detail="Session was modified concurrently")
+        return _time_log_to_wire(updated)
+    finally:
+        facade.shutdown()
+
+
+@router.delete("/sessions/{uid}", status_code=status.HTTP_204_NO_CONTENT)
+def discard_focus_session(
+    uid: str,
+    subject: Annotated[str, Depends(current_subject)],
+) -> None:
+    """Delete a running focus session without recording it."""
+    facade = _facade(subject)
+    try:
+        existing = facade.caldav.get_time_log_entry(uid)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not facade.discard_session(uid):
+            raise HTTPException(status_code=404, detail="Session not found")
     finally:
         facade.shutdown()
 

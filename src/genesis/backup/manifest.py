@@ -36,6 +36,7 @@ class Counts(BaseModel):
     events: int = 0
     time_log: int = 0
     journal: int = 0
+    profile: int = 0
 
     model_config = ConfigDict(extra="ignore")
 

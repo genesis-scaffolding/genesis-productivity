@@ -272,7 +272,7 @@ class TimeLogListOut(BaseModel):
 
 
 class FocusSessionStartIn(BaseModel):
-    """Body for POST /productivity/sessions.
+    """Body for POST /productivity/time_log.
 
     Starts a new focus session. ``mode`` is ``countdown`` (bounded,
     requires ``duration_minutes``) or ``countup`` (unbounded).
@@ -287,7 +287,7 @@ class FocusSessionStartIn(BaseModel):
 
 
 class FocusSessionLodgeIn(BaseModel):
-    """Body for POST /productivity/sessions/completed.
+    """Body for POST /productivity/time_log/completed.
 
     Lodges a completed focus session (retrospective logging). The
     session is recorded as already finished: ``due`` and
@@ -303,7 +303,7 @@ class FocusSessionLodgeIn(BaseModel):
 
 
 class FocusSessionStopIn(BaseModel):
-    """Body for POST /productivity/sessions/{uid}/stop.
+    """Body for POST /productivity/time_log/{uid}/stop.
 
     All fields optional. Missing ``completed_at`` defaults to now.
     """

@@ -815,7 +815,17 @@ def read_time_log(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/sessions", response_model=TimeLogEntryOut, status_code=status.HTTP_201_CREATED)
+def _ensure_task_exists(facade: Facade, task_id: str | None) -> None:
+    """400 when a provided ``task_id`` does not name a real task.
+
+    Omitted task ids pass through; the storage layer does no FK
+    validation, so a dangling id would silently round-trip forever.
+    """
+    if task_id is not None and facade.caldav.get_task(task_id) is None:
+        raise HTTPException(status_code=400, detail=f"unknown task_id: {task_id}")
+
+
+@router.post("/time_log", response_model=TimeLogEntryOut, status_code=status.HTTP_201_CREATED)
 def start_focus_session(
     body: FocusSessionStartIn,
     subject: Annotated[str, Depends(current_subject)],
@@ -824,10 +834,12 @@ def start_focus_session(
 
     Countdown sessions auto-stop when the due time passes (the
     server-side focus scheduler). An aligned task is flipped to
-    IN_PROGRESS.
+    IN_PROGRESS. A provided ``task_id`` must name an existing task
+    (400 otherwise).
     """
     facade = _facade(subject)
     try:
+        _ensure_task_exists(facade, body.task_id)
         try:
             entry = facade.start_session(
                 label=body.label,
@@ -844,7 +856,7 @@ def start_focus_session(
         facade.shutdown()
 
 
-@router.post("/sessions/completed", response_model=TimeLogEntryOut, status_code=status.HTTP_201_CREATED)
+@router.post("/time_log/completed", response_model=TimeLogEntryOut, status_code=status.HTTP_201_CREATED)
 def lodge_completed_focus_session(
     body: FocusSessionLodgeIn,
     subject: Annotated[str, Depends(current_subject)],
@@ -853,10 +865,12 @@ def lodge_completed_focus_session(
 
     Records a session that has already finished, e.g. to backfill a
     session the user did not track live. Fires the XP event for the
-    session duration.
+    session duration. A provided ``task_id`` must name an existing
+    task (400 otherwise).
     """
     facade = _facade(subject)
     try:
+        _ensure_task_exists(facade, body.task_id)
         entry = facade.lodge_completed_session(
             label=body.label,
             start=body.start,
@@ -870,7 +884,7 @@ def lodge_completed_focus_session(
         facade.shutdown()
 
 
-@router.post("/sessions/{uid}/stop", response_model=TimeLogEntryOut)
+@router.post("/time_log/{uid}/stop", response_model=TimeLogEntryOut)
 def stop_focus_session(
     uid: str,
     body: FocusSessionStopIn | None,
@@ -904,7 +918,7 @@ def stop_focus_session(
         facade.shutdown()
 
 
-@router.delete("/sessions/{uid}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/time_log/{uid}", status_code=status.HTTP_204_NO_CONTENT)
 def discard_focus_session(
     uid: str,
     subject: Annotated[str, Depends(current_subject)],

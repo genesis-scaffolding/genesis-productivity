@@ -38,7 +38,7 @@ genesis user change-password alice
 genesis user delete alice
 ```
 
-Pages: Dashboard, Projects, Tasks, Calendar, Journal, Statistics.
+Pages: Dashboard, Projects, Tasks, Calendar, Journal, Contacts, Statistics.
 Data scope is per user (see ADR-010, ADR-019).
 
 ### Migrating an existing single-user setup

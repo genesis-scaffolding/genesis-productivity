@@ -89,6 +89,7 @@ class RestoreReport:
         events: Number of standalone events after restore.
         time_log: Number of time log entries after restore.
         journal: Number of parseable journal entries after restore.
+        contacts: Number of contacts after restore.
         safety_backup: Path to the auto-created pre-restore snapshot.
             ``None`` only when ``create_safety_backup`` was disabled at
             the call site (not exposed to the UI yet).
@@ -102,6 +103,7 @@ class RestoreReport:
         events: int,
         time_log: int,
         journal: int,
+        contacts: int,
         safety_backup: Path | None,
     ) -> None:
         self.projects = projects
@@ -109,6 +111,7 @@ class RestoreReport:
         self.events = events
         self.time_log = time_log
         self.journal = journal
+        self.contacts = contacts
         self.safety_backup = safety_backup
 
 
@@ -245,6 +248,7 @@ class BackupFacade:
         of truth at restore time.
         """
         caldav = self._parent.caldav
+        carddav = self._parent.carddav
         journal = self._parent.journal
         profile_files = 0
         if self._profile_root.exists():
@@ -256,6 +260,7 @@ class BackupFacade:
             time_log=len(caldav.list_time_log()),
             journal=len(journal.list_entries()),
             profile=profile_files,
+            contacts=len(carddav.list_contacts()),
         )
 
     # -------------------------------------------------------------------------
@@ -581,14 +586,16 @@ class BackupFacade:
                 with zf.open(member) as src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
 
-    def _list_after(self) -> tuple[int, int, int, int]:
-        """Return (projects, tasks, events, time_log) post-restore."""
+    def _list_after(self) -> tuple[int, int, int, int, int]:
+        """Return (projects, tasks, events, time_log, contacts) post-restore."""
         caldav = self._parent.caldav
+        carddav = self._parent.carddav
         return (
             len(caldav.list_projects()),
             len(caldav.list_tasks()),
             len(caldav.list_events()),
             len(caldav.list_time_log()),
+            len(carddav.list_contacts()),
         )
 
     def import_from_bytes(self, data: bytes) -> RestoreReport:
@@ -649,7 +656,7 @@ class BackupFacade:
             pass
 
         # 6. Counts.
-        projects, tasks, events, time_log = self._list_after()
+        projects, tasks, events, time_log, contacts = self._list_after()
         journal_count = len(self._parent.journal.list_entries())
 
         return RestoreReport(
@@ -658,6 +665,7 @@ class BackupFacade:
             events=events,
             time_log=time_log,
             journal=journal_count,
+            contacts=contacts,
             safety_backup=safety_path,
         )
 

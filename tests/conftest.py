@@ -42,6 +42,7 @@ from genesis.users.store import UserStore
 
 from ._mock_journal import InMemoryJournalFacade
 from .mock_caldav import MockCalDAVFacade
+from .mock_carddav import MockCardDAVFacade
 
 # Pin the local timezone to UTC so tests that exercise
 # ``genesis.tz.to_utc`` (which treats naive datetimes as local time)
@@ -68,6 +69,7 @@ def _substitute_facade(monkeypatch: pytest.MonkeyPatch) -> None:
     shared facade for the whole test, so per-request state is
     preserved within a test and isolated between tests.
     """
+    from genesis.api.routers import contacts as _contacts_router
     from genesis.api.routers import game as _game_router
     from genesis.api.routers import profile as _profile_router
 
@@ -79,6 +81,7 @@ def _substitute_facade(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
     monkeypatch.setattr(_game_router, "_facade", fake_facade)
     monkeypatch.setattr(_profile_router, "_facade", fake_facade)
+    monkeypatch.setattr(_contacts_router, "_facade", fake_facade)
 
 
 def _build_mock_facade() -> object:
@@ -94,6 +97,7 @@ def _build_mock_facade() -> object:
     class _MockFacade:
         def __init__(self) -> None:
             self.caldav = MockCalDAVFacade()
+            self.carddav = MockCardDAVFacade()
             self.journal = InMemoryJournalFacade()
             # Lazy wrapper so list/get_character routes don't blow up.
             # Not a full GameFacade — record_xp_event below writes
@@ -284,6 +288,7 @@ def api_server_with_mock(
     Use when a test needs to seed time log entries (no POST endpoint
     exists for them) or otherwise mutate backend state directly.
     """
+    from genesis.api.routers import contacts as _contacts_router
     from genesis.api.routers import game as _game_router
     from genesis.api.routers import profile as _profile_router
 
@@ -299,6 +304,7 @@ def api_server_with_mock(
     monkeypatch.setattr(_productivity_router, "_facade", fake_facade)
     monkeypatch.setattr(_game_router, "_facade", fake_facade)
     monkeypatch.setattr(_profile_router, "_facade", fake_facade)
+    monkeypatch.setattr(_contacts_router, "_facade", fake_facade)
     with TestClient(app) as client:
         yield client, mock.caldav  # type: ignore[1]
 

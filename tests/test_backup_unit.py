@@ -40,8 +40,10 @@ from genesis.backup import (
     ValidationReport,
 )
 from genesis.backup.manifest import Counts
+from genesis.entities import ContactCreate
 from genesis.journal.facade import Entry, EntryType, JournalFacade
 from tests.mock_caldav import MockCalDAVFacade
+from tests.mock_carddav import MockCardDAVFacade
 
 # -----------------------------------------------------------------------------
 # Fixtures and helpers
@@ -99,6 +101,9 @@ def layout(tmp_path: Path) -> SimpleNamespace:
 def backup(layout: SimpleNamespace) -> BackupFacade:
     """Construct a :class:`BackupFacade` over a controlled tmp dir."""
     caldav = MockCalDAVFacade()
+    carddav = MockCardDAVFacade()
+    carddav.create_contact(ContactCreate(name="Ada Lovelace", emails=["ada@example.com"]))
+    carddav.create_contact(ContactCreate(name="Grace Hopper", organization="Navy"))
 
     journal_entries = [
         Entry(
@@ -130,6 +135,7 @@ def backup(layout: SimpleNamespace) -> BackupFacade:
             ),
         ),
         caldav=caldav,
+        carddav=carddav,
         journal=journal,
         restart_server=lambda: restart_calls.append(1),
     )
@@ -184,6 +190,7 @@ class TestExport:
         assert manifest.username == layout.username
         assert manifest.counts.projects == 0  # MockCalDAVFacade is empty
         assert manifest.counts.journal == 2
+        assert manifest.counts.contacts == 2  # the two contacts seeded by the fixture
 
     def test_export_to_bytes_round_trips_files_verbatim(self, backup: BackupFacade, layout: SimpleNamespace) -> None:
         """The .ics file inside the archive must be byte-identical to
@@ -220,6 +227,7 @@ class TestExport:
                 ),
             ),
             caldav=MockCalDAVFacade(),
+            carddav=MockCardDAVFacade(),
             journal=JournalFacade(str(jrn_root / "alice")),
             restart_server=lambda: None,
         )
@@ -232,6 +240,7 @@ class TestExport:
         assert manifest.counts.projects == 0
         assert manifest.counts.tasks == 0
         assert manifest.counts.journal == 0
+        assert manifest.counts.contacts == 0
 
 
 # -----------------------------------------------------------------------------

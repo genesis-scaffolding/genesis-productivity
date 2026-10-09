@@ -25,9 +25,11 @@ import pytest
 
 from genesis.backup import BackupFacade
 from genesis.caldav.facade import CalDAVFacade
+from genesis.carddav.facade import CardDAVFacade
 from genesis.configs import DAV
 from genesis.dav.server import ServerManager
 from genesis.entities import (
+    ContactCreate,
     ProjectCreate,
     TaskCreate,
     TimeLogEntryCreate,
@@ -113,6 +115,11 @@ def backup_facade(
         username=radicale_layout.username,
         password=radicale_layout.password,
     )
+    carddav = CardDAVFacade(
+        server_url=radicale_layout.server_url,
+        username=radicale_layout.username,
+        password=radicale_layout.password,
+    )
     journal = JournalFacade(str(radicale_layout.jrn_user))
 
     def _restart_radicale() -> None:
@@ -140,6 +147,7 @@ def backup_facade(
                 ),
             ),
             caldav=caldav,
+            carddav=carddav,
             journal=journal,
             restart_server=_restart_radicale,
         )
@@ -148,6 +156,7 @@ def backup_facade(
     yield SimpleNamespace(
         backup=backup,
         caldav=caldav,
+        carddav=carddav,
         journal=journal,
         layout=radicale_layout,
     )
@@ -162,12 +171,14 @@ def test_round_trip_real_radicale(backup_facade: SimpleNamespace) -> None:
     works through Radicale's storage format.
     """
     caldav = backup_facade.caldav
+    carddav = backup_facade.carddav
     journal = backup_facade.journal
     backup = backup_facade.backup
     layout = backup_facade.layout
 
     # Seed: 1 project, 2 tasks (one of which drives a shadow VEVENT),
-    # 1 standalone event, 1 time log entry, 2 journal entries.
+    # 1 standalone event, 1 time log entry, 2 journal entries,
+    # 2 contacts.
     project = caldav.create_project(ProjectCreate(name="Round trip"))
     caldav.create_task(TaskCreate(title="Plain task", project_id=project.uid))
     caldav.create_task(
@@ -189,6 +200,8 @@ def test_round_trip_real_radicale(backup_facade: SimpleNamespace) -> None:
             task_id=None,
         )
     )
+    carddav.create_contact(ContactCreate(name="Ada Lovelace", emails=["ada@example.com"]))
+    carddav.create_contact(ContactCreate(name="Grace Hopper", organization="Navy"))
     journal.save_entry(
         Entry(
             date=__import__("datetime").date(2026, 9, 1),
@@ -220,6 +233,8 @@ def test_round_trip_real_radicale(backup_facade: SimpleNamespace) -> None:
         caldav.delete_event(e.uid)
     for tl in caldav.list_time_log():
         caldav.delete_time_log_entry(tl.uid)
+    for c in carddav.list_contacts():
+        carddav.delete_contact(c.uid)
     for entry in list(journal.list_entries()):
         journal.delete_entry(entry.uid)
 
@@ -229,6 +244,7 @@ def test_round_trip_real_radicale(backup_facade: SimpleNamespace) -> None:
     assert caldav.list_tasks() == []
     assert caldav.list_events() == []
     assert caldav.list_time_log() == []
+    assert carddav.list_contacts() == []
     assert journal.list_entries() == []
 
     # Restore.
@@ -239,6 +255,7 @@ def test_round_trip_real_radicale(backup_facade: SimpleNamespace) -> None:
     assert report.events == 1
     assert report.time_log == 1
     assert report.journal == 2
+    assert report.contacts == 2
     assert report.safety_backup is not None
     assert report.safety_backup.exists()
 
@@ -260,6 +277,15 @@ def test_round_trip_real_radicale(backup_facade: SimpleNamespace) -> None:
     fresh_journal = JournalFacade(str(layout.jrn_user))
     titles = sorted(e.title or "" for e in fresh_journal.list_entries())
     assert titles == ["Day one", "Day two"]
+
+    # Contacts round trip through a fresh facade too.
+    fresh_carddav = CardDAVFacade(
+        server_url=layout.server_url,
+        username=layout.username,
+        password=layout.password,
+    )
+    contacts_back = sorted(c.name for c in fresh_carddav.list_contacts())
+    assert contacts_back == ["Ada Lovelace", "Grace Hopper"]
 
 
 @pytest.mark.integration

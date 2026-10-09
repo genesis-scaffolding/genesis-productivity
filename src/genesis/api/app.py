@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import router as auth_router
+from .routers.contacts import router as contacts_router
 from .routers.game import router as game_router
 from .routers.productivity import router as productivity_router
 from .routers.profile import router as profile_router
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     app.include_router(productivity_router)
     app.include_router(profile_router)
     app.include_router(game_router)
+    app.include_router(contacts_router)
 
     return app
 

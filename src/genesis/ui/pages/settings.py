@@ -50,7 +50,8 @@ def _render_validation(report: ValidationReport) -> None:
             "**Counts (from manifest):** "
             f"projects `{counts.projects}`, tasks `{counts.tasks}`, "
             f"events `{counts.events}`, time_log `{counts.time_log}`, "
-            f"journal `{counts.journal}`"
+            f"journal `{counts.journal}`, "
+            f"profile `{counts.profile}`, contacts `{counts.contacts}`"
         )
 
     if report.issues:
@@ -68,8 +69,8 @@ def _render_validation(report: ValidationReport) -> None:
 with st.expander("Download backup", expanded=False):
     st.write(
         "Build a zip archive of every task, project, calendar event, "
-        "time log entry, and journal entry on your account. Save the "
-        "file somewhere safe."
+        "time log entry, journal entry, contact, and your profile and "
+        "life story on your account. Save the file somewhere safe."
     )
     filename = st.text_input(
         "File name",
@@ -105,11 +106,11 @@ with st.expander("Download backup", expanded=False):
 with st.expander("Restore from backup", expanded=False):
     st.warning(
         "Restoring from a backup **overwrites** every task, project, "
-        "calendar event, time log entry, journal entry, and your profile "
-        "and life story (including their edit history) currently on your "
-        "account. A snapshot of your current data is saved automatically "
-        "before the overwrite, so you can recover if the archive turns "
-        "out to be wrong."
+        "calendar event, time log entry, journal entry, contact, and "
+        "your profile and life story (including their edit history) "
+        "currently on your account. A snapshot of your current data is "
+        "saved automatically before the overwrite, so you can recover "
+        "if the archive turns out to be wrong."
     )
     st.write(
         "We strongly recommend downloading the current state from the Download backup section above before restoring."
@@ -170,7 +171,8 @@ with st.expander("Restore from backup", expanded=False):
                             f"tasks `{report.tasks}`, "
                             f"events `{report.events}`, "
                             f"time_log `{report.time_log}`, "
-                            f"journal `{report.journal}`"
+                            f"journal `{report.journal}`, "
+                            f"contacts `{report.contacts}`"
                         )
                         if report.safety_backup is not None:
                             st.markdown(

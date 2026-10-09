@@ -587,3 +587,100 @@ class StatProgressOut(BaseModel):
 class CharacterStateOut(BaseModel):
     progress: list[StatProgressOut]
     recent_events: list[XpEventOut]
+
+
+# ---------------------------------------------------------------------------
+# Contact (ADR-030)
+# ---------------------------------------------------------------------------
+
+
+class ContactCreateIn(BaseModel):
+    """Body for POST /productivity/contacts.
+
+    ``name`` is the only required field. Multi-value fields
+    default to empty lists so a minimal contact can be created
+    without specifying them. Wire-side names match the entity
+    field names one-for-one; no translation is needed.
+    """
+
+    name: str
+    given_name: str | None = None
+    family_name: str | None = None
+    additional_names: list[str] = []
+    name_prefix: str | None = None
+    name_suffix: str | None = None
+    nickname: str | None = None
+    organization: str | None = None
+    title: str | None = None
+    emails: list[str] = []
+    phones: list[str] = []
+    urls: list[str] = []
+    addresses: list[str] = []
+    note: str | None = None
+    birthday: datetime.date | None = None
+
+
+class ContactUpdateIn(BaseModel):
+    """Body for PATCH /productivity/contacts/{uid}.
+
+    All fields optional. Multi-value fields are replaced
+    wholesale when supplied (no partial-patch semantics in
+    v1). Scalar nullable fields use the same
+    ``clear_<field>`` pattern as ``TaskUpdateIn`` so callers
+    can distinguish "leave alone" from "set to None".
+    """
+
+    name: str | None = None
+    given_name: str | None = None
+    clear_given_name: bool = False
+    family_name: str | None = None
+    clear_family_name: bool = False
+    additional_names: list[str] | None = None
+    name_prefix: str | None = None
+    clear_name_prefix: bool = False
+    name_suffix: str | None = None
+    clear_name_suffix: bool = False
+    nickname: str | None = None
+    clear_nickname: bool = False
+    organization: str | None = None
+    clear_organization: bool = False
+    title: str | None = None
+    clear_title: bool = False
+    emails: list[str] | None = None
+    phones: list[str] | None = None
+    urls: list[str] | None = None
+    addresses: list[str] | None = None
+    note: str | None = None
+    clear_note: bool = False
+    birthday: datetime.date | None = None
+    clear_birthday: bool = False
+
+
+class ContactOut(BaseModel):
+    """Wire model for a contact. Field names match the entity."""
+
+    uid: str
+    name: str
+    given_name: str | None
+    family_name: str | None
+    additional_names: list[str]
+    name_prefix: str | None
+    name_suffix: str | None
+    nickname: str | None
+    organization: str | None
+    title: str | None
+    emails: list[str]
+    phones: list[str]
+    urls: list[str]
+    addresses: list[str]
+    note: str | None
+    birthday: datetime.date | None
+    created: UtcDateTime | None
+    modified: UtcDateTime | None
+
+
+class ContactListOut(BaseModel):
+    items: list[ContactOut]
+    total: int
+    offset: int
+    limit: int

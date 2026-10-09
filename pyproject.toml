@@ -15,6 +15,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "argon2-cffi>=25.1.0",
     "nltk>=3.10.3",
+    "vobject>=0.9.9",
 ]
 
 [project.scripts]

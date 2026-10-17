@@ -53,6 +53,24 @@ if hasattr(time, "tzset"):
     time.tzset()
 
 
+@pytest.fixture(autouse=True)
+def _clear_facade_cache():
+    """Reset the per-subject API facade cache between tests.
+
+    The production API caches one :class:`Facade` per subject (to avoid
+    re-running CalDAV principal discovery on every request). Without this
+    reset, a facade built by an earlier test — pointing at that test's
+    ephemeral Radicale / config — would leak into the next test, so real-
+    Radicale round-trip tests would hit a dead server. Clearing before and
+    after each test keeps them isolated.
+    """
+    from genesis.api.routers.productivity import _facade_cache_clear
+
+    _facade_cache_clear()
+    yield
+    _facade_cache_clear()
+
+
 def _free_port() -> int:
     """Bind port 0 to let the kernel pick a free port, then release."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

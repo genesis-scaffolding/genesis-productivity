@@ -95,6 +95,23 @@ class Facade:
         self._server.start()
         self._server.ensure_user(self._configs.dav.username)
 
+    def ensure_server_running(self) -> None:
+        """Keep the DAV server alive (idempotent, cheap when up).
+
+        Intended for long-lived / cached facades (e.g. the per-subject
+        API facade cache): a sub-millisecond localhost socket probe
+        confirms Radicale is reachable, and if it has died, restarts it.
+        When the server is already up, ``start()`` returns immediately and
+        the htpasswd file is NOT rewritten (that only happens on a fresh
+        start), so this is cheap enough to call on every request.
+        """
+        if self._server is None:
+            self._server = ServerManager(
+                dav_config=self._configs.dav,
+                data_path=self._configs.paths.radicale_root,
+            )
+        self._server.start()
+
     @property
     def configs(self) -> Configs:
         """Return the configuration object."""

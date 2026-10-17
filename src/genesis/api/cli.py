@@ -19,7 +19,13 @@ def main() -> int:
 
     host = os.environ.get("GENESIS_API_HOST", "0.0.0.0")
     port = int(os.environ.get("GENESIS_API_PORT", "8765"))
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    # Two workers so a parallel fan-out of CLI queries (e.g. `genesis
+    # overview` issuing ~6-8 task queries concurrently) doesn't serialize
+    # behind a single worker. Each worker keeps its own per-subject
+    # facade cache (see api.routers.productivity._facade_cache); the
+    # CalDAV discovery cost is paid once per subject per worker.
+    workers = int(os.environ.get("GENESIS_API_WORKERS", "2"))
+    uvicorn.run(app, host=host, port=port, log_level="info", workers=workers)
     return 0
 
 

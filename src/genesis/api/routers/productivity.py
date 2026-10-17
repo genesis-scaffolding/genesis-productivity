@@ -15,6 +15,7 @@ The Streamlit frontend does not call this router; it uses
 from __future__ import annotations
 
 import re
+import threading
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
 
@@ -72,17 +73,54 @@ router = APIRouter(prefix="/productivity", tags=["productivity"])
 
 _PROJECT_FOOTER_RE = re.compile(r"^> Project: (.+)$", re.MULTILINE)
 
+# ---------------------------------------------------------------------------
+# Per-subject facade cache
+# ---------------------------------------------------------------------------
+#
+# Building a Facade is expensive: the first CalDAV call re-runs the
+# principal PROPFIND discovery (~700 ms) plus calendar listing on a fresh
+# caldav client / TCP connection. Doing that on *every* request is the
+# dominant cost of the API — the actual data REPORT is a fraction of it.
+# The facade is stateless with respect to request data (it only holds the
+# config, the lazy caldav/carddav clients, and the server handle), so one
+# instance per subject is safe to share across requests and workers
+# threads. The Radicale liveness probe is kept per call (a sub-millisecond
+# localhost socket connect) so a dead Radicale self-heals on the next
+# request: Facade.__init__ re-runs ServerManager.start() when the port is
+# down.
+
+_facade_cache: dict[str, Facade] = {}
+_facade_cache_lock = threading.Lock()
+
 
 def _facade(subject: str) -> Facade:
-    """Build a per-request :class:`Facade` for ``subject``.
+    """Return the cached :class:`Facade` for ``subject``.
 
     The subject is the username embedded in the JWT. Each user's
     Facade points at their own config + data directory, so a
     valid token for ``alice`` reads ``alice``'s data, never
     anyone else's.
+
+    The facade is built once per subject (first request pays the
+    CalDAV discovery cost; later requests reuse the live client).
     """
-    config_path = resolve_config_path(subject)
-    return Facade(config_path)
+    facade = _facade_cache.get(subject)
+    if facade is None:
+        with _facade_cache_lock:
+            facade = _facade_cache.get(subject)
+            if facade is None:
+                facade = Facade(resolve_config_path(subject))
+                _facade_cache[subject] = facade
+    # Cheap localhost socket probe; re-triggers Radicale startup if the
+    # server died since the facade was cached.
+    facade.ensure_server_running()
+    return facade
+
+
+def _facade_cache_clear() -> None:
+    """Drop all cached facades (tests, config reload)."""
+    with _facade_cache_lock:
+        _facade_cache.clear()
 
 
 def _to_caldav_datetime(value: date | datetime | None) -> datetime | None:

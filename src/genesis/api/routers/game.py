@@ -20,11 +20,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ...configs import resolve_config_path
-from ...core.facade import Facade
 from ...entities import XpEventKind
 from ...game.facade import GameClassificationError, GameDisabled
 from ..auth import current_subject
+from .productivity import _facade
 from ..schemas import (
     CharacterStateOut,
     StatListOut,
@@ -40,10 +39,6 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/game", tags=["game"])
-
-
-def _facade(subject: str) -> Facade:
-    return Facade(resolve_config_path(subject))
 
 
 def _xp_event_to_wire(event) -> XpEventOut:

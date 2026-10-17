@@ -15,8 +15,6 @@ import uvicorn
 
 
 def main() -> int:
-    from .app import app
-
     host = os.environ.get("GENESIS_API_HOST", "0.0.0.0")
     port = int(os.environ.get("GENESIS_API_PORT", "8765"))
     # Two workers so a parallel fan-out of CLI queries (e.g. `genesis
@@ -25,7 +23,15 @@ def main() -> int:
     # facade cache (see api.routers.productivity._facade_cache); the
     # CalDAV discovery cost is paid once per subject per worker.
     workers = int(os.environ.get("GENESIS_API_WORKERS", "2"))
-    uvicorn.run(app, host=host, port=port, log_level="info", workers=workers)
+    # With workers > 1, uvicorn spawns child processes that re-import the
+    # app — so it must be an import string, not an app object.
+    uvicorn.run(
+        "genesis.api.app:app",
+        host=host,
+        port=port,
+        log_level="info",
+        workers=workers,
+    )
     return 0
 
 

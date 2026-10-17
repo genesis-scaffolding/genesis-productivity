@@ -998,10 +998,14 @@ def get_statistics(
     try:
         completed = facade.caldav.list_time_log()
         task_ids = {e.task_id for e in completed if e.task_id is not None}
-        task_titles: dict[str, str] = {}
-        for tid in task_ids:
-            task = facade.caldav.get_task(tid)
-            task_titles[tid] = task.title if task else "(deleted)"
+        # Build the title map from a SINGLE list_tasks() call instead of one
+        # get_task() per distinct task id. The old per-task loop was an N+1
+        # CalDAV REPORT storm (55+ tasks => 55+ round-trips => ~20s). One
+        # REPORT returns every task; missing ids (deleted) fall back below.
+        all_task_titles = {t.uid: t.title for t in facade.caldav.list_tasks()}
+        task_titles = {
+            tid: all_task_titles.get(tid, "(deleted)") for tid in task_ids
+        }
 
         rollup = compute_rollup(
             entries=completed,

@@ -1,14 +1,18 @@
-"""Dashboard page: active assignments and deadlines.
+"""Dashboard page: active assignments, deadlines, and appointments.
 
-Surfaces two forward-looking tasks views plus a project count:
+Surfaces three forward-looking tasks views plus a project count:
 
 * Active assignments: tasks whose ``assigned_date`` is today or earlier,
   so you should look at them.
 * Deadlines: tasks whose ``hard_deadline`` is within the next 7 days,
   or already overdue.
+* Appointments: tasks whose ``scheduled_start`` (a meeting, inspection,
+  or other scheduled event) is within the next 7 days, including today.
+  This is the view that surfaces meetings — the gap that let a
+  same-morning meeting slip by unnoticed.
 
-Both exclude tasks with status COMPLETED or CANCELED. A task may
-appear in both lists if both fields are set.
+All three exclude tasks with status COMPLETED or CANCELED. A task may
+appear in more than one list if the relevant fields are set.
 
 The bottom of the page also hosts a closed-by-default expander
 that shows today's briefing entry (when one exists). Briefings
@@ -65,11 +69,23 @@ deadlines = [
     if t.hard_deadline is not None and t.hard_deadline <= week_end_dt and t.status not in done_statuses
 ]
 
+# Appointments: scheduled_start today through the next 7 days. This is
+# the forward-looking "what's on the calendar" view — the one that
+# surfaces meetings. Sorted by scheduled_start so the nearest is on top
+# (the table widget re-sorts on first render via ADR-023, so this is
+# only the initial order).
+appointments = [
+    t
+    for t in all_tasks
+    if t.scheduled_start is not None and today_start <= t.scheduled_start <= week_end_dt and t.status not in done_statuses
+]
+appointments.sort(key=lambda t: t.scheduled_start)
+
 active_projects = caldav.list_projects(status=ProjectStatus.IN_PROGRESS)
 
 # --- Metric cards ----------------------------------------------------------
 
-cols = st.columns(3, gap="medium")
+cols = st.columns(4, gap="medium")
 with cols[0]:
     with st.container(border=True):
         st.caption("Active assignments")
@@ -81,6 +97,11 @@ with cols[1]:
         st.markdown(f"## {len(deadlines)}")
         st.caption("Due in the next 7 days or overdue")
 with cols[2]:
+    with st.container(border=True):
+        st.caption("Appointments this week")
+        st.markdown(f"## {len(appointments)}")
+        st.caption("Scheduled in the next 7 days")
+with cols[3]:
     with st.container(border=True):
         st.caption("Active projects")
         st.markdown(f"## {len(active_projects)}")
@@ -118,6 +139,23 @@ else:
         key="dashboard_deadlines",
         show_project_column=True,
         sort_keys=TASK_TABLE_DEFAULT_SORT_KEYS,
+    )
+
+st.write("")
+
+# --- Appointments -----------------------------------------------------------
+
+st.subheader(f"Appointments ({len(appointments)})")
+st.caption("Scheduled in the next 7 days (meetings, inspections, events).")
+if not appointments:
+    st.info("Nothing scheduled in the next 7 days.")
+else:
+    render_tasks_table(
+        appointments,
+        caldav=caldav,
+        key="dashboard_appointments",
+        show_project_column=True,
+        sort_keys=[("scheduled_start", datetime.min)],
     )
 
 st.write("")

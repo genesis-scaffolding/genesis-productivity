@@ -1,0 +1,103 @@
+name: Build Docker image
+
+# Every master push produces a downloadable multi-arch image:
+#   ghcr.io/<owner>/genesis-productivity:latest    (rolling master tip)
+#   ghcr.io/<owner>/genesis-productivity:sha-<short> (per commit)
+# Every tag push additionally produces a versioned image under the tag's
+# own name (v0.6.0 -> :v0.6.0, 0.6.0 -> :0.6.0). Same shape as the
+# llama.cpp-cuda build: per-arch build jobs on native runners, then a
+# manifest job that combines them with `docker buildx imagetools`.
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*', '[0-9]+.[0-9]+.[0-9]+*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ${{ matrix.arch.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - { suffix: amd64, runs_on: ubuntu-latest }
+          - { suffix: arm64, runs_on: ubuntu-24.04-arm }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # Per-arch tags carry the arch suffix; the manifest job strips it.
+          tags: |
+            type=raw,value=latest-{{matrix.arch.suffix}},enable={{is_eq github.ref_name 'master'}}
+            type=sha,prefix=sha-,suffix=-{{matrix.arch.suffix}}
+            type=ref,event=tag,suffix=-{{matrix.arch.suffix}}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (per-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch.suffix }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata (final tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_eq github.ref_name 'master'}}
+            type=sha,prefix=sha-
+            type=ref,event=tag
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for tag in $TAGS; do
+            docker buildx imagetools create \
+              -t "$tag" \
+              "$tag-amd64" \
+              "$tag-arm64"
+          done

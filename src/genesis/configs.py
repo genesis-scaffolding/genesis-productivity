@@ -274,7 +274,12 @@ def _extract_user(yaml_path: Path | None) -> str:
 
     parts = yaml_path.parts
     try:
-        genesis_idx = parts.index(DEFAULT_APP_NAME)
+        # Match the LAST occurrence: the app dir is the innermost one. A
+        # first-occurrence match breaks when an ancestor directory is also
+        # named after the app, e.g. the Docker image user "genesis" whose
+        # home is /home/genesis -> /home/genesis/.config/genesis/<user>/
+        # configs.yaml would extract ".config" as the user.
+        genesis_idx = len(parts) - 1 - parts[::-1].index(DEFAULT_APP_NAME)
         if len(parts) >= genesis_idx + 2:
             user = parts[genesis_idx + 1]
             if user != "configs.yaml":

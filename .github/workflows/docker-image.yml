@@ -43,8 +43,9 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           # Per-arch tags carry the arch suffix; the manifest job strips it.
+          # is_default_branch gates the rolling tag to master pushes only.
           tags: |
-            type=raw,value=latest-{{matrix.arch.suffix}},enable={{is_eq github.ref_name 'master'}}
+            type=raw,value=latest-{{matrix.arch.suffix}},enable={{is_default_branch}}
             type=sha,prefix=sha-,suffix=-{{matrix.arch.suffix}}
             type=ref,event=tag,suffix=-{{matrix.arch.suffix}}
 
@@ -79,7 +80,7 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_eq github.ref_name 'master'}}
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
             type=ref,event=tag
 

@@ -16,11 +16,18 @@ footprint possible without code changes.
 We will ship an official Docker image built by GitHub Actions. The
 image is python:3.12-slim + uv + make + tini; it installs the project
 from the lockfile and runs `make serve`, so the container runs exactly
-what the host runs. All four XDG roots (config, data, state, cache)
-are pointed at a single /genesis-data directory via XDG_*_HOME
-environment variables, so the entire persistent footprint is one
-mountable path. The Streamlit UI (:3000) and the API (:8765) are both
-exposed; the API's /health endpoint is the container health probe.
+what the host runs. The container starts as root only long enough for
+an entrypoint to normalize ownership of the mounted XDG directories to
+the host user (PUID/PGID, the linuxserver convention the worker uses
+for other containers such as comfyui) and then drops privileges via
+setpriv before running the app as that user; the venv is frozen at
+build time and UV_NO_SYNC is set so `uv run` never attempts a
+non-root re-sync. The app runs with HOME=/home/genesis, and the
+declaring service mounts the worker's pre-prepared per-service
+directories onto that user's four XDG roots. The Streamlit UI (:3000)
+and the API (:8765) are both exposed -- both above 1024, so no root
+privileges are needed to bind them. The API's /health endpoint is the
+container health probe.
 
 CI builds on master push, on tag push, and on manual dispatch.
 Master builds tag the image `latest` and `sha-<short>` (per commit, so
@@ -38,8 +45,12 @@ Accepted
 - A machine installs the system with `docker pull` + bind mounts, no
   clone, no uv, no Python toolchain.
 - The four per-service mounts map the worker's pre-prepared directory
-  layout 1:1 onto the app's data model with no in-image XDG
-  redirection, matching every other declarative service in the fleet.
+  layout 1:1 onto the app's data model, and the PUID/PGID entrypoint
+  keeps every written file host-owned (no root-owned files in the
+  volume, no `puid_default` quirks).
+- The image must keep the venv frozen at build time (UV_NO_SYNC);
+  re-enabling syncs would break non-root startup, because the venv
+  is root-owned.
 - The image bakes in the `make serve` supervision model (tini + GNU
   Make -j 2). Replacing make would require reworking the image's
   entrypoint, but that is the app's existing runtime, not a new one.

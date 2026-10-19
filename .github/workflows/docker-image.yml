@@ -44,10 +44,13 @@ jobs:
           images: ${{ env.IMAGE }}
           # Per-arch tags carry the arch suffix; the manifest job strips it.
           # is_default_branch gates the rolling tag to master pushes only.
+          # NOTE: the suffix is a GitHub expression (${{ }}), NOT a
+          # metadata-action helper ({{ }}) -- only the latter are resolved
+          # by the action, and it knows nothing about the matrix context.
           tags: |
-            type=raw,value=latest-{{matrix.arch.suffix}},enable={{is_default_branch}}
-            type=sha,prefix=sha-,suffix=-{{matrix.arch.suffix}}
-            type=ref,event=tag,suffix=-{{matrix.arch.suffix}}
+            type=raw,value=latest-${{ matrix.arch.suffix }},enable={{is_default_branch}}
+            type=sha,prefix=sha-,suffix=-${{ matrix.arch.suffix }}
+            type=ref,event=tag,suffix=-${{ matrix.arch.suffix }}
 
       - name: Login to GHCR
         uses: docker/login-action@v3

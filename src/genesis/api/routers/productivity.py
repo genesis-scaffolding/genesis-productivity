@@ -811,15 +811,27 @@ def list_time_log(
     offset: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query()] = 100,
 ) -> TimeLogListOut:
+    """List time log entries.
+
+    With no filters the endpoint returns every entry, completed and
+    in-progress alike. ``active_only=true`` narrows the result to
+    in-progress sessions, and ``status=X`` exact-matches one status
+    value. Sending no filter is therefore not the same as asking for
+    completed records only: pass ``status=completed`` for that.
+    """
     facade = _facade(subject)
     try:
         entity_status = wire_to_task_status(time_log_status) if time_log_status is not None else None
+        # No explicit filter means "everything"; the caldav default
+        # (completed only) stays untouched for its internal callers.
+        scope = "all" if not active_only and entity_status is None else "completed"
         all_entries = facade.caldav.list_time_log(
             task_id=task_id,
             status=entity_status,
             active_only=active_only,
             sort_by=sort_by,
             sort_order=order,
+            scope=scope,
         )
         items = [_time_log_to_wire(e) for e in all_entries]
         page, total, offset, limit = _paginate(items, offset, limit)

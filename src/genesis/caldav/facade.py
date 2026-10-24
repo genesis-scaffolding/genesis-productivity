@@ -9,7 +9,7 @@ collection layout and the shadow VEVENT pattern.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from ..category.enums import TimeLogCategory
 from . import events, projects, tasks, time_log, xp_events
@@ -197,8 +197,9 @@ class CalDAVFacade:
         active_only: bool = False,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
+        scope: Literal["all", "completed"] = "completed",
     ):
-        return time_log.list_time_log(self, task_id, status, active_only, sort_by, sort_order)
+        return time_log.list_time_log(self, task_id, status, active_only, sort_by, sort_order, scope)
 
     def update_time_log_entry(self, uid: str, data):
         return time_log.update_time_log_entry(self, uid, data)

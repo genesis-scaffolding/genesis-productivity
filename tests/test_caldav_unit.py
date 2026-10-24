@@ -761,6 +761,69 @@ class TestTimeLogCRUD:
         assert completed[0].uid == c.uid
         assert completed[0].status == TimeLogStatus.COMPLETED
 
+    def test_scope_all_returns_completed_and_active(self, facade: MockCalDAVFacade) -> None:
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
+
+        active = facade.create_time_log_entry(
+            TimeLogEntryCreate(
+                label="Active",
+                start=start,
+                due=due,
+                mode=TimeLogMode.COUNTDOWN,
+            )
+        )
+        completed = facade.create_time_log_entry(
+            TimeLogEntryCreate(
+                label="Completed",
+                start=start + timedelta(hours=1),
+                due=due + timedelta(hours=1),
+                mode=TimeLogMode.COUNTDOWN,
+            )
+        )
+        facade.stop_time_log_entry(
+            completed.uid,
+            actual_due=due + timedelta(hours=1),
+            completed_at=due + timedelta(hours=1),
+        )
+
+        # The default semantic is unchanged: completed records only.
+        default = facade.list_time_log()
+        assert {e.uid for e in default} == {completed.uid}
+
+        everything = facade.list_time_log(scope="all")
+        assert {e.uid for e in everything} == {active.uid, completed.uid}
+
+    def test_status_filter_exact_match(self, facade: MockCalDAVFacade) -> None:
+        start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
+        due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)
+
+        active = facade.create_time_log_entry(
+            TimeLogEntryCreate(
+                label="Active",
+                start=start,
+                due=due,
+                mode=TimeLogMode.COUNTDOWN,
+                status=TimeLogStatus.IN_PROGRESS,
+            )
+        )
+        completed = facade.create_time_log_entry(
+            TimeLogEntryCreate(
+                label="Completed",
+                start=start + timedelta(hours=1),
+                due=due + timedelta(hours=1),
+                mode=TimeLogMode.COUNTDOWN,
+            )
+        )
+        facade.stop_time_log_entry(
+            completed.uid,
+            actual_due=due + timedelta(hours=1),
+            completed_at=due + timedelta(hours=1),
+        )
+
+        assert {e.uid for e in facade.list_time_log(status=TimeLogStatus.COMPLETED)} == {completed.uid}
+        assert {e.uid for e in facade.list_time_log(status=TimeLogStatus.IN_PROGRESS)} == {active.uid}
+
     def test_stop_time_log_entry(self, facade: MockCalDAVFacade) -> None:
         start = datetime(2030, 3, 1, 9, 0, tzinfo=UTC)
         due = datetime(2030, 3, 1, 9, 25, tzinfo=UTC)

@@ -218,3 +218,74 @@ def test_active_sessions_visible_via_time_log(api_server: TestClient, token: str
     labels = [e["label"] for e in resp.json()["items"]]
     assert "running" in labels
     assert "done" not in labels
+
+
+def test_time_log_default_returns_completed_and_in_progress(api_server: TestClient, token: str) -> None:
+    """No filters means every entry, not just the completed ones."""
+    active = api_server.post(
+        "/productivity/time_log",
+        json={"label": "running", "mode": "countup"},
+        headers=_auth(token),
+    )
+    assert active.status_code == 201, active.text
+    completed = api_server.post(
+        "/productivity/time_log/completed",
+        json={"label": "done", "start": "2026-02-10T09:00:00.000Z", "duration_minutes": 25},
+        headers=_auth(token),
+    )
+    assert completed.status_code == 201, completed.text
+
+    resp = api_server.get("/productivity/time_log", headers=_auth(token))
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    uids = {e["uid"] for e in items}
+    assert active.json()["uid"] in uids
+    assert completed.json()["uid"] in uids
+    assert resp.json()["total"] == 2
+
+
+def test_time_log_active_only_returns_only_in_progress(api_server: TestClient, token: str) -> None:
+    active = api_server.post(
+        "/productivity/time_log",
+        json={"label": "running", "mode": "countup"},
+        headers=_auth(token),
+    )
+    completed = api_server.post(
+        "/productivity/time_log/completed",
+        json={"label": "done", "start": "2026-02-10T09:00:00.000Z", "duration_minutes": 25},
+        headers=_auth(token),
+    )
+
+    resp = api_server.get("/productivity/time_log?active_only=true", headers=_auth(token))
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    uids = {e["uid"] for e in items}
+    assert uids == {active.json()["uid"]}
+    assert all(e["status"] == "in-progress" for e in items)
+    assert completed.json()["uid"] not in uids
+
+
+def test_time_log_status_filter_is_exact_match(api_server: TestClient, token: str) -> None:
+    active = api_server.post(
+        "/productivity/time_log",
+        json={"label": "running", "mode": "countup"},
+        headers=_auth(token),
+    )
+    completed = api_server.post(
+        "/productivity/time_log/completed",
+        json={"label": "done", "start": "2026-02-10T09:00:00.000Z", "duration_minutes": 25},
+        headers=_auth(token),
+    )
+
+    resp = api_server.get("/productivity/time_log?status=completed", headers=_auth(token))
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert {e["uid"] for e in items} == {completed.json()["uid"]}
+    assert all(e["status"] == "completed" for e in items)
+    assert active.json()["uid"] not in {e["uid"] for e in items}
+
+    resp = api_server.get("/productivity/time_log?status=in-progress", headers=_auth(token))
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert {e["uid"] for e in items} == {active.json()["uid"]}
+    assert all(e["status"] == "in-progress" for e in items)

@@ -12,7 +12,7 @@ cleanly. Discard is a hard DELETE with no audit trail.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from caldav.lib import error as caldav_error
 from caldav.lib.error import NotFoundError
@@ -110,6 +110,7 @@ def list_time_log(
     active_only: bool = False,
     sort_by: list[str] | None = None,
     sort_order: str = "asc",
+    scope: Literal["all", "completed"] = "completed",
 ) -> list[TimeLogEntry]:
     """List time log entries.
 
@@ -117,6 +118,11 @@ def list_time_log(
     first. Use ``active_only=True`` to get in-progress focus sessions
     (``STATUS != COMPLETED``). ``status`` filters to an exact status
     value when set; ``active_only`` and ``status`` are mutually exclusive.
+
+    ``scope="all"`` lifts the default completed-only filter and returns
+    every entry, completed and active alike. Filter precedence is
+    ``status`` (exact match) > ``active_only`` (non-completed) >
+    ``scope`` (all vs completed only).
 
     Filter applied server-side:
         - task_id -> X-TASK-ID exact match
@@ -148,13 +154,14 @@ def list_time_log(
             entry = time_log_from_ical(component)
         except Exception:
             continue
-        if active_only:
-            if entry.status == TimeLogStatus.COMPLETED:
-                continue
-        elif status is None:
-            # Default semantic: completed historical records only.
-            if entry.status != TimeLogStatus.COMPLETED:
-                continue
+        if status is None:
+            if active_only:
+                if entry.status == TimeLogStatus.COMPLETED:
+                    continue
+            elif scope == "completed":
+                # Default semantic: completed historical records only.
+                if entry.status != TimeLogStatus.COMPLETED:
+                    continue
         entries.append(entry)
 
     if sort_by:

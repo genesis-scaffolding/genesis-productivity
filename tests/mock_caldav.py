@@ -8,7 +8,7 @@ for tasks with scheduled_start.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from genesis.caldav.constants import DEFAULT_SHADOW_DURATION_MINUTES
 from genesis.caldav.ical import new_uid
@@ -354,6 +354,7 @@ class MockCalDAVFacade:
         active_only: bool = False,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
+        scope: Literal["all", "completed"] = "completed",
     ) -> list[TimeLogEntry]:
         if active_only and status is not None:
             raise ValueError("active_only and status are mutually exclusive")
@@ -362,11 +363,11 @@ class MockCalDAVFacade:
             entries = [e for e in entries if e.task_id == task_id]
         if status is not None:
             entries = [e for e in entries if e.status == status]
-        elif not active_only:
+        elif active_only:
+            entries = [e for e in entries if e.status != TimeLogStatus.COMPLETED]
+        elif scope == "completed":
             # Default semantic: completed historical records only.
             entries = [e for e in entries if e.status == TimeLogStatus.COMPLETED]
-        if active_only:
-            entries = [e for e in entries if e.status != TimeLogStatus.COMPLETED]
         if sort_by:
             for key in reversed(sort_by):
                 entries.sort(

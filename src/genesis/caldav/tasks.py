@@ -291,6 +291,7 @@ def update_task(facade: CalDAVFacade, uid: str, data: TaskUpdate) -> Task | None
     update_data = data.model_dump(exclude_unset=True)
     clear_scheduled = update_data.pop("clear_scheduled_start", False)
     clear_project = update_data.pop("clear_project_id", False)
+    clear_assigned = update_data.pop("clear_assigned_date", False)
 
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -299,6 +300,8 @@ def update_task(facade: CalDAVFacade, uid: str, data: TaskUpdate) -> Task | None
         task.scheduled_start = None
     if clear_project:
         task.project_id = None
+    if clear_assigned:
+        task.assigned_date = None
 
     if update_data.get("status") == TaskStatus.COMPLETED and task.completed_at is None:
         task.completed_at = now_utc()

@@ -114,12 +114,17 @@ class TaskUpdate(BaseModel):
     Set scheduled_start to None to clear it. Set clear_scheduled_start to True
     when you need to distinguish "do not touch scheduled_start" from "clear
     scheduled_start" in an update call.
+
+    The same pattern applies to assigned_date and project_id. Pass
+    clear_assigned_date (or clear_project_id) to remove the value. A clear
+    flag wins over a value supplied in the same call.
     """
 
     title: str | None = None
     description: str | None = None
     hard_deadline: datetime | None = None
     assigned_date: date | None = None
+    clear_assigned_date: bool = False
     scheduled_start: datetime | None = None
     clear_scheduled_start: bool = False
     scheduled_duration: int | None = None

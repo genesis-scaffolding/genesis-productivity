@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -154,6 +154,23 @@ class TestTaskCRUD:
         assert updated is not None
         assert updated.status == TaskStatus.COMPLETED
         assert updated.completed_at is not None
+
+    def test_update_task_clear_assigned_date(self, facade: CalDAVFacade) -> None:
+        """clear_assigned_date removes X-ASSIGNED-DATE from the stored VTODO."""
+        task = facade.create_task(TaskCreate(title="Dated", assigned_date=date(2030, 3, 4)))
+        created = facade.get_task(task.uid)
+        assert created is not None
+        assert created.assigned_date == date(2030, 3, 4)
+
+        facade.update_task(task.uid, TaskUpdate(clear_assigned_date=True))
+
+        # Re-read from the server: the date must be gone from storage.
+        reloaded = facade.get_task(task.uid)
+        assert reloaded is not None
+        assert reloaded.assigned_date is None
+
+        component = facade._get_calendar(facade.TASKS_COLLECTION).object_by_uid(task.uid).icalendar_component
+        assert "x-assigned-date" not in component
 
     def test_update_task_clears_completed_at(self, facade: CalDAVFacade) -> None:
         """Reopening a completed task clears completed_at."""

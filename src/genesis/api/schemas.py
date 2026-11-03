@@ -155,6 +155,7 @@ class TaskUpdateIn(BaseModel):
     description: str | None = None
     status: Status | None = None
     assigned_date: datetime.date | None = None
+    clear_assigned_date: bool = False
     hard_deadline: UtcDateTime | None = None
     scheduled_start: UtcDateTime | None = None
     clear_scheduled_start: bool = False

@@ -550,6 +550,8 @@ def update_task(
             kwargs["description"] = body.description
         if body.assigned_date is not None:
             kwargs["assigned_date"] = body.assigned_date
+        if body.clear_assigned_date:
+            kwargs["clear_assigned_date"] = True
         if body.hard_deadline is not None:
             kwargs["hard_deadline"] = body.hard_deadline
         if body.scheduled_start is not None:

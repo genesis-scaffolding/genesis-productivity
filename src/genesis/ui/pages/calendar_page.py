@@ -14,24 +14,51 @@ from genesis.ui._table import render_tasks_table
 facade = get_facade()
 caldav = facade.caldav
 
+# Scoped style for the week grid. Streamlit stacks ``st.columns`` at
+# 640px and below; from 641px up the grid stays a single row and
+# scrolls inside its own container instead of squeezing the seven
+# days into unreadable slivers. The rule is scoped to the
+# ``calendar_week_grid`` container key, so no other page is affected.
+_WEEK_GRID_CSS = """
+<style>
+@media (min-width: 641px) {
+  .st-key-calendar_week_grid [data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0.25rem;
+  }
+
+  .st-key-calendar_week_grid [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    flex: 1 0 6rem !important;
+    width: auto !important;
+    min-width: 6rem !important;
+  }
+}
+</style>
+"""
+
 # --- Week navigation --------------------------------------------------------
 
 if "cal_week" not in st.session_state:
     st.session_state["cal_week"] = date.today()
 
 today = date.today()
-with st.container(horizontal=True, vertical_alignment="center"):
+title_col, nav_col = st.columns([6, 4], vertical_alignment="center")
+with title_col:
     st.title("Calendar")
-    spacer_left, _, nav = st.columns([6, 0.5, 4])
-    with nav:
-        b1, b2, b3 = st.columns(3)
-        if b1.button("Today", key="cal_today"):
+with nav_col:
+    # A plain horizontal container, not a nested column group: nested
+    # columns shrink-wrap and squeeze the buttons until their labels
+    # break one character per line.
+    with st.container(horizontal=True, vertical_alignment="center"):
+        if st.button("Today", key="cal_today"):
             st.session_state["cal_week"] = today
             st.rerun()
-        if b2.button("◀ Prev", key="cal_prev"):
+        if st.button("◀ Prev", key="cal_prev"):
             st.session_state["cal_week"] -= timedelta(days=7)
             st.rerun()
-        if b3.button("Next ▶", key="cal_next"):
+        if st.button("Next ▶", key="cal_next"):
             st.session_state["cal_week"] += timedelta(days=7)
             st.rerun()
 
@@ -59,7 +86,13 @@ shadow_events = caldav.list_events(
 
 
 def _event_day(e) -> date:
-    return e.start.date()
+    """Local calendar date of an event.
+
+    Event times are rendered in local time, so the day grouping has to
+    use the local date as well. Grouping by the UTC date files an
+    early-morning event under the previous day.
+    """
+    return to_local(e.start).date()
 
 
 events_by_day: dict[date, list] = {week_start + timedelta(days=i): [] for i in range(7)}
@@ -69,42 +102,41 @@ for e in shadow_events:
         events_by_day[d].append(e)
 
 
-# --- Week grid: all-day event strip + day columns ---------------------------
+# --- Week grid: one self-contained column per day ---------------------------
 
-# Header row: day labels. Use the :blue[...] syntax carefully: each
-# colored piece is its own bracketed expression because Streamlit's
-# :color[...] syntax does not handle nested markdown or newlines well.
-day_cols = st.columns(7, gap="small")
-for i, c in enumerate(day_cols):
-    day = week_start + timedelta(days=i)
-    with c:
-        if day == today:
-            st.markdown(f":blue[**{day.strftime('%a')}**]  \n:blue[{day.day}]")
-        else:
-            st.markdown(f"**{day.strftime('%a')}**  \n{day.day}")
+st.html(_WEEK_GRID_CSS)
 
-st.write("")
+# Each day owns its heading and its events in the same column. Two
+# separate seven-column rows break apart when Streamlit stacks the
+# columns on a narrow screen: the headings end up in one list and the
+# events in another, with nothing linking a day to its events.
+with st.container(key="calendar_week_grid"):
+    day_cols = st.columns(7, gap="small")
+    for i, column in enumerate(day_cols):
+        day = week_start + timedelta(days=i)
+        with column:
+            # Day heading, including the blue current-day marker.
+            if day == today:
+                st.markdown(f":blue[**{day.strftime('%a')}**]  \n:blue[{day.day}]")
+            else:
+                st.markdown(f"**{day.strftime('%a')}**  \n{day.day}")
+            st.write("")
 
-# All-day events strip: render a row per day with their events
-strip_cols = st.columns(7, gap="small")
-for i, c in enumerate(strip_cols):
-    day = week_start + timedelta(days=i)
-    with c:
-        day_events = sorted(events_by_day.get(day, []), key=lambda e: e.start)
-        if not day_events:
-            st.caption("—")
-            continue
-        for e in day_events:
-            with st.container(border=True):
-                local_start = to_local(e.start)
-                local_end = to_local(e.end)
-                time_label = (
-                    f"{local_start:%H:%M}–{local_end:%H:%M}"
-                    if (local_end - local_start) < timedelta(days=1)
-                    else "all day"
-                )
-                st.markdown(f"**{e.summary}**")
-                st.caption(time_label)
+            day_events = sorted(events_by_day.get(day, []), key=lambda e: e.start)
+            if not day_events:
+                st.caption("—")
+                continue
+            for e in day_events:
+                with st.container(border=True):
+                    local_start = to_local(e.start)
+                    local_end = to_local(e.end)
+                    time_label = (
+                        f"{local_start:%H:%M}–{local_end:%H:%M}"
+                        if (local_end - local_start) < timedelta(days=1)
+                        else "all day"
+                    )
+                    st.markdown(f"**{e.summary}**")
+                    st.caption(time_label)
 
 st.write("")
 

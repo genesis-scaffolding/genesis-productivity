@@ -5,7 +5,7 @@ These tests are fast and do not require a real Radicale server.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, PropertyMock
 
 import pytest
@@ -109,6 +109,28 @@ class TestTaskCRUD:
         updated = facade.update_task(task.uid, TaskUpdate(title="Renamed"))
         assert updated is not None
         assert updated.project_id == project.uid
+
+    def test_update_task_clear_assigned_date(self, facade: MockCalDAVFacade) -> None:
+        """clear_assigned_date removes the assigned date."""
+        task = facade.create_task(TaskCreate(title="Dated", assigned_date=date(2030, 3, 4)))
+        assert task.assigned_date == date(2030, 3, 4)
+
+        updated = facade.update_task(task.uid, TaskUpdate(clear_assigned_date=True))
+
+        assert updated is not None
+        assert updated.assigned_date is None
+        reloaded = facade.get_task(task.uid)
+        assert reloaded is not None
+        assert reloaded.assigned_date is None
+
+    def test_update_task_preserves_assigned_date_when_not_cleared(self, facade: MockCalDAVFacade) -> None:
+        """An update without clear_assigned_date must leave assigned_date alone."""
+        task = facade.create_task(TaskCreate(title="Dated", assigned_date=date(2030, 3, 4)))
+
+        updated = facade.update_task(task.uid, TaskUpdate(title="Renamed"))
+
+        assert updated is not None
+        assert updated.assigned_date == date(2030, 3, 4)
 
     def test_update_task_clears_completed_at(self, facade: MockCalDAVFacade) -> None:
         """Reopening a completed task clears completed_at."""

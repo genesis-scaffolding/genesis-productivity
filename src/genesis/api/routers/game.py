@@ -23,7 +23,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from ...entities import XpEventKind
 from ...game.facade import GameClassificationError, GameDisabled
 from ..auth import current_subject
-from .productivity import _facade
 from ..schemas import (
     CharacterStateOut,
     StatListOut,
@@ -37,6 +36,7 @@ from ..schemas import (
     XpEventListOut,
     XpEventOut,
 )
+from .productivity import _facade
 
 router = APIRouter(prefix="/game", tags=["game"])
 

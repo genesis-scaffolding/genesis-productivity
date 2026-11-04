@@ -223,6 +223,42 @@ def test_task_update_status_to_completed(api_server_real: TestClient) -> None:
 
 
 @pytest.mark.integration
+def test_task_update_clear_assigned_date(api_server_real: TestClient) -> None:
+    """A null assigned_date is a no-op; clear_assigned_date removes the date."""
+    token = _login(api_server_real)
+    task = api_server_real.post(
+        "/productivity/tasks",
+        json={"title": "dated", "assigned_date": "2026-09-07"},
+        headers=_auth(token),
+    ).json()
+    assert task["assigned_date"] == "2026-09-07"
+
+    # An explicit null leaves the date untouched.
+    unchanged = api_server_real.patch(
+        f"/productivity/tasks/{task['uid']}",
+        json={"assigned_date": None},
+        headers=_auth(token),
+    )
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["assigned_date"] == "2026-09-07"
+
+    # The clear flag removes it.
+    cleared = api_server_real.patch(
+        f"/productivity/tasks/{task['uid']}",
+        json={"clear_assigned_date": True},
+        headers=_auth(token),
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["assigned_date"] is None
+
+    fetched = api_server_real.get(
+        f"/productivity/tasks/{task['uid']}",
+        headers=_auth(token),
+    ).json()
+    assert fetched["assigned_date"] is None
+
+
+@pytest.mark.integration
 def test_task_datetime_serializes_as_z_with_3_decimals(api_server_real: TestClient) -> None:
     token = _login(api_server_real)
     # Sub-second precision is dropped on the VTODO boundary (iCal DUE

@@ -219,6 +219,7 @@ class MockCalDAVFacade:
         update_data = data.model_dump(exclude_unset=True)
         clear_scheduled = update_data.pop("clear_scheduled_start", False)
         clear_project = update_data.pop("clear_project_id", False)
+        clear_assigned = update_data.pop("clear_assigned_date", False)
 
         for key, value in update_data.items():
             setattr(task, key, value)
@@ -226,6 +227,8 @@ class MockCalDAVFacade:
             task.scheduled_start = None
         if clear_project:
             task.project_id = None
+        if clear_assigned:
+            task.assigned_date = None
 
         if "status" in update_data and task.status == TaskStatus.COMPLETED and task.completed_at is None:
             task.completed_at = self._now()

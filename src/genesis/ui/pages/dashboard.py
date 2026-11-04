@@ -26,7 +26,7 @@ than editing inline.
 from __future__ import annotations
 
 import uuid as _uuid
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import streamlit as st
 
@@ -77,9 +77,13 @@ deadlines = [
 appointments = [
     t
     for t in all_tasks
-    if t.scheduled_start is not None and today_start <= t.scheduled_start <= week_end_dt and t.status not in done_statuses
+    if t.scheduled_start is not None
+    and today_start <= t.scheduled_start <= week_end_dt
+    and t.status not in done_statuses
 ]
-appointments.sort(key=lambda t: t.scheduled_start)
+# The filter above drops tasks with no scheduled_start, but the sort key
+# still has to be non-optional for the type checker.
+appointments.sort(key=lambda t: t.scheduled_start or datetime.min.replace(tzinfo=UTC))
 
 active_projects = caldav.list_projects(status=ProjectStatus.IN_PROGRESS)
 

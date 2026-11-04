@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from ..game.facade import GameClassificationError, GameDisabled, GameFacade
     from ..journal.facade import JournalFacade
     from ..notify.facade import NotifyFacade
+    from ..onboarding.facade import OnboardingFacade
     from ..profile.facade import ProfileFacade
 from ..game.facade import GameClassificationError, GameDisabled
 
@@ -68,6 +69,7 @@ class Facade:
         self._game: GameFacade | None = None
         self._notify: NotifyFacade | None = None
         self._focus_scheduler: FocusScheduler | None = None
+        self._onboarding: OnboardingFacade | None = None
 
         if ensure_server:
             self._ensure_server_running()
@@ -175,6 +177,21 @@ class Facade:
 
             self._profile = ProfileFacade(self._configs.paths.profile_root)
         return self._profile
+
+    @property
+    def onboarding(self) -> OnboardingFacade:
+        """Return the Onboarding facade for the bootstrap state.
+
+        ADR-032: the wizard's state is one JSON file per user,
+        under ``<state_home>/genesis/<user>/onboarding.json``. The
+        facade is constructed lazily so callers that never touch
+        the onboarding state don't pay for it.
+        """
+        if self._onboarding is None:
+            from ..onboarding import STATE_FILENAME, OnboardingFacade
+
+            self._onboarding = OnboardingFacade(self._configs.paths.state / STATE_FILENAME)
+        return self._onboarding
 
     @property
     def notify(self) -> NotifyFacade:

@@ -41,6 +41,13 @@ genesis user delete alice
 Pages: Dashboard, Projects, Tasks, Calendar, Journal, Contacts, Statistics.
 Data scope is per user (see ADR-010, ADR-019).
 
+A new account is walked through a setup wizard on its first sign-in:
+what Genesis is for, the profile, the life story, starter projects,
+one task, the journal, and the contact book. The wizard owns the
+session until it is finished or skipped, so no other page is
+reachable while it runs. It can be run again at any time from
+Settings (see ADR-032).
+
 ### Migrating an existing single-user setup
 
 If you have live data under the legacy ``default`` user

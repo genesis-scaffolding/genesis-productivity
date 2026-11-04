@@ -1,12 +1,16 @@
 """Settings page: backup and restore for the signed in user's data.
 
-Two expanders expose ``facade.backup``:
+Four expanders:
 
 - "Download backup" runs ``export_to_bytes`` on demand and offers the
   result as ``st.download_button``.
 - "Restore from backup" accepts a zip via ``st.file_uploader``,
   validates it, requires the user to acknowledge the destructive
   intent, then runs ``import_from_bytes``.
+- "Notifications (ntfy)" shows the resolved ntfy URL and topic.
+- "Setup" reports the onboarding state and offers one button,
+  "Run setup again", which hands the session back to the wizard
+  (ADR-032).
 
 Validation, destructive confirmation, and the resulting counts are
 all rendered in place so the user has enough information to make
@@ -20,6 +24,7 @@ from datetime import UTC, datetime
 import streamlit as st
 
 from genesis.backup import ArchiveError, ValidationReport
+from genesis.onboarding import STEP_ORDER, OnboardingStatus
 from genesis.ui._state import get_facade
 
 facade = get_facade()
@@ -215,4 +220,59 @@ with st.expander("Notifications", expanded=False):
         "Edit `ntfy.url` and `ntfy.topic` in `configs.yaml` under the "
         "`ntfy:` key, or override with `GENESIS__NTFY__URL` / "
         "`GENESIS__NTFY__TOPIC`. Changes apply on the next session."
+    )
+
+
+# -----------------------------------------------------------------------------
+# Setup (onboarding wizard)
+# -----------------------------------------------------------------------------
+
+
+def _onboarding_summary() -> str:
+    """Return a one-line report of the onboarding state."""
+    state = facade.onboarding.state()
+    if state.never_run:
+        return "Not run for this account."
+    if state.status is OnboardingStatus.NOT_STARTED:
+        return "Not started."
+    if state.status is OnboardingStatus.IN_PROGRESS:
+        step = state.current_step
+        try:
+            number = STEP_ORDER.index(step) + 1 if step else 1
+        except ValueError:
+            number = 1
+        return f"In progress (step {number} of {len(STEP_ORDER)})."
+    if state.status is OnboardingStatus.COMPLETED and state.completed_at is not None:
+        return f"Completed on {state.completed_at:%Y-%m-%d %H:%M} UTC."
+    if state.status is OnboardingStatus.SKIPPED and state.skipped_at is not None:
+        return f"Skipped on {state.skipped_at:%Y-%m-%d %H:%M} UTC."
+    return "Not run for this account."
+
+
+def _clear_wizard_session_state() -> None:
+    """Drop the wizard's widget state.
+
+    The restart resets the onboarding state; the session state of
+    the widgets the wizard owns has to go with it, or the first
+    render would show the values from the previous run instead of
+    the ones the state file holds.
+    """
+    for key in [k for k in st.session_state.keys() if str(k).startswith("ob_")]:
+        st.session_state.pop(key, None)
+
+
+with st.expander("Setup", expanded=False):
+    st.write(_onboarding_summary())
+    if st.button(
+        "Run setup again",
+        key="settings_onboarding_restart",
+        disabled=facade.onboarding.is_pending(),
+    ):
+        facade.onboarding.restart()
+        _clear_wizard_session_state()
+        st.switch_page("pages/onboarding.py")
+    st.caption(
+        "This starts the setup wizard again. It does not change your data: "
+        "your profile, projects, tasks, journal entries and contacts stay as "
+        "they are."
     )

@@ -26,10 +26,18 @@ from genesis.users.store import _USERNAME_RE, UserStore, default_store_path
 @pytest.fixture
 def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> UserStore:
     """Return a UserStore bound to a fresh temp file and patched in
-    as the module-level default so the convenience functions hit it."""
+    as the module-level default so the convenience functions hit it.
+
+    The XDG homes are pointed at the temp dir as well: creating a
+    user also writes the account's onboarding state file, and that
+    write must not land in the developer's real home.
+    """
     store_path = tmp_path / "users.yaml"
     store = UserStore(store_path)
     monkeypatch.setattr("genesis.users.store._default_store", store)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     return store
 
 
@@ -159,6 +167,35 @@ def test_delete_user_removes_entry(store: UserStore) -> None:
 def test_delete_user_unknown_raises(store: UserStore) -> None:
     with pytest.raises(UserStoreError, match="not found"):
         delete_user("ghost")
+
+
+# ---------------------------------------------------------------------------
+# Orchestration with the onboarding state
+# ---------------------------------------------------------------------------
+
+
+def test_create_user_writes_an_onboarding_state(store: UserStore, tmp_path: Path) -> None:
+    """A brand-new account gets the state file that marks it as
+    needing the onboarding wizard."""
+    from genesis.onboarding import STATE_FILENAME, OnboardingFacade
+
+    create_user("alice", "pw")
+    state_path = tmp_path / "state" / "genesis" / "alice" / STATE_FILENAME
+    assert state_path.exists()
+    state = OnboardingFacade(state_path).state()
+    assert state.status.value == "not_started"
+    assert state.is_terminal is False
+
+
+def test_delete_user_keeps_the_onboarding_state(store: UserStore, tmp_path: Path) -> None:
+    """The onboarding state is not the users table: deleting the
+    account does not delete the state file."""
+    from genesis.onboarding import STATE_FILENAME
+
+    create_user("alice", "pw")
+    delete_user("alice")
+    state_path = tmp_path / "state" / "genesis" / "alice" / STATE_FILENAME
+    assert state_path.exists()
 
 
 # ---------------------------------------------------------------------------

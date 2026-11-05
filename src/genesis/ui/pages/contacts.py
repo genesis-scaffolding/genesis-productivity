@@ -1,22 +1,27 @@
 """Contacts page: list view (default) and contact view (when ?uid=...).
 
-Routing is keyed by UID. The list view is a data_editor table
-with inline name / organization edits, a search box, and per-row
-Open / Delete actions. The contact view has view / edit / create
-modes reached by setting ``?uid=`` plus ``?edit=`` or ``?new=``,
-following the same convention as :mod:`genesis.ui.pages.journal`.
+Routing is keyed by UID. The list view is the shared contacts
+table with inline name / organization edits, a search box, and
+per-row Open / Delete actions. The contact view has view / edit /
+create modes reached by setting ``?uid=`` plus ``?edit=`` or
+``?new=``, following the same convention as
+:mod:`genesis.ui.pages.journal`.
+
+The create form and the table are shared with the onboarding
+wizard: the form lives in :func:`genesis.ui._render.contact_create_form`
+and the table in :func:`genesis.ui._table.render_contacts_table`.
 """
 
 from __future__ import annotations
 
 import uuid as _uuid
 
-import pandas as pd
 import streamlit as st
 
-from genesis.entities import ContactUpdate
-from genesis.ui._render import delete_confirm_dialog
+from genesis.entities import Contact, ContactUpdate
+from genesis.ui._render import contact_create_form, delete_confirm_dialog, split_multiline
 from genesis.ui._state import get_facade
+from genesis.ui._table import render_contacts_table
 
 facade = get_facade()
 carddav = facade.carddav
@@ -60,65 +65,16 @@ def _render_list() -> None:
         _render_list_empty()
         return
 
-    df = pd.DataFrame(
-        {
-            "name": [c.name for c in contacts],
-            "organization": [c.organization or "" for c in contacts],
-            "primary_email": [c.emails[0] if c.emails else "" for c in contacts],
-            "primary_phone": [c.phones[0] if c.phones else "" for c in contacts],
-            "uid": [c.uid for c in contacts],
-            "actions": [["Open", "Delete"] for _ in contacts],
-        }
-    )
-
-    def _handle_action() -> None:
-        click = st.session_state.get("contacts_action")
-        if not click:
-            return
-        row_idx = click["row"]
-        label = click["label"]
-        if row_idx >= len(contacts):
-            return
-        target = contacts[row_idx]
+    def _handle_action(label: str, contact: Contact) -> None:
         if label == "Open":
-            st.query_params["uid"] = target.uid
+            st.query_params["uid"] = contact.uid
         elif label == "Delete":
             delete_confirm_dialog(
-                f"contact {target.name}",
-                lambda uid=target.uid: carddav.delete_contact(uid),
+                f"contact {contact.name}",
+                lambda uid=contact.uid: carddav.delete_contact(uid),
             )
 
-    def _handle_inline_edit() -> None:
-        state = st.session_state.get("contacts_list") or {}
-        edited_rows = state.get("edited_rows") or {}
-        if not edited_rows:
-            return
-        for row_idx_str, changes in edited_rows.items():
-            row_idx = int(row_idx_str)
-            if row_idx >= len(contacts):
-                continue
-            target = contacts[row_idx]
-            update = ContactUpdate(
-                name=changes.get("name", target.name) or "Unnamed",
-                organization=changes.get("organization", target.organization),
-            )
-            carddav.update_contact(target.uid, update)
-        state["edited_rows"] = {}
-
-    st.data_editor(
-        df,
-        column_config={
-            "name": st.column_config.TextColumn("Name", width="medium", required=True),
-            "organization": st.column_config.TextColumn("Organization", width="medium"),
-            "primary_email": st.column_config.TextColumn("Email", width="medium", disabled=True),
-            "primary_phone": st.column_config.TextColumn("Phone", width="small", disabled=True),
-            "uid": None,  # hidden
-            "actions": st.column_config.ButtonColumn("Actions", on_click=_handle_action, key="contacts_action"),
-        },
-        hide_index=True,
-        on_change=_handle_inline_edit,
-        key="contacts_list",
-    )
+    render_contacts_table(contacts, key="contacts_list", on_action=_handle_action)
 
 
 def _render_list_empty() -> None:
@@ -131,19 +87,8 @@ def _render_list_empty() -> None:
 # -----------------------------------------------------------------------------
 
 
-def _split_lines(value: str) -> list[str]:
-    """Split a multi-line text block into a clean list of values.
-
-    Used for the multi-value fields (emails / phones / urls /
-    addresses) which the user edits as one value per line. Empty
-    lines are dropped so the user can leave a trailing newline
-    without polluting the data.
-    """
-    return [line.strip() for line in value.splitlines() if line.strip()]
-
-
 def _join_lines(values: list[str]) -> str:
-    """Inverse of :func:`_split_lines`. ``\\n``-separated for the
+    """Inverse of :func:`split_multiline`. ``\\n``-separated for the
     ``st.text_area`` widget."""
     return "\n".join(values)
 
@@ -306,10 +251,10 @@ def _render_edit(uid: str) -> None:
                 nickname=fnickname or None,
                 organization=forganization or None,
                 title=ftitle_field or None,
-                emails=_split_lines(femails),
-                phones=_split_lines(fphones),
-                urls=_split_lines(furl),
-                addresses=_split_lines(faddress),
+                emails=split_multiline(femails),
+                phones=split_multiline(fphones),
+                urls=split_multiline(furl),
+                addresses=split_multiline(faddress),
                 note=fnote or None,
                 birthday=fbirthday,
             )
@@ -339,71 +284,22 @@ def _render_create(uid: str) -> None:
         st.rerun()
     st.title("New Contact")
 
-    with st.form("cc_form"):
-        ftitle = st.text_input("Name")
-        col1, col2 = st.columns(2)
-        with col1:
-            fgiven = st.text_input("Given name")
-        with col2:
-            ffamily = st.text_input("Family name")
-        col3, col4 = st.columns(2)
-        with col3:
-            fnickname = st.text_input("Nickname")
-        with col4:
-            forganization = st.text_input("Organization")
-        ftitle_field = st.text_input("Title")
-        femails = st.text_area("Emails (one per line)", height=100)
-        fphones = st.text_area("Phones (one per line)", height=100)
-        furl = st.text_area("URLs (one per line)", height=80)
-        faddress = st.text_area("Addresses (one per line)", height=80)
-        fnote = st.text_area("Note", height=120)
-        fbirthday = st.date_input(
-            "Birthday",
-            value=None,
-            format="YYYY-MM-DD",
-        )
+    def _after_create(contact: Contact) -> None:
+        st.query_params.clear()
+        st.query_params["uid"] = contact.uid
+        st.toast("Created")
+        st.rerun()
 
-        action_row = st.container(horizontal=True, horizontal_alignment="right")
-        with action_row:
-            save_clicked = st.form_submit_button(
-                "Create",
-                type="primary",
-                icon=":material/save:",
-            )
-            cancel_clicked = st.form_submit_button(
-                "Cancel",
-                type="tertiary",
-            )
+    def _go_back() -> None:
+        st.query_params.clear()
+        st.rerun()
 
-        if save_clicked:
-            if not ftitle.strip():
-                st.error("Name is required.")
-                return
-            from genesis.entities import ContactCreate
-
-            contact = carddav.create_contact(
-                ContactCreate(
-                    name=ftitle.strip(),
-                    given_name=fgiven or None,
-                    family_name=ffamily or None,
-                    nickname=fnickname or None,
-                    organization=forganization or None,
-                    title=ftitle_field or None,
-                    emails=_split_lines(femails),
-                    phones=_split_lines(fphones),
-                    urls=_split_lines(furl),
-                    addresses=_split_lines(faddress),
-                    note=fnote or None,
-                    birthday=fbirthday,
-                )
-            )
-            st.query_params.clear()
-            st.query_params["uid"] = contact.uid
-            st.toast("Created")
-            st.rerun()
-        if cancel_clicked:
-            st.query_params.clear()
-            st.rerun()
+    contact_create_form(
+        uid=uid,
+        key_prefix="cc",
+        on_created=_after_create,
+        on_cancel=_go_back,
+    )
 
 
 # -----------------------------------------------------------------------------

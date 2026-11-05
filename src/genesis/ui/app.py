@@ -9,11 +9,19 @@ way keeps the sidebar styled correctly on first load — if we
 called ``st.stop()`` here, Streamlit would fall back to its
 auto-discovered file list and render the sidebar as plain text
 instead of our configured nav with icons and section grouping.
+
+The nav shape depends on the account's onboarding state
+(ADR-032). While the bootstrap is outstanding the onboarding page
+is the only registered page and the navigation widget is hidden,
+so the wizard owns the session. Once the bootstrap is terminal the
+normal nav is back, with the onboarding page registered but hidden
+so it leaves no trace in the nav bar.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import streamlit as st
 
@@ -21,8 +29,15 @@ _UI_DIR = Path(__file__).parent
 _PAGES = _UI_DIR / "pages"
 
 
-def _page(path: Path, title: str, icon: str, url_path: str) -> st.Page:
-    return st.Page(str(path), title=title, icon=icon, url_path=url_path)
+def _page(
+    path: Path,
+    title: str,
+    icon: str,
+    url_path: str,
+    *,
+    visibility: Literal["visible", "hidden"] = "visible",
+) -> st.Page:
+    return st.Page(str(path), title=title, icon=icon, url_path=url_path, visibility=visibility)
 
 
 # ``st.set_page_config`` must be the first Streamlit call in the
@@ -39,7 +54,6 @@ from genesis.ui._auth import rehydrate_session, render_logout_button  # noqa: E4
 # gate check, so a returning browser (e.g. phone just woken from
 # sleep) lands on the app instead of the login form. ADR-021.
 rehydrate_session()
-render_logout_button()
 
 # Build nav after auth rehydration so we can read configs.game.enabled
 # from the authenticated Facade (ADR-026). The Character page only
@@ -52,6 +66,7 @@ _user_pages: list[st.Page] = [
     _page(_PAGES / "life_story.py", "Life Story", ":material/history_edu:", "life_story"),
 ]
 _username = st.session_state.get("username")
+_onboarding_pending = False
 if _username:
     _cfg = Facade(resolve_config_path(_username), ensure_server=False)
     try:
@@ -63,24 +78,58 @@ if _username:
                 0,
                 _page(_PAGES / "character.py", "Character", ":material/star:", "character"),
             )
+        # ADR-032: the onboarding state is one small local file, so
+        # this peek needs no DAV server.
+        _onboarding_pending = _cfg.onboarding.is_pending()
     finally:
         _cfg.shutdown()
 
-nav: dict[str, list[st.Page]] = {
-    "Productivity": [
-        _page(_PAGES / "dashboard.py", "Dashboard", ":material/dashboard:", "dashboard"),
-        _page(_PAGES / "focus.py", "Focus", ":material/timer:", "focus"),
-        _page(_PAGES / "projects.py", "Projects", ":material/folder:", "projects"),
-        _page(_PAGES / "tasks.py", "Tasks", ":material/checklist:", "tasks"),
-        _page(_PAGES / "calendar_page.py", "Calendar", ":material/calendar_month:", "calendar"),
-        _page(_PAGES / "journal.py", "Journal", ":material/article:", "journal"),
-        _page(_PAGES / "contacts.py", "Contacts", ":material/contacts:", "contacts"),
-        _page(_PAGES / "statistics.py", "Statistics", ":material/analytics:", "statistics"),
-    ],
-    "User": _user_pages,
-    "Account": [
-        _page(_PAGES / "settings.py", "Settings", ":material/settings:", "settings"),
-    ],
-}
+if _onboarding_pending:
+    # The wizard owns the session: the navigation widget is hidden
+    # and the onboarding page is the only page in the registry, so
+    # no other page can be reached while the bootstrap is
+    # outstanding. The sign-out control is suppressed too; the
+    # wizard's own "Skip setup" control is the way out.
+    st.navigation(
+        {
+            "Setup": [
+                _page(
+                    _PAGES / "onboarding.py",
+                    "Setup",
+                    ":material/rocket_launch:",
+                    "onboarding",
+                )
+            ]
+        },
+        position="hidden",
+    ).run()
+else:
+    render_logout_button()
+    nav: dict[str, list[st.Page]] = {
+        "Productivity": [
+            _page(_PAGES / "dashboard.py", "Dashboard", ":material/dashboard:", "dashboard"),
+            _page(_PAGES / "focus.py", "Focus", ":material/timer:", "focus"),
+            _page(_PAGES / "projects.py", "Projects", ":material/folder:", "projects"),
+            _page(_PAGES / "tasks.py", "Tasks", ":material/checklist:", "tasks"),
+            _page(_PAGES / "calendar_page.py", "Calendar", ":material/calendar_month:", "calendar"),
+            _page(_PAGES / "journal.py", "Journal", ":material/article:", "journal"),
+            _page(_PAGES / "contacts.py", "Contacts", ":material/contacts:", "contacts"),
+            _page(_PAGES / "statistics.py", "Statistics", ":material/analytics:", "statistics"),
+        ],
+        "User": _user_pages,
+        "Account": [
+            _page(_PAGES / "settings.py", "Settings", ":material/settings:", "settings"),
+            # Registered but hidden: the nav bar shows nothing, the
+            # url path keeps resolving, and the Settings control can
+            # hand the session back to the wizard.
+            _page(
+                _PAGES / "onboarding.py",
+                "Setup",
+                ":material/rocket_launch:",
+                "onboarding",
+                visibility="hidden",
+            ),
+        ],
+    }
 
-st.navigation(nav).run()
+    st.navigation(nav).run()

@@ -1,9 +1,14 @@
 """Journal page: list view (default) and entry view (when ?uid=...).
 
-Routing is keyed by UID. The list view is a dataframe table with
-inline title edits and per-row Open/Delete actions. The entry view
-has view / edit / create modes. The date is set at entry creation
-and is not editable from the UI (it is the entry's created date).
+Routing is keyed by UID. The list view is the shared journal
+table with inline title edits and per-row Open/Delete actions.
+The entry view has view / edit / create modes. The date is set at
+entry creation and is not editable from the UI (it is the entry's
+created date).
+
+The create form and the table are shared with the onboarding
+wizard: the form lives in :func:`genesis.ui._render.journal_create_form`
+and the table in :func:`genesis.ui._table.render_journal_table`.
 """
 
 from __future__ import annotations
@@ -11,12 +16,16 @@ from __future__ import annotations
 import uuid as _uuid
 from datetime import date
 
-import pandas as pd
 import streamlit as st
 
 from genesis.journal.facade import Entry, EntryType
-from genesis.ui._render import delete_confirm_dialog, render_journal_entry_view
+from genesis.ui._render import (
+    delete_confirm_dialog,
+    journal_create_form,
+    render_journal_entry_view,
+)
 from genesis.ui._state import get_facade
+from genesis.ui._table import render_journal_table
 
 facade = get_facade()
 journal = facade.journal
@@ -108,72 +117,19 @@ def _render_list() -> None:
         _render_list_empty()
         return
 
-    df = pd.DataFrame(
-        {
-            "date": [e.date for e in entries],
-            "type": [e.type.value if e.type else "" for e in entries],
-            "title": [e.title or e.date.strftime("%A, %B %d, %Y") for e in entries],
-            "preview": [(e.content.split("\n", 1)[0][:100] if e.content else "") for e in entries],
-            "uid": [e.uid for e in entries],
-            "actions": [["Open", "Delete"] for _ in entries],
-        }
-    )
-
-    def _handle_action() -> None:
-        click = st.session_state.get("journal_action")
-        if not click:
-            return
-        row_idx = click["row"]
-        label = click["label"]
-        if row_idx >= len(entries):
-            return
-        target = entries[row_idx]
+    def _handle_action(label: str, entry: Entry) -> None:
         if label == "Open":
-            st.query_params["uid"] = target.uid
+            st.query_params["uid"] = entry.uid
         elif label == "Delete":
             delete_confirm_dialog(
-                f"entry {target.date.isoformat()}",
-                lambda uid=target.uid: journal.delete_entry(uid),
+                f"entry {entry.date.isoformat()}",
+                lambda uid=entry.uid: journal.delete_entry(uid),
             )
         # No explicit st.rerun() — this is an on_click callback.
         # Streamlit's natural rerun picks up the query_params change
         # on the next render.
 
-    def _handle_inline_edit() -> None:
-        state = st.session_state.get("journal_list") or {}
-        edited_rows = state.get("edited_rows") or {}
-        if not edited_rows:
-            return
-        for row_idx_str, changes in edited_rows.items():
-            row_idx = int(row_idx_str)
-            if row_idx >= len(entries):
-                continue
-            entry = entries[row_idx]
-            if "title" in changes:
-                entry.title = changes["title"] or None
-                try:
-                    journal.save_entry(entry)
-                except ValueError as exc:
-                    st.error(str(exc))
-                    return
-        # Clear in-flight edits so they are not re-applied to the new
-        # df on the next render (same reason as in _table.py).
-        state["edited_rows"] = {}
-
-    st.data_editor(
-        df,
-        column_config={
-            "date": st.column_config.DateColumn("Date", disabled=True, format="YYYY-MM-DD"),
-            "type": st.column_config.TextColumn("Type", disabled=True),
-            "title": st.column_config.TextColumn("Title", width="large"),
-            "preview": st.column_config.TextColumn("Preview", disabled=True, width="large"),
-            "uid": None,  # hidden
-            "actions": st.column_config.ButtonColumn("Actions", on_click=_handle_action, key="journal_action"),
-        },
-        hide_index=True,
-        on_change=_handle_inline_edit,
-        key="journal_list",
-    )
+    render_journal_table(entries, key="journal_list", on_action=_handle_action)
 
 
 def _render_list_empty() -> None:
@@ -284,9 +240,6 @@ def _render_edit(uid: str) -> None:
 
 
 def _render_create(uid: str) -> None:
-    type_labels = ["(none)"] + [t.value for t in EntryType]
-    today = date.today()
-
     st.caption("Productivity > Journal > New Entry")
     if st.button(
         "Back",
@@ -300,54 +253,24 @@ def _render_create(uid: str) -> None:
 
     # If the list view routed here with a preselected type, honour it.
     preselected_type = st.query_params.get("type", "daily")
-    if preselected_type not in type_labels:
-        preselected_type = "daily"
-    cur_idx = type_labels.index(preselected_type)
 
-    with st.form("je_create"):
-        ftitle = st.text_input("Title")
-        ftype = st.selectbox("Type", type_labels, index=cur_idx)
-        fbody = st.text_area("Content", height=400, placeholder="What's on your mind?")
-        st.caption(f"Date: {today.isoformat()} (set at creation, not editable)")
+    def _after_create(entry: Entry) -> None:
+        st.query_params.clear()
+        st.query_params["uid"] = entry.uid
+        st.toast("Created")
+        st.rerun()
 
-        action_row = st.container(horizontal=True, horizontal_alignment="right")
-        with action_row:
-            save_clicked = st.form_submit_button(
-                "Create",
-                type="primary",
-                icon=":material/save:",
-            )
-            cancel_clicked = st.form_submit_button(
-                "Cancel",
-                type="tertiary",
-            )
+    def _go_back() -> None:
+        st.query_params.clear()
+        st.rerun()
 
-        if save_clicked:
-            new_type = EntryType(ftype) if ftype != "(none)" else None
-            existing = journal.find_for_period(new_type, today) if new_type is not None else None
-            if existing is not None and new_type is not None:
-                st.error(
-                    f"A {new_type.value} entry for this period already exists; edit it instead",
-                )
-            else:
-                entry = Entry(
-                    uid=uid,
-                    date=today,
-                    title=ftitle or None,
-                    type=new_type,
-                    content=fbody,
-                )
-                try:
-                    journal.save_entry(entry)
-                    st.query_params.clear()
-                    st.query_params["uid"] = entry.uid
-                    st.toast("Created")
-                    st.rerun()
-                except ValueError as exc:
-                    st.error(str(exc))
-        if cancel_clicked:
-            st.query_params.clear()
-            st.rerun()
+    journal_create_form(
+        uid=uid,
+        key_prefix="je_create",
+        default_type=preselected_type,
+        on_created=_after_create,
+        on_cancel=_go_back,
+    )
 
 
 # -----------------------------------------------------------------------------

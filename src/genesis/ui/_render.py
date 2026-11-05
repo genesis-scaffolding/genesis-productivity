@@ -20,6 +20,8 @@ import streamlit as st
 
 from genesis.category.enums import TimeLogCategory
 from genesis.entities import (
+    Contact,
+    ContactCreate,
     Task,
     TaskStatus,
     TaskUpdate,
@@ -27,7 +29,7 @@ from genesis.entities import (
     TimeLogMode,
     TimeLogStatus,
 )
-from genesis.journal.facade import Entry
+from genesis.journal.facade import Entry, EntryType
 from genesis.notify import messages
 from genesis.tz import to_utc
 from genesis.ui._state import get_facade
@@ -378,6 +380,233 @@ def project_edit_dialog(uid: str) -> None:
         facade.caldav.delete_project(uid)
         st.toast(f"Deleted project: {name}")
         st.rerun()
+
+
+def split_multiline(value: str) -> list[str]:
+    """Split a multi-line text block into a clean list of values.
+
+    One value per line; empty lines are dropped so a trailing
+    newline does not produce an empty entry. Used by the contact
+    form for its multi-value fields.
+    """
+    return [line.strip() for line in value.splitlines() if line.strip()]
+
+
+# -----------------------------------------------------------------------------
+# Contact create form and dialog
+# -----------------------------------------------------------------------------
+
+
+def contact_create_form(
+    *,
+    uid: str,
+    key_prefix: str,
+    on_created: Callable[[Contact], None] | None = None,
+    on_cancel: Callable[[], None] | None = None,
+) -> None:
+    """Render the contact create form.
+
+    One form, two callers: the Contacts page's create view and the
+    ``contact_create_dialog`` the onboarding wizard opens. The
+    wizard must not have its own contact form.
+
+    ``on_created`` runs with the new contact after it is created;
+    the Contacts page uses it to open the contact it just made.
+    ``on_cancel`` runs when the user cancels; the Contacts page
+    uses it to go back to the list.
+    """
+    facade = get_facade()
+    with st.form(f"{key_prefix}_form"):
+        ftitle = st.text_input("Name", key=f"{key_prefix}_name")
+        col1, col2 = st.columns(2)
+        with col1:
+            fgiven = st.text_input("Given name", key=f"{key_prefix}_given")
+        with col2:
+            ffamily = st.text_input("Family name", key=f"{key_prefix}_family")
+        col3, col4 = st.columns(2)
+        with col3:
+            fnickname = st.text_input("Nickname", key=f"{key_prefix}_nickname")
+        with col4:
+            forganization = st.text_input("Organization", key=f"{key_prefix}_organization")
+        ftitle_field = st.text_input("Title", key=f"{key_prefix}_title")
+        femails = st.text_area(
+            "Emails (one per line)",
+            height=100,
+            key=f"{key_prefix}_emails",
+        )
+        fphones = st.text_area(
+            "Phones (one per line)",
+            height=100,
+            key=f"{key_prefix}_phones",
+        )
+        furl = st.text_area(
+            "URLs (one per line)",
+            height=80,
+            key=f"{key_prefix}_urls",
+        )
+        faddress = st.text_area(
+            "Addresses (one per line)",
+            height=80,
+            key=f"{key_prefix}_addresses",
+        )
+        fnote = st.text_area("Note", height=120, key=f"{key_prefix}_note")
+        fbirthday = st.date_input(
+            "Birthday",
+            value=None,
+            format="YYYY-MM-DD",
+            key=f"{key_prefix}_birthday",
+        )
+
+        action_row = st.container(horizontal=True, horizontal_alignment="right")
+        with action_row:
+            save_clicked = st.form_submit_button(
+                "Create",
+                type="primary",
+                icon=":material/save:",
+            )
+            cancel_clicked = st.form_submit_button(
+                "Cancel",
+                type="tertiary",
+            )
+
+    if save_clicked:
+        if not ftitle.strip():
+            st.error("Name is required.")
+            return
+        contact = facade.carddav.create_contact(
+            ContactCreate(
+                name=ftitle.strip(),
+                given_name=fgiven or None,
+                family_name=ffamily or None,
+                nickname=fnickname or None,
+                organization=forganization or None,
+                title=ftitle_field or None,
+                emails=split_multiline(femails),
+                phones=split_multiline(fphones),
+                urls=split_multiline(furl),
+                addresses=split_multiline(faddress),
+                note=fnote or None,
+                birthday=fbirthday,
+            )
+        )
+        if on_created is not None:
+            on_created(contact)
+        else:
+            st.toast("Created")
+            st.rerun()
+    if cancel_clicked:
+        if on_cancel is not None:
+            on_cancel()
+        else:
+            st.rerun()
+
+
+@st.dialog("New contact", width="large", on_dismiss="rerun")
+def contact_create_dialog() -> None:
+    """Open the create-contact dialog. Call from a button body.
+
+    The dialog holds the same form the Contacts page uses.
+    """
+    import uuid as _uuid
+
+    contact_create_form(uid=_uuid.uuid4().hex, key_prefix="_ccd")
+
+
+# -----------------------------------------------------------------------------
+# Journal create form and dialog
+# -----------------------------------------------------------------------------
+
+
+def journal_create_form(
+    *,
+    uid: str,
+    key_prefix: str,
+    default_type: str = "daily",
+    on_created: Callable[[Entry], None] | None = None,
+    on_cancel: Callable[[], None] | None = None,
+) -> None:
+    """Render the journal entry create form.
+
+    One form, two callers: the Journal page's create view and the
+    ``journal_create_dialog`` the onboarding wizard opens.
+
+    ``default_type`` preselects the entry type. ``on_created`` runs
+    with the new entry after it is saved; the Journal page uses it
+    to open the entry it just made. ``on_cancel`` runs when the
+    user cancels.
+    """
+    facade = get_facade()
+    journal = facade.journal
+    type_labels = ["(none)"] + [t.value for t in EntryType]
+    today = date.today()
+    if default_type not in type_labels:
+        default_type = "daily"
+    cur_idx = type_labels.index(default_type)
+
+    with st.form(f"{key_prefix}_form"):
+        ftitle = st.text_input("Title", key=f"{key_prefix}_title")
+        ftype = st.selectbox("Type", type_labels, index=cur_idx, key=f"{key_prefix}_type")
+        fbody = st.text_area(
+            "Content",
+            height=400,
+            placeholder="What's on your mind?",
+            key=f"{key_prefix}_body",
+        )
+        st.caption(f"Date: {today.isoformat()} (set at creation, not editable)")
+
+        action_row = st.container(horizontal=True, horizontal_alignment="right")
+        with action_row:
+            save_clicked = st.form_submit_button(
+                "Create",
+                type="primary",
+                icon=":material/save:",
+            )
+            cancel_clicked = st.form_submit_button(
+                "Cancel",
+                type="tertiary",
+            )
+
+    if save_clicked:
+        new_type = EntryType(ftype) if ftype != "(none)" else None
+        existing = journal.find_for_period(new_type, today) if new_type is not None else None
+        if existing is not None and new_type is not None:
+            st.error(
+                f"A {new_type.value} entry for this period already exists; edit it instead",
+            )
+        else:
+            entry = Entry(
+                uid=uid,
+                date=today,
+                title=ftitle or None,
+                type=new_type,
+                content=fbody,
+            )
+            try:
+                journal.save_entry(entry)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                if on_created is not None:
+                    on_created(entry)
+                else:
+                    st.toast("Created")
+                    st.rerun()
+    if cancel_clicked:
+        if on_cancel is not None:
+            on_cancel()
+        else:
+            st.rerun()
+
+
+@st.dialog("New journal entry", width="large", on_dismiss="rerun")
+def journal_create_dialog(*, default_type: str = "daily") -> None:
+    """Open the create-journal-entry dialog. Call from a button body.
+
+    The dialog holds the same form the Journal page uses.
+    """
+    import uuid as _uuid
+
+    journal_create_form(uid=_uuid.uuid4().hex, key_prefix="_jcd", default_type=default_type)
 
 
 # -----------------------------------------------------------------------------

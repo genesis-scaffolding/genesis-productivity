@@ -19,6 +19,7 @@ table; the orchestration moves to the public wrappers.
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 import re
 import tempfile
@@ -27,8 +28,11 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, field_validator
 
-from ..configs import DEFAULT_APP_NAME, DEFAULT_STATE_HOME
+from ..configs import DEFAULT_APP_NAME, DEFAULT_STATE_HOME, Configs, resolve_config_path
+from ..onboarding import STATE_FILENAME, OnboardingFacade
 from .password import hash_password, needs_rehash, verify_hash
+
+logger = logging.getLogger(__name__)
 
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 """Allowed usernames: ASCII letters/digits/underscore/dash, 1-32 chars."""
@@ -181,6 +185,17 @@ def verify_credentials(username: str, password: str) -> bool:
     return _default_store.verify(username, password)
 
 
+def _write_initial_onboarding_state(username: str) -> None:
+    """Give a brand-new account its onboarding state file.
+
+    The file's existence is the signal that an account predates
+    the onboarding wizard, so it has to be written when the
+    account is created. ADR-032.
+    """
+    configs = Configs(yaml_path=resolve_config_path(username))
+    OnboardingFacade(configs.paths.state / STATE_FILENAME).initialise()
+
+
 def create_user(username: str, password: str) -> None:
     """Append a new user to the default users table.
 
@@ -190,6 +205,11 @@ def create_user(username: str, password: str) -> None:
     restart is needed: the next request from the new user is
     accepted by Radicale's htpasswd and the permissive ``[base]``
     rights rule grants access.
+
+    The new account also gets its onboarding state file, so the
+    wizard is offered to it. That write is best effort: a failure
+    is logged and the account is created anyway (an account with no
+    state file is treated as one that predates the wizard).
 
     Raises :class:`UserStoreError` (from the underlying
     :meth:`UserStore.add`) on duplicate usernames or invalid
@@ -208,6 +228,12 @@ def create_user(username: str, password: str) -> None:
         # call ``ensure_user`` and recover. But surface the error
         # so the operator notices.
         raise
+    try:
+        _write_initial_onboarding_state(username)
+    except Exception as exc:
+        # The account exists and works; it just will not be offered
+        # the wizard automatically.
+        logger.warning("Could not write the onboarding state for %r: %s", username, exc)
 
 
 def change_password(username: str, new_password: str) -> None:

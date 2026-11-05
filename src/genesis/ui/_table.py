@@ -1,9 +1,15 @@
 """Shared Streamlit data widgets for the genesis UI.
 
-This module hosts the canonical ``tasks table`` so it has a single
-source of truth. Page modules pass in their filtered task list and
-a unique widget-key prefix; the table handles inline edits, per-row
-Edit/Delete actions, and the empty-state message.
+This module hosts the canonical tables: the tasks table, the
+projects table, the journal table, and the contacts table. Page
+modules pass in their filtered rows and a unique widget-key
+prefix; the tables handle inline edits, per-row actions, and the
+empty-state message.
+
+A table hides its Actions column when the caller does not supply
+an action handler. The onboarding wizard uses that: its lists are
+read-only views of the account, and the Actions column would let
+the user leave the wizard.
 """
 
 from __future__ import annotations
@@ -14,7 +20,8 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 import streamlit as st
 
-from genesis.entities import Task, TaskStatus, TaskUpdate
+from genesis.entities import Contact, ContactUpdate, Project, ProjectStatus, ProjectUpdate, Task, TaskStatus, TaskUpdate
+from genesis.journal.facade import Entry
 from genesis.tz import to_local, to_utc
 from genesis.ui._render import (
     delete_confirm_dialog,
@@ -22,8 +29,11 @@ from genesis.ui._render import (
     session_log_dialog,
     task_edit_dialog,
 )
+from genesis.ui._state import get_facade
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from genesis.caldav import CalDAVFacade
 
 
@@ -177,6 +187,7 @@ def render_filterable_tasks_table(
     filter_key: str | None = None,
     default_statuses: list[TaskStatus] | None = None,
     sort_keys: list[SortKey] | None = None,
+    show_actions: bool = True,
 ) -> None:
     """Render status filter pills above a tasks table.
 
@@ -212,6 +223,7 @@ def render_filterable_tasks_table(
         key=key,
         show_project_column=show_project_column,
         sort_keys=sort_keys,
+        show_actions=show_actions,
     )
 
 
@@ -222,6 +234,7 @@ def render_tasks_table(
     key: str,
     show_project_column: bool = True,
     sort_keys: list[SortKey] | None = None,
+    show_actions: bool = True,
 ) -> None:
     """Render the canonical tasks table.
 
@@ -246,6 +259,10 @@ def render_tasks_table(
             row-drift bug (streamlit/streamlit#17026). A "Re-sort"
             button is shown above the table; clicking it pops the
             cache and reruns.
+        show_actions: Show the per-row Actions column. Pass
+            ``False`` to hide it; the table then has no way to open
+            an edit or delete dialog, which is what the onboarding
+            wizard wants.
 
     Inline edits to Title, Priority, Scheduled, Deadline, Assigned,
     Status, and Project flow through ``on_change``. The on-change
@@ -313,7 +330,8 @@ def render_tasks_table(
         }
         if show_project_column:
             row["Project"] = _project_label(t.project_id)
-        row["actions"] = ["Focus", "Log Session", "Edit", "Delete"]
+        if show_actions:
+            row["actions"] = ["Focus", "Log Session", "Edit", "Delete"]
         rows.append(row)
     df = pd.DataFrame(rows)
 
@@ -453,7 +471,301 @@ def render_tasks_table(
         )
     else:
         column_config["Project"] = None
-    column_config["actions"] = st.column_config.ButtonColumn("Actions", on_click=_handle_action, key=action_key)
+    if show_actions:
+        column_config["actions"] = st.column_config.ButtonColumn("Actions", on_click=_handle_action, key=action_key)
+    else:
+        column_config["actions"] = None
+
+    st.data_editor(
+        df,
+        column_config=column_config,
+        hide_index=True,
+        on_change=_handle_inline_edit,
+        key=key,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Projects table
+# -----------------------------------------------------------------------------
+
+
+def render_projects_table(
+    projects: list[Project],
+    *,
+    caldav: CalDAVFacade,
+    key: str,
+    on_action: Callable[[str, Project], None] | None = None,
+) -> None:
+    """Render the projects table.
+
+    Columns: Name, Description, Start, Deadline, Status, and the
+    number of tasks on the project. Name, Description, and Status
+    are editable inline; the dates are read-only here (the project
+    edit dialog owns them).
+
+    ``on_action`` handles the per-row Actions buttons ("Open",
+    "Delete"). When it is None the Actions column is hidden, which
+    is what the onboarding wizard wants: its list is a view of the
+    account, not a way out of the wizard.
+    """
+    if not projects:
+        st.info("No projects to show.")
+        return
+
+    task_counts: dict[str, int] = {}
+    for task in caldav.list_tasks():
+        if task.project_id:
+            task_counts[task.project_id] = task_counts.get(task.project_id, 0) + 1
+
+    rows: list[dict] = []
+    for p in projects:
+        row: dict = {
+            "uid": p.uid,
+            "Name": p.name,
+            "Description": p.description or "",
+            "Start": p.start_date,
+            "Deadline": p.deadline,
+            "Status": p.status.value,
+            "Tasks": task_counts.get(p.uid, 0),
+        }
+        if on_action is not None:
+            row["actions"] = ["Open", "Delete"]
+        rows.append(row)
+    df = pd.DataFrame(rows)
+
+    action_key = f"{key}_action"
+    table_projects = projects
+
+    def _handle_action() -> None:
+        click = st.session_state.get(action_key)
+        if not click or on_action is None:
+            return
+        row_idx = click["row"]
+        label = click["label"]
+        if row_idx >= len(table_projects):
+            return
+        on_action(label, table_projects[row_idx])
+
+    def _handle_inline_edit() -> None:
+        state = st.session_state.get(key) or {}
+        edited_rows = state.get("edited_rows") or {}
+        if not edited_rows:
+            return
+        for row_idx_str, changes in edited_rows.items():
+            row_idx = int(row_idx_str)
+            if row_idx >= len(table_projects):
+                continue
+            original = table_projects[row_idx]
+            update = ProjectUpdate()
+            touched = False
+            if "Name" in changes:
+                update = update.model_copy(update={"name": str(changes["Name"])})
+                touched = True
+            if "Description" in changes:
+                update = update.model_copy(update={"description": str(changes["Description"]) or None})
+                touched = True
+            if "Status" in changes:
+                update = update.model_copy(update={"status": ProjectStatus(str(changes["Status"]))})
+                touched = True
+            if not touched:
+                continue
+            caldav.update_project(original.uid, update)
+        state["edited_rows"] = {}
+
+    column_config: dict = {
+        "uid": None,  # hidden
+        "Name": st.column_config.TextColumn("Name", width="medium", required=True),
+        "Description": st.column_config.TextColumn("Description", width="large"),
+        "Start": st.column_config.DateColumn("Start", disabled=True, format="YYYY-MM-DD"),
+        "Deadline": st.column_config.DateColumn("Deadline", disabled=True, format="YYYY-MM-DD"),
+        "Status": st.column_config.SelectboxColumn(
+            "Status",
+            options=[s.value for s in ProjectStatus],
+            required=True,
+        ),
+        "Tasks": st.column_config.NumberColumn("Tasks", disabled=True),
+    }
+    if on_action is not None:
+        column_config["actions"] = st.column_config.ButtonColumn("Actions", on_click=_handle_action, key=action_key)
+
+    st.data_editor(
+        df,
+        column_config=column_config,
+        hide_index=True,
+        on_change=_handle_inline_edit,
+        key=key,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Journal table
+# -----------------------------------------------------------------------------
+
+
+def render_journal_table(
+    entries: list[Entry],
+    *,
+    key: str,
+    on_action: Callable[[str, Entry], None] | None = None,
+) -> None:
+    """Render the journal entries table.
+
+    The Title column is editable inline; the rest is read-only.
+
+    ``on_action`` handles the per-row Actions buttons ("Open",
+    "Delete"). When it is None the Actions column is hidden, which
+    is what the onboarding wizard wants.
+    """
+    if not entries:
+        st.info("No journal entries to show.")
+        return
+
+    rows: list[dict] = []
+    for e in entries:
+        row: dict = {
+            "date": e.date,
+            "type": e.type.value if e.type else "",
+            "title": e.title or e.date.strftime("%A, %B %d, %Y"),
+            "preview": (e.content.split("\n", 1)[0][:100] if e.content else ""),
+            "uid": e.uid,
+        }
+        if on_action is not None:
+            row["actions"] = ["Open", "Delete"]
+        rows.append(row)
+    df = pd.DataFrame(rows)
+
+    action_key = f"{key}_action"
+    table_entries = entries
+
+    def _handle_action() -> None:
+        click = st.session_state.get(action_key)
+        if not click or on_action is None:
+            return
+        row_idx = click["row"]
+        label = click["label"]
+        if row_idx >= len(table_entries):
+            return
+        on_action(label, table_entries[row_idx])
+
+    def _handle_inline_edit() -> None:
+        state = st.session_state.get(key) or {}
+        edited_rows = state.get("edited_rows") or {}
+        if not edited_rows:
+            return
+        journal = get_facade().journal
+        for row_idx_str, changes in edited_rows.items():
+            row_idx = int(row_idx_str)
+            if row_idx >= len(table_entries):
+                continue
+            entry = table_entries[row_idx]
+            if "title" not in changes:
+                continue
+            entry.title = changes["title"] or None
+            try:
+                journal.save_entry(entry)
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+        state["edited_rows"] = {}
+
+    column_config: dict = {
+        "date": st.column_config.DateColumn("Date", disabled=True, format="YYYY-MM-DD"),
+        "type": st.column_config.TextColumn("Type", disabled=True),
+        "title": st.column_config.TextColumn("Title", width="large"),
+        "preview": st.column_config.TextColumn("Preview", disabled=True, width="large"),
+        "uid": None,  # hidden
+    }
+    if on_action is not None:
+        column_config["actions"] = st.column_config.ButtonColumn("Actions", on_click=_handle_action, key=action_key)
+
+    st.data_editor(
+        df,
+        column_config=column_config,
+        hide_index=True,
+        on_change=_handle_inline_edit,
+        key=key,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Contacts table
+# -----------------------------------------------------------------------------
+
+
+def render_contacts_table(
+    contacts: list[Contact],
+    *,
+    key: str,
+    on_action: Callable[[str, Contact], None] | None = None,
+) -> None:
+    """Render the contacts table.
+
+    The Name and Organization columns are editable inline; email
+    and phone are read-only here (the contact edit form owns them).
+
+    ``on_action`` handles the per-row Actions buttons ("Open",
+    "Delete"). When it is None the Actions column is hidden, which
+    is what the onboarding wizard wants.
+    """
+    if not contacts:
+        st.info("No contacts to show.")
+        return
+
+    rows: list[dict] = []
+    for c in contacts:
+        row: dict = {
+            "name": c.name,
+            "organization": c.organization or "",
+            "primary_email": c.emails[0] if c.emails else "",
+            "primary_phone": c.phones[0] if c.phones else "",
+            "uid": c.uid,
+        }
+        if on_action is not None:
+            row["actions"] = ["Open", "Delete"]
+        rows.append(row)
+    df = pd.DataFrame(rows)
+
+    action_key = f"{key}_action"
+    table_contacts = contacts
+
+    def _handle_action() -> None:
+        click = st.session_state.get(action_key)
+        if not click or on_action is None:
+            return
+        row_idx = click["row"]
+        label = click["label"]
+        if row_idx >= len(table_contacts):
+            return
+        on_action(label, table_contacts[row_idx])
+
+    def _handle_inline_edit() -> None:
+        state = st.session_state.get(key) or {}
+        edited_rows = state.get("edited_rows") or {}
+        if not edited_rows:
+            return
+        carddav = get_facade().carddav
+        for row_idx_str, changes in edited_rows.items():
+            row_idx = int(row_idx_str)
+            if row_idx >= len(table_contacts):
+                continue
+            target = table_contacts[row_idx]
+            update = ContactUpdate(
+                name=changes.get("name", target.name) or "Unnamed",
+                organization=changes.get("organization", target.organization),
+            )
+            carddav.update_contact(target.uid, update)
+        state["edited_rows"] = {}
+
+    column_config: dict = {
+        "name": st.column_config.TextColumn("Name", width="medium", required=True),
+        "organization": st.column_config.TextColumn("Organization", width="medium"),
+        "primary_email": st.column_config.TextColumn("Email", width="medium", disabled=True),
+        "primary_phone": st.column_config.TextColumn("Phone", width="small", disabled=True),
+        "uid": None,  # hidden
+    }
+    if on_action is not None:
+        column_config["actions"] = st.column_config.ButtonColumn("Actions", on_click=_handle_action, key=action_key)
 
     st.data_editor(
         df,

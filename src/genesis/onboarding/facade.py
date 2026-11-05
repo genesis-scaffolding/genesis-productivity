@@ -108,16 +108,6 @@ class OnboardingFacade:
         write_state(self._state_path, state)
         return state
 
-    def set_draft(self, key: str, values: str | list[str]) -> OnboardingState:
-        """Store one draft choice under ``key``."""
-        state = self.state()
-        draft = dict(state.draft)
-        draft[key] = values
-        state.draft = draft
-        state.updated_at = now_utc()
-        write_state(self._state_path, state)
-        return state
-
     def complete(self) -> OnboardingState:
         """Mark the bootstrap as completed."""
         state = self.state()
@@ -148,10 +138,9 @@ class OnboardingFacade:
         """Start the wizard again from a terminal state.
 
         Moves the status back to ``in_progress``, resets the step
-        to the first one, clears the draft and the completion
-        timestamps, and counts the attempt. The state file is
-        rewritten, not deleted, so the attempt counter and the
-        timestamps survive.
+        to the first one, clears the completion timestamps, and
+        counts the attempt. The state file is rewritten, not
+        deleted, so the attempt counter and the timestamps survive.
 
         Only the onboarding state is touched. The account's data is
         left exactly as it is.
@@ -160,7 +149,6 @@ class OnboardingFacade:
         now = now_utc()
         state.status = OnboardingStatus.IN_PROGRESS
         state.current_step = STEP_ORDER[0].value
-        state.draft = {}
         state.completed_at = None
         state.skipped_at = None
         state.started_at = now

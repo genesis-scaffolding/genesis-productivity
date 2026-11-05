@@ -2,7 +2,8 @@
 
 ## Context
 
-The app ships seven nav pages and no first-run path. A new account opens
+The app ships a full set of nav pages and no first-run path. A new
+account opens
 on an empty shell: no explanation of what a project is, no explanation of
 why a task can be an appointment and a deadline at the same time, and no
 mention of the journal's one-entry-per-period rule. The features that
@@ -38,12 +39,12 @@ Constraints that shape the design here:
   all (ADR-011).
 - Accounts are per user (ADR-019). Two people can share a machine and
   each has their own data. The bootstrap state must be per user too.
-- The task step of the wizard must reuse the existing task add form and
-  the existing task table. A parallel flow would drift from the real one
+- Every step of the wizard must reuse the app's own tables and the
+  app's own create forms. A parallel flow would drift from the real one
   within a week.
-- The system already stores two markdown files per account, the profile
-  and the life story (ADR-025). They are the context an assistant needs
-  before it can be useful, so the wizard collects them early.
+- The system already stores a markdown profile per account (ADR-025).
+  It is the context an assistant needs before it can be useful, so the
+  wizard collects it early.
 - An account that predates this feature must not be interrupted. The
   wizard hides the whole nav, so a wrong "this account is new" verdict
   locks an existing user into a page they cannot leave.
@@ -101,7 +102,6 @@ The schema:
 | `completed_at`   | When the wizard was completed                               |
 | `skipped_at`     | When the wizard was skipped                                 |
 | `attempts`       | How many times the wizard has been started                  |
-| `draft`          | Unsaved choices, currently the pending project names        |
 
 A missing file reads as `skipped`, and so does a corrupt one (the read
 logs a warning). A missing file means the account predates the wizard;
@@ -120,8 +120,8 @@ not ask again. The two statuses are kept apart only so the Settings
 page can report what happened.
 
 `restart` moves a terminal state back to `in_progress`, resets the step
-to the first one, clears the draft, and increments `attempts`. It is the
-only way back into the wizard.
+to the first one, clears the completion timestamps, and increments
+`attempts`. It is the only way back into the wizard.
 
 ### 4. While the bootstrap is pending, the wizard owns the session
 
@@ -168,38 +168,41 @@ Settings control hand the session back to the wizard.
 The terminal state of the wizard (completed or skipped) is what restores
 the normal nav. Nothing else does.
 
-### 6. The wizard is a dedicated page with seven steps
+### 6. The wizard is a dedicated page with six steps
 
 We will add `src/genesis/ui/pages/onboarding.py`.
 
 The step order is:
 
-1. `purpose` — what Genesis is for
-2. `profile` — who you are
-3. `life_story` — what shaped you
-4. `projects` — starter projects
-5. `tasks` — one real task
-6. `journals` — the period anchoring
-7. `contacts` — the contact book
+1. `purpose` — what Genesis Productivity is for
+2. `profile` — a bit about yourself
+3. `projects` — what a project is
+4. `tasks` — what a task is
+5. `journals` — the journal
+6. `contacts` — the contact book
 
-The purpose step comes first: it frames the system the seven steps
-are about, so the profile and the life story land on someone who
-already knows what the account is for. The profile and the life
-story follow it because they are what the assistant reads next, and
-an account that has told the system who it is serving is worth more
-than an account with two starter projects and no context.
+The purpose step comes first: it frames the system the six steps are
+about, so the profile lands on someone who already knows what the
+account is for. The profile follows it because it is what the
+assistant reads next, and an account that has told the system who it
+is serving is worth more than an empty one.
 
-The profile step and the life story step write through
-`facade.profile`, the same facade the Profile and Life Story pages use,
-so the file format, the snapshot history, and the later edits are the
-same ones. The step shows the current content, lets the user edit it,
-and writes it back on Save or on Next. Content that is already stored
-and unchanged is not rewritten.
+An earlier draft of this ADR had a seventh step, the life story. It
+was dropped: the life story asks a new user for a narrative history
+before they have seen the tool, which is too much to ask at the
+start. The Life Story page and its file stay; the wizard does not
+push them.
+
+The profile step writes through `facade.profile`, the same facade the
+Profile page uses, so the file format, the snapshot history, and the
+later edits are the same ones. The step shows the current content,
+lets the user edit it, and writes it back on Save or on Next. Content
+that is already stored and unchanged is not rewritten.
 
 The purpose, projects, tasks, journals, and contacts steps keep the
-substance they had before this decision: what the three kinds of record
-are for, what a project is, what a task is and what the three dates on
-it mean, how the journal is anchored to a period, and what the contact
+substance they had before this decision: what the kinds of record are
+for, what a project is, what a task is and what the three dates on it
+mean, how the journal is anchored to a period, and what the contact
 book is for.
 
 ### 7. The current step is durable
@@ -211,32 +214,46 @@ wizard that kept the step in a local variable would jump back to the
 first step every time a task was created. Reading the step from the
 state file also means a browser refresh resumes where the user was.
 
-### 8. The wizard writes through the existing facades
+### 8. The wizard reuses the app's own tables and forms
 
-Each step creates real data through the facade that owns that data. No
-wizard-only write path exists.
+The wizard shows the account's own data with the app's own table
+components, and creates new data with the app's own create forms. No
+wizard-only table and no wizard-only form exists.
 
-- The profile and the life story go through `facade.profile.write`.
-- Projects go through `facade.caldav.create_project`.
-- Tasks go through the existing `task_create_dialog` from
-  `genesis.ui._render`, and the task list is rendered with the existing
-  `render_tasks_table` from `genesis.ui._table`.
-- The daily journal entry goes through `facade.journal`, which is where
-  the one-entry-per-period rule lives. The wizard does not reimplement
-  it, it only handles the error the facade raises.
-- Contacts go through `facade.carddav.create_contact`.
+- The entity lists are the shared tables in `genesis.ui._table`:
+  `render_projects_table`, `render_tasks_table`,
+  `render_journal_table`, and `render_contacts_table`. A table hides
+  its Actions column when the caller does not supply an action
+  handler, which is what the wizard does: the lists are a view of
+  the account, not a way out of the wizard.
+- The create buttons open the app's create dialogs:
+  `project_create_dialog` and `task_create_dialog` from
+  `genesis.ui._render`, plus `contact_create_dialog` and
+  `journal_create_dialog`, which wrap the same forms the Contacts
+  page and the Journal page use.
+- The profile is the one thing the wizard writes itself, through
+  `facade.profile.write`. There is no shared profile form to reuse:
+  the Profile page is a view with an edit mode and a history, not a
+  form.
 
-### 9. The project step preselects starter projects
+### 9. The project step suggests two starter projects
 
-The project step offers a small set of starter projects, preselected:
-`Personal` and `Learning`. The user can untick them and can add more
-names on the step itself. The selection is stored in the `draft` field
-so a refresh does not lose it.
+The project step shows the account's projects in the shared projects
+table and offers one button, "New Project", which opens the same
+create-project dialog the Projects page uses. The copy suggests two
+projects worth starting with, `Personal` for personal tasks and
+`Learning` for learning tasks.
 
-The projects are created when the user leaves the step. A name that
-already exists on the account, compared case-insensitively, is not
-created again. Running the wizard twice does not produce duplicate
-projects.
+The wizard does not create projects behind the user's back. The
+suggestion is in the copy; the creation is the user's, through the
+same form they will use later.
+
+An earlier draft of this ADR had the project step preselect two
+starter projects in a checkbox list and create them when the user
+left the step. That was dropped: the step's layout is now the table
+and the create button, like every other entity step, and a second
+way to create a project is a second thing to learn and to keep in
+sync with the real flow.
 
 ### 10. A missing state file means the account predates the wizard
 
@@ -271,15 +288,13 @@ state and offers one button, "Run setup again".
 
 The button calls `restart` and then hands the session to the wizard
 page. `restart` sets the status to `in_progress`, moves the step back
-to the first one, clears the draft, clears the completion timestamps,
-and increments the attempt counter.
+to the first one, clears the completion timestamps, and increments
+the attempt counter.
 
 The reset clears the onboarding state only. It does not touch the
-profile, the life story, the projects, the tasks, the journal entries,
-or the contacts. The starter projects the wizard created the first time
-stay, and the project step does not create them a second time because
-it matches existing project names case-insensitively. A restart is a
-second tour of a populated account, not a reset of the account.
+profile, the projects, the tasks, the journal entries, or the
+contacts. A restart is a second tour of a populated account, not a
+reset of the account.
 
 The state file is rewritten, not deleted, so the attempt counter and
 the timestamps survive.
@@ -303,20 +318,19 @@ Proposed
 Positive:
 
 - A new account can go from empty to populated without leaving the
-  wizard, and the account ends the flow holding real data rather than
-  an explanation.
+  wizard: the user fills the system with their own first content,
+  through the app's own forms.
 - The wizard cannot be escaped half way. There is no nav, no link, and
   no URL that reaches another page while the state is pending.
 - The parts of the system that are easy to miss (assigned date, period
   anchoring, the project as an outcome) get explained next to the
   widget that uses them.
-- The account starts with the context an assistant needs: a profile and
-  a life story, written through the same facade the Profile and Life
-  Story pages use.
+- The account starts with the context an assistant needs: a profile,
+  written through the same facade the Profile page uses.
 - The bootstrap decision survives a refresh, a new tab, and a restart,
   because it lives in a file and not in session state.
-- The wizard cannot drift from the real product, because every write
-  goes through the same facade call the real pages use.
+- The wizard cannot drift from the real product, because its lists and
+  its create forms are the app's own components.
 - The state machine is unit-testable without Streamlit.
 - An account that predates the wizard can never be locked out of the
   app: the legacy rule reads a file's existence, not the account's data.
@@ -340,6 +354,6 @@ Neutral:
 - Accounts that predate the wizard never see it unless they ask for it
   in Settings.
 - The wizard does not create focus sessions, calendar events, or XP
-  events. It stays inside the seven steps it describes.
+  events. It stays inside the six steps it describes.
 - The onboarding page stays routable at its url path after the wizard
   is done. It is hidden from the nav and shows the terminal summary.

@@ -40,7 +40,6 @@ def test_step_order_is_the_agreed_order() -> None:
     assert STEP_ORDER == (
         OnboardingStep.PURPOSE,
         OnboardingStep.PROFILE,
-        OnboardingStep.LIFE_STORY,
         OnboardingStep.PROJECTS,
         OnboardingStep.TASKS,
         OnboardingStep.JOURNALS,
@@ -52,8 +51,14 @@ def test_purpose_is_the_first_step() -> None:
     assert STEP_ORDER[0] is OnboardingStep.PURPOSE
 
 
-def test_step_order_has_seven_steps() -> None:
-    assert len(STEP_ORDER) == 7
+def test_step_order_has_six_steps() -> None:
+    assert len(STEP_ORDER) == 6
+
+
+def test_life_story_is_not_a_step() -> None:
+    """The life story step was dropped at the PR gate: too much to
+    ask of a new user."""
+    assert "life_story" not in [step.value for step in STEP_ORDER]
 
 
 # ---------------------------------------------------------------------------
@@ -102,14 +107,12 @@ def test_write_then_read_round_trips(tmp_path: Path) -> None:
         status=OnboardingStatus.IN_PROGRESS,
         current_step=OnboardingStep.PROJECTS.value,
         attempts=2,
-        draft={"projects": ["Personal", "Learning"]},
     )
     write_state(path, state)
     reloaded = read_state(path)
     assert reloaded.status is OnboardingStatus.IN_PROGRESS
     assert reloaded.current_step == OnboardingStep.PROJECTS.value
     assert reloaded.attempts == 2
-    assert reloaded.draft["projects"] == ["Personal", "Learning"]
 
 
 def test_written_file_is_private(tmp_path: Path) -> None:
@@ -164,16 +167,6 @@ def test_set_step_round_trips(facade: OnboardingFacade) -> None:
     facade.start()
     facade.set_step(OnboardingStep.CONTACTS)
     assert facade.state().current_step == OnboardingStep.CONTACTS.value
-
-
-def test_set_draft_round_trips(facade: OnboardingFacade) -> None:
-    facade.initialise()
-    facade.set_draft("projects", ["Personal"])
-    assert facade.state().draft["projects"] == ["Personal"]
-    facade.set_draft("project_names", ["Personal", "Learning"])
-    state = facade.state()
-    assert state.draft["projects"] == ["Personal"]
-    assert state.draft["project_names"] == ["Personal", "Learning"]
 
 
 # ---------------------------------------------------------------------------
@@ -231,13 +224,11 @@ def test_restart_bumps_the_attempt_counter(facade: OnboardingFacade) -> None:
     assert facade.state().attempts == before + 1
 
 
-def test_restart_clears_the_draft_and_the_timestamps(facade: OnboardingFacade) -> None:
+def test_restart_clears_the_timestamps(facade: OnboardingFacade) -> None:
     facade.initialise()
     facade.start()
-    facade.set_draft("projects", ["Personal"])
     facade.complete()
     state = facade.restart()
-    assert state.draft == {}
     assert state.completed_at is None
     assert state.skipped_at is None
     assert state.started_at is not None

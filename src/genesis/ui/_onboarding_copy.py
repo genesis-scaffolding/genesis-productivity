@@ -1,9 +1,8 @@
 """Copy for the onboarding wizard.
 
 The prose lives here so the wizard page stays readable. One entry
-per step: a title and a markdown body. Plus the starter project
-names and the two prompts used as the textarea placeholders on the
-profile and the life story steps.
+per step: a title and a markdown body. Plus the prompt used as the
+textarea placeholder on the profile step.
 
 ADR-032.
 """
@@ -12,116 +11,96 @@ from __future__ import annotations
 
 from genesis.onboarding import OnboardingStep
 
-STARTER_PROJECTS: tuple[str, ...] = ("Personal", "Learning")
-"""Projects offered on the projects step, preselected."""
-
-PROFILE_PROMPTS = (
-    "Your name, your timezone, what you do, and anything your assistant should know about you. Markdown is fine."
-)
-
-LIFE_STORY_PROMPTS = (
-    "What shaped you: the experiences, the relationships, the turning points "
-    "that explain where you are coming from. Markdown is fine."
-)
-
+PROFILE_PROMPTS = "What you want to be called, a bit of background, your preferences. Markdown is fine."
 
 STEP_COPY: dict[OnboardingStep, dict[str, str]] = {
     OnboardingStep.PURPOSE: {
-        "title": "What Genesis is for",
+        "title": "Welcome to Genesis Productivity",
         "body": (
-            "Genesis keeps three kinds of record, and everything you put in "
-            "them is readable and writable by you and by your own personal "
-            "assistant. That is why tasks and appointments live in CalDAV, "
-            "contacts live in CardDAV, and journal entries are plain markdown "
-            "files you can open with any editor.\n\n"
-            "**Commitments** live in tasks and projects. A task is one thing "
-            "you have to do; a project is the envelope they belong to, or the "
-            "outcome they are leading to.\n\n"
-            "**Life records and reflection** live in the journal, plus the "
-            "Profile and Life Story pages. The journal is anchored to a "
-            "period: one entry per day, per week, per month, per year.\n\n"
-            "**People** live in the contact book.\n\n"
-            "The next five steps walk you through those five things once, so "
-            "your account is not an empty shell when you get to it."
+            "Genesis Productivity keeps track of what you want to do, when you "
+            "want to do it, and why. It records how you spend your time. If "
+            "you want it to, it turns self-improvement into a lifelong game.\n\n"
+            "It manages four kinds of things:\n\n"
+            "- **Commitments**: tasks and projects.\n"
+            "- **Plans and reflections**: journal entries.\n"
+            "- **People**: your contact book.\n"
+            "- **Time**: focus sessions.\n\n"
+            "It is designed for you first and foremost. It is also the "
+            "smoothest support your own AI assistant can have: your data "
+            "stays in standard formats, so an assistant can read it and write "
+            "to it.\n\n"
+            "This onboarding introduces the kinds of data you will work with "
+            "here, and gives you a place to put your own first content."
         ),
     },
     OnboardingStep.PROFILE: {
-        "title": "Your profile",
+        "title": "A bit about yourself",
         "body": (
-            "Your profile is what your assistant reads to know who it works "
-            "for. It is one markdown file on your account.\n\n"
-            "Tell it your name, your timezone, what you do, and anything else "
-            "worth knowing. You can edit it at any time from the Profile "
-            "page, and your assistant reads it too.\n\n"
-            "This step is optional. You can leave it empty and come back to "
-            "it later."
-        ),
-    },
-    OnboardingStep.LIFE_STORY: {
-        "title": "Your life story",
-        "body": (
-            "The second file is the narrative history: what shaped you, the "
-            "experiences, the relationships, and the turning points that "
-            "explain where you are coming from.\n\n"
-            "It is what lets your assistant respond with the right care when "
-            "a conversation turns personal.\n\n"
-            "It is optional, it stays private to your account, and you can "
-            "edit or delete it at any time."
+            "First, would you like to share a bit about yourself?\n\n"
+            "Your profile is what your agent reads to work with you better: "
+            "what you want to be called, a bit of background about yourself, "
+            "your preferences.\n\n"
+            "Write as much or as little as you are comfortable with. The text "
+            "stays on the server where Genesis Productivity runs, and it is "
+            "shared with your AI assistant.\n\n"
+            "You can change it any time on the Profile page."
         ),
     },
     OnboardingStep.PROJECTS: {
         "title": "Projects",
         "body": (
-            "A project is an envelope for tasks. Either because the tasks "
-            "belong together, or because the project is the outcome and the "
-            "tasks are the concrete actions leading to it.\n\n"
-            "A project can carry a start date and a deadline, so the app can "
-            "tell you what is overdue and what is coming.\n\n"
-            "Two starter projects are preselected below. Untick what you do "
-            "not want, or add your own."
+            "A project is a desired outcome: planning a holiday, furnishing a "
+            "kitchen. It can also be a large ongoing activity with no "
+            "definite outcome, like learning.\n\n"
+            "Think of a project as an envelope holding several smaller "
+            "activities. Working on the activities makes progress on the "
+            "project, and when they are all done the project reaches its "
+            "conclusion.\n\n"
+            "Two are worth starting with:\n\n"
+            "- **Personal**, for your personal tasks.\n"
+            "- **Learning**, for learning tasks.\n\n"
+            "Add them with the button below."
         ),
     },
     OnboardingStep.TASKS: {
         "title": "Tasks",
         "body": (
-            "A task is one specific commitment. It can carry up to three "
-            "dates, and they mean different things:\n\n"
-            "- **Scheduled start**: the task becomes an appointment and shows "
-            "up on the Calendar page.\n"
-            "- **Hard deadline**: a firm delivery date, surfaced on the "
-            "Dashboard when it gets close.\n"
-            "- **Assigned date**: the day you plan to act on it. This one is "
-            "unique to Genesis: it lets you plan when to act without "
-            "inventing a fake deadline.\n\n"
-            "Add one real task below, using the same form the Tasks page "
-            "uses."
+            "A task is one specific commitment: one thing you can do. It may "
+            "have a deadline.\n\n"
+            "In Genesis Productivity a calendar appointment, a meeting for "
+            "example, is a task too, with a scheduled start date and time.\n\n"
+            "There is one date other systems do not have: the assigned date. "
+            "It captures your decision to act on a task, independently of its "
+            "deadline. A task is due next Friday; you assign it to Wednesday "
+            "because that is the day you want to work on it. On Wednesday "
+            "Genesis Productivity reminds you that you assigned yourself to it."
         ),
     },
     OnboardingStep.JOURNALS: {
         "title": "Journal",
         "body": (
-            "The journal holds one entry per period: one per day, one per "
-            "week, one per month, one per year. The system refuses a second "
-            "entry for the same period, so the journal always answers the "
-            'question "what did I write on this day?".\n\n'
-            "- **Daily** for morning planning, notes during the day, and "
-            "reflection at night.\n"
-            "- **Monthly** and **yearly** for long-horizon plans.\n"
-            "- **Weekly** as the bridge between the monthly plan and the "
-            "daily plan.\n\n"
-            "The grid below shows which periods already have an entry."
+            "Journal entries are long-form notes: information worth keeping "
+            "that is not a task. Use them for your daily plan and reflection, "
+            "for long-term plans for the month or the year, or for thoughts "
+            "about a task or a project. Make them as simple or as elaborate "
+            "as you like.\n\n"
+            "Genesis Productivity supports daily, weekly, monthly, yearly, "
+            "and misc entries.\n\n"
+            "There is one entry per period. If you already wrote today's daily "
+            "entry, Genesis Productivity will tell you to edit it instead of "
+            "overwriting it."
         ),
     },
     OnboardingStep.CONTACTS: {
         "title": "Contacts",
         "body": (
-            "The contact book holds the people and organisations in your "
-            "life: names, emails, phone numbers, addresses, and notes.\n\n"
-            "The contacts are stored in CardDAV, so your assistant can read "
-            "them and add to them."
+            "Genesis Productivity keeps a contact book for you. Make it as "
+            "sophisticated as you want: a contact can be related to tasks, so "
+            "you can build a customer relationship management system, or it "
+            "can just be a list of the people you know."
         ),
     },
 }
 
 
-__all__ = ["LIFE_STORY_PROMPTS", "PROFILE_PROMPTS", "STARTER_PROJECTS", "STEP_COPY"]
+__all__ = ["PROFILE_PROMPTS", "STEP_COPY"]

@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,6 @@ class OnboardingStep(StrEnum):
 
     PURPOSE = "purpose"
     PROFILE = "profile"
-    LIFE_STORY = "life_story"
     PROJECTS = "projects"
     TASKS = "tasks"
     JOURNALS = "journals"
@@ -76,7 +75,6 @@ class OnboardingStep(StrEnum):
 STEP_ORDER: tuple[OnboardingStep, ...] = (
     OnboardingStep.PURPOSE,
     OnboardingStep.PROFILE,
-    OnboardingStep.LIFE_STORY,
     OnboardingStep.PROJECTS,
     OnboardingStep.TASKS,
     OnboardingStep.JOURNALS,
@@ -96,7 +94,6 @@ class OnboardingState(BaseModel):
         completed_at: When the wizard was completed.
         skipped_at: When the wizard was skipped.
         attempts: How many times the wizard has been started.
-        draft: Unsaved choices. Currently the project names.
     """
 
     status: OnboardingStatus = OnboardingStatus.SKIPPED
@@ -106,7 +103,6 @@ class OnboardingState(BaseModel):
     completed_at: datetime | None = None
     skipped_at: datetime | None = None
     attempts: int = 0
-    draft: dict[str, str | list[str]] = Field(default_factory=dict)
 
     model_config = {"extra": "ignore"}
 

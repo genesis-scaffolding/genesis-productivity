@@ -195,11 +195,16 @@ def list_tasks(
         - project_id -> X-PROJECT-ID exact match
         - status     -> STATUS exact match
         - search     -> SUMMARY substring match
-        - start/end  -> VTODO time-range (RFC 4791 §9.9). Matches tasks
-          whose DTSTART/DUE/DTEND falls in [start, end). The server-side
-          range is a SUPERSET of "scheduled in window"; callers wanting
-          strict DTSTART-only matching should additionally client-side
-          filter by ``task.scheduled_start in [start, end)``.
+        - start/end  -> VTODO time-range (RFC 4791 §9.9). The range is
+          matched against the *component's* time span, not against one
+          chosen property: the DTSTART+DUE span when both are present,
+          otherwise the DUE instant, otherwise COMPLETED, otherwise
+          CREATED (matched as ``[created, +inf)``). It is therefore a
+          PRE-FILTER, never a per-property filter: custom properties
+          such as ``X-ASSIGNED-DATE`` are never inspected, and one
+          range cannot express a conjunction of per-field windows. The
+          caller must apply the exact per-field predicate client-side
+          (e.g. ``task.scheduled_start in [start, end)``).
 
     Filters applied client-side:
         - completed_at_start/completed_at_end -> tasks whose

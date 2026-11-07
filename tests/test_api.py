@@ -330,22 +330,17 @@ def test_project_cancel_cascades_to_open_tasks(
     assert t3_after["status"] == "needs-action"
 
 
-def test_list_tasks_converts_date_query_params_to_datetime(
+def _spy_facade_capture(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> None:
-    """Regression: ISO date query params must reach the CalDAV facade
-    as ``datetime``, not ``str``.
+) -> list[dict]:
+    """Patch the productivity router with a spy facade and return the
+    list that records every ``list_tasks`` call.
 
-    Without the conversion, caldav's server-side time-range filter
-    raises ``AttributeError: 'str' object has no attribute
-    'strftime'`` and the request 500s. Pinned by spying on
-    ``list_tasks`` directly, since the mock backend ignores
-    ``start``/``end`` and therefore would not catch this bug.
+    The mock backend ignores ``start``/``end``, so the only way to pin
+    the server-side range the router asks for is to spy on the facade
+    call itself.
     """
-    from datetime import datetime as _datetime
-
-    from genesis.api.app import app as _app
     from genesis.api.routers import productivity as _router
     from genesis.users.store import UserStore
 
@@ -367,29 +362,208 @@ def test_list_tasks_converts_date_query_params_to_datetime(
     UserStore(users_path).add("default", "test-pw")
     monkeypatch.setattr("genesis.users.store._default_store", UserStore(users_path))
     monkeypatch.setattr(_router, "_facade", lambda subject: _SpyFacade())
+    return captured
+
+
+def test_list_tasks_converts_date_query_params_to_datetime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Regression: ISO date query params must reach the CalDAV facade
+    as ``datetime``, not ``str``.
+
+    Without the conversion, caldav's server-side time-range filter
+    raises ``AttributeError: 'str' object has no attribute
+    'strftime'`` and the request 500s. Pinned by spying on
+    ``list_tasks`` directly, since the mock backend ignores
+    ``start``/``end`` and therefore would not catch this bug.
+
+    An ``assigned_date`` query sends no server-side range at all (the
+    CalDAV time-range never inspects ``X-ASSIGNED-DATE``); a
+    ``hard_deadline`` query sends a tz-aware ``datetime`` range.
+    """
+    from datetime import datetime as _datetime
+
+    from genesis.api.app import app as _app
+
+    captured = _spy_facade_capture(monkeypatch, tmp_path)
 
     with TestClient(_app) as client:
-        token = client.post(
-            "/auth/login",
-            data={
-                "username": "default",
-                "password": "test-pw",
-                "grant_type": "password",
-            },
-        ).json()["access_token"]
+        token = _login(client)
+        headers = _auth(token)
 
-        resp = client.get(
+        assigned = client.get(
             "/productivity/tasks?assigned_date_start=2026-09-01&assigned_date_end=2026-09-30",
-            headers={"Authorization": f"Bearer {token}"},
+            headers=headers,
+        )
+        deadline = client.get(
+            "/productivity/tasks?hard_deadline_start=2026-09-01T00:00:00.000Z&hard_deadline_end=2026-09-30T00:00:00.000Z",
+            headers=headers,
+        )
+
+    assert assigned.status_code == 200
+    assert deadline.status_code == 200
+    assert len(captured) == 2
+
+    assigned_call = captured[0]
+    assert assigned_call["start"] is None
+    assert assigned_call["end"] is None
+
+    deadline_call = captured[1]
+    assert isinstance(deadline_call["start"], _datetime)
+    assert isinstance(deadline_call["end"], _datetime)
+    assert deadline_call["start"].tzinfo is not None
+    assert deadline_call["end"].tzinfo is not None
+
+
+def test_list_tasks_does_not_push_assigned_date_into_the_server_range(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Regression: the ``assigned_date`` window must never become the
+    CalDAV server-side range.
+
+    The RFC 4791 time-range never inspects ``X-ASSIGNED-DATE``; a
+    task with neither DTSTART nor DUE is matched on its CREATED
+    timestamp. Pushing the assigned-date window into the range
+    therefore filtered on creation time and dropped every task
+    created after 00:00 UTC on its assigned day.
+    """
+    from genesis.api.app import app as _app
+
+    captured = _spy_facade_capture(monkeypatch, tmp_path)
+
+    with TestClient(_app) as client:
+        token = _login(client)
+        resp = client.get(
+            "/productivity/tasks?assigned_date_start=2026-11-01&assigned_date_end=2026-11-07",
+            headers=_auth(token),
         )
 
     assert resp.status_code == 200
     assert len(captured) == 1
     call = captured[0]
-    assert isinstance(call["start"], _datetime)
-    assert isinstance(call["end"], _datetime)
+    assert call["start"] is None
+    assert call["end"] is None
+
+
+def test_list_tasks_builds_the_server_range_from_the_deadline_window(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The server-side range comes from the deadline window and is
+    widened by one day on each side.
+
+    The client-side filter compares whole calendar days while the
+    CalDAV range match is half-open (RFC 4791 9.9), so the range is
+    ``[lo - 1 day, hi + 2 days)`` to stay a strict superset.
+    """
+    from datetime import UTC, datetime
+
+    from genesis.api.app import app as _app
+
+    captured = _spy_facade_capture(monkeypatch, tmp_path)
+
+    with TestClient(_app) as client:
+        token = _login(client)
+        resp = client.get(
+            "/productivity/tasks?hard_deadline_start=2026-11-01T00:00:00.000Z&hard_deadline_end=2026-11-07T00:00:00.000Z",
+            headers=_auth(token),
+        )
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["start"] == datetime(2026, 10, 31, 0, 0, tzinfo=UTC)
+    assert call["end"] == datetime(2026, 11, 9, 0, 0, tzinfo=UTC)
     assert call["start"].tzinfo is not None
     assert call["end"].tzinfo is not None
+
+
+def test_list_tasks_combines_deadline_and_scheduled_windows_as_a_union(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Two disjoint windows are unioned into one envelope, not
+    collapsed onto the first one.
+
+    One CalDAV time-range cannot express a conjunction of per-field
+    windows, so the router sends the union envelope as a superset and
+    enforces the conjunction client-side.
+    """
+    from datetime import UTC, datetime
+
+    from genesis.api.app import app as _app
+
+    captured = _spy_facade_capture(monkeypatch, tmp_path)
+
+    with TestClient(_app) as client:
+        token = _login(client)
+        resp = client.get(
+            "/productivity/tasks"
+            "?hard_deadline_start=2026-11-01T00:00:00.000Z&hard_deadline_end=2026-11-07T00:00:00.000Z"
+            "&scheduled_start_start=2026-12-01T00:00:00.000Z&scheduled_start_end=2026-12-05T00:00:00.000Z",
+            headers=_auth(token),
+        )
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    call = captured[0]
+    # The earlier lower bound and the later upper bound win.
+    assert call["start"] == datetime(2026, 10, 31, 0, 0, tzinfo=UTC)
+    assert call["end"] == datetime(2026, 12, 7, 0, 0, tzinfo=UTC)
+
+
+def test_list_tasks_combines_assigned_and_deadline_windows_with_and_semantics(
+    api_server_with_mock: tuple[TestClient, MockCalDAVFacade],
+) -> None:
+    """The three date windows are ANDed client-side.
+
+    Seeded: (a) assigned in the window and due in the window,
+    (b) assigned in the window but with no deadline,
+    (c) due in the window but assigned outside it. Only (a) comes
+    back.
+    """
+    from datetime import UTC, date, datetime
+
+    from genesis.entities import TaskCreate
+
+    client, mock = api_server_with_mock
+    token = _login(client)
+    headers = _auth(token)
+
+    both = mock.create_task(
+        TaskCreate(
+            title="assigned and due",
+            assigned_date=date(2026, 11, 7),
+            hard_deadline=datetime(2026, 11, 10, 12, 0, tzinfo=UTC),
+        )
+    )
+    mock.create_task(
+        TaskCreate(
+            title="assigned only",
+            assigned_date=date(2026, 11, 7),
+        )
+    )
+    mock.create_task(
+        TaskCreate(
+            title="due only",
+            assigned_date=date(2026, 10, 1),
+            hard_deadline=datetime(2026, 11, 10, 12, 0, tzinfo=UTC),
+        )
+    )
+
+    resp = client.get(
+        "/productivity/tasks"
+        "?assigned_date_start=2026-11-01&assigned_date_end=2026-11-07"
+        "&hard_deadline_start=2026-11-09T00:00:00.000Z&hard_deadline_end=2026-11-11T00:00:00.000Z",
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert {item["uid"] for item in body["items"]} == {both.uid}
+    assert body["total"] == 1
 
 
 def test_list_tasks_rejects_malformed_date_query_param(
@@ -644,6 +818,156 @@ def test_list_tasks_filters_by_completed_at_round_trip(
     )
     assert resp_empty.status_code == 200
     assert all(item["uid"] != in_uid for item in resp_empty.json()["items"])
+
+
+@pytest.mark.integration
+def test_list_tasks_assigned_date_window_returns_task_created_today(
+    api_server_real: TestClient,
+) -> None:
+    """Regression: a task assigned today must be returned by the today
+    window, even though it was created after 00:00 UTC.
+
+    The CalDAV time-range is a pre-filter: pushing the assigned-date
+    window into it made Radicale match the task's CREATED timestamp
+    instead, which dropped every task created later that day.
+    """
+    from datetime import UTC, datetime
+
+    token = _login(api_server_real)
+    headers = _auth(token)
+    today = datetime.now(UTC).date()
+
+    created = api_server_real.post(
+        "/productivity/tasks",
+        json={"title": "assigned today", "assigned_date": today.isoformat()},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    uid = created.json()["uid"]
+
+    resp = api_server_real.get(
+        f"/productivity/tasks?status=needs-action&assigned_date_start={today}&assigned_date_end={today}",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert uid in {item["uid"] for item in body["items"]}
+
+
+@pytest.mark.integration
+def test_list_tasks_assigned_date_window_ignores_creation_time(
+    api_server_real: TestClient,
+) -> None:
+    """The window follows the assignment date, not the creation date.
+
+    The task is assigned yesterday but stored today, so its CREATED
+    timestamp is later than its assigned date. It must still be found
+    by the yesterday window: the CalDAV time-range must not filter on
+    CREATED.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    token = _login(api_server_real)
+    headers = _auth(token)
+    today = datetime.now(UTC).date()
+    yesterday = today - timedelta(days=1)
+
+    created = api_server_real.post(
+        "/productivity/tasks",
+        json={"title": "assigned yesterday", "assigned_date": yesterday.isoformat()},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    uid = created.json()["uid"]
+
+    # The yesterday window holds the task: its assignment date is in
+    # the window, its creation date is not.
+    resp = api_server_real.get(
+        f"/productivity/tasks?assigned_date_start={yesterday}&assigned_date_end={yesterday}",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert uid in {item["uid"] for item in resp.json()["items"]}
+
+    # A window that spans both days holds it too.
+    resp = api_server_real.get(
+        f"/productivity/tasks?assigned_date_start={yesterday}&assigned_date_end={today}",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert uid in {item["uid"] for item in resp.json()["items"]}
+
+    # A window that ends before the assignment date does not hold it,
+    # even though the task was created recently.
+    older = yesterday - timedelta(days=1)
+    resp = api_server_real.get(
+        f"/productivity/tasks?assigned_date_start={older}&assigned_date_end={older}",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert uid not in {item["uid"] for item in resp.json()["items"]}
+
+
+@pytest.mark.integration
+def test_list_tasks_deadline_window_includes_a_deadline_on_the_last_day(
+    api_server_real: TestClient,
+) -> None:
+    """Boundary guard: a task due on the last day of the window, at
+    18:00, must be returned.
+
+    Radicale's DUE-only branch matches the deadline against the range
+    end, so a range ending at midnight of that day drops the task.
+    The server-side range is widened by a day for that reason.
+    """
+    token = _login(api_server_real)
+    headers = _auth(token)
+
+    created = api_server_real.post(
+        "/productivity/tasks",
+        json={"title": "due on the last day", "hard_deadline": "2026-11-07T18:00:00Z"},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    uid = created.json()["uid"]
+
+    resp = api_server_real.get(
+        "/productivity/tasks?hard_deadline_start=2026-11-01T00:00:00.000Z&hard_deadline_end=2026-11-07T00:00:00.000Z",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert uid in {item["uid"] for item in body["items"]}
+
+
+@pytest.mark.integration
+def test_list_tasks_deadline_window_includes_a_deadline_at_the_window_start(
+    api_server_real: TestClient,
+) -> None:
+    """Boundary guard: a task due exactly at the first instant of the
+    window must be returned.
+
+    Radicale's DUE-only branch tests ``range_start < due`` strictly,
+    so a range starting at the deadline itself drops the task. The
+    server-side range starts a day earlier for that reason.
+    """
+    token = _login(api_server_real)
+    headers = _auth(token)
+
+    created = api_server_real.post(
+        "/productivity/tasks",
+        json={"title": "due at the window start", "hard_deadline": "2026-11-01T00:00:00Z"},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    uid = created.json()["uid"]
+
+    resp = api_server_real.get(
+        "/productivity/tasks?hard_deadline_start=2026-11-01T00:00:00.000Z&hard_deadline_end=2026-11-07T00:00:00.000Z",
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert uid in {item["uid"] for item in body["items"]}
 
 
 # ---------------------------------------------------------------------------

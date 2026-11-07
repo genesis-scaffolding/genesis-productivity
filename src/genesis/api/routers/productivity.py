@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 import threading
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -123,25 +123,42 @@ def _facade_cache_clear() -> None:
         _facade_cache.clear()
 
 
-def _to_caldav_datetime(value: date | datetime | None) -> datetime | None:
-    """Coerce a date or datetime query param to a UTC datetime for the
-    CalDAV facade.
+def _server_range(
+    hard_deadline_start: datetime | None,
+    hard_deadline_end: datetime | None,
+    scheduled_start_start: datetime | None,
+    scheduled_start_end: datetime | None,
+) -> tuple[datetime | None, datetime | None]:
+    """Build the CalDAV pre-filter window (UTC) for the task list.
 
-    The CalDAV library only accepts ``datetime``; date-only inputs
-    become the start of day in UTC. Naive datetimes are assumed to
-    be UTC (the API wire format is ``YYYY-MM-DDTHH:MM:SS.mmmZ``).
-    None passes through.
+    Returns ``(start, end)`` for ``CalDAVFacade.list_tasks``. The
+    window is a *superset* of the requested predicate; the exact
+    per-field filter is applied client-side by the caller.
 
-    Pydantic parses the query string for us — invalid input returns
-    a 422 before this function runs.
+    Only the deadline and scheduled-start windows take part.
+    ``assigned_date`` is a plain date stored as the custom
+    ``X-ASSIGNED-DATE`` property, which the RFC 4791 time-range
+    never inspects; a task with neither DTSTART nor DUE falls back
+    to its CREATED timestamp in the range match. Pushing an
+    assigned-date window in would therefore filter on creation
+    time, not on the assignment date.
+
+    The two windows are combined as a union envelope: one CalDAV
+    time-range cannot express a conjunction of per-field windows,
+    so the envelope is sent as a superset and the caller enforces
+    the conjunction. It is widened by one day on each side because
+    the client-side filter compares whole calendar days while the
+    range match is half-open (RFC 4791 9.9).
     """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value
-    return datetime.combine(value, datetime.min.time(), tzinfo=UTC)
+    starts = [b.date() for b in (hard_deadline_start, scheduled_start_start) if b is not None]
+    ends = [b.date() for b in (hard_deadline_end, scheduled_start_end) if b is not None]
+    if not starts and not ends:
+        return None, None
+    lo = min(starts) if starts else None
+    hi = max(ends) if ends else None
+    start = datetime.combine(lo - timedelta(days=1), time.min, tzinfo=UTC) if lo is not None else None
+    end = datetime.combine(hi + timedelta(days=2), time.min, tzinfo=UTC) if hi is not None else None
+    return start, end
 
 
 # ---------------------------------------------------------------------------
@@ -407,11 +424,14 @@ def list_tasks(
 ) -> TaskListOut:
     facade = _facade(subject)
     try:
+        server_start, server_end = _server_range(
+            hard_deadline_start, hard_deadline_end, scheduled_start_start, scheduled_start_end
+        )
         all_tasks = facade.caldav.list_tasks(
             project_id=project_id,
             status=wire_to_task_status(task_status) if task_status is not None else None,
-            start=_to_caldav_datetime(assigned_date_start or hard_deadline_start or scheduled_start_start),
-            end=_to_caldav_datetime(assigned_date_end or hard_deadline_end or scheduled_start_end),
+            start=server_start,
+            end=server_end,
             completed_at_start=completed_at_start,
             completed_at_end=completed_at_end,
             sort_by=_task_sort_field(sort_by),
@@ -431,9 +451,12 @@ def list_tasks(
                 if needle in t.title.lower() or (t.description is not None and needle in t.description.lower())
             ]
 
-        # Date filters that span multiple fields can't be expressed by
-        # a single Facade.list_tasks(start, end) call. Apply those
-        # client-side here.
+        # The CalDAV time-range is only a pre-filter: it matches the
+        # component's DTSTART/DUE span, never a single property such as
+        # X-ASSIGNED-DATE, and it cannot express a conjunction of
+        # per-field windows. The AND of the three windows below is
+        # therefore applied client-side here, and this block is the
+        # source of truth for the result.
         def in_range(
             dt: date | datetime | None,
             start: date | datetime | None,
@@ -1017,9 +1040,7 @@ def get_statistics(
         # CalDAV REPORT storm (55+ tasks => 55+ round-trips => ~20s). One
         # REPORT returns every task; missing ids (deleted) fall back below.
         all_task_titles = {t.uid: t.title for t in facade.caldav.list_tasks()}
-        task_titles = {
-            tid: all_task_titles.get(tid, "(deleted)") for tid in task_ids
-        }
+        task_titles = {tid: all_task_titles.get(tid, "(deleted)") for tid in task_ids}
 
         rollup = compute_rollup(
             entries=completed,

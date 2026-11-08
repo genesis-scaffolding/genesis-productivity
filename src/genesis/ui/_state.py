@@ -37,6 +37,7 @@ def _shutdown_all() -> None:
     # empty. ADR-029.
     try:
         from genesis.focus_scheduler.runtime import stop_all
+
         stop_all()
     except Exception:
         pass

@@ -31,7 +31,7 @@ from genesis.category.enums import TimeLogCategory
 from genesis.entities import TimeLogEntry, TimeLogEntryUpdate
 from genesis.stats import Period, compute_rollup
 from genesis.tz import format_local
-from genesis.ui._render import session_log_dialog
+from genesis.ui._render import render_sessions_kpi, session_log_dialog
 from genesis.ui._state import get_facade
 
 facade = get_facade()
@@ -46,10 +46,11 @@ st.caption("Productivity metrics from completed focus sessions.")
 # -----------------------------------------------------------------------------
 
 
-PERIOD_OPTIONS = ["This week", "This month", "Last 30 days", "All time"]
+PERIOD_OPTIONS = ["Today", "This week", "This month", "Last 30 days", "All time"]
 PERIOD_DEFAULT = "This week"
 
 _PERIOD_LABEL_TO_ENUM = {
+    "Today": Period.TODAY,
     "This week": Period.THIS_WEEK,
     "This month": Period.THIS_MONTH,
     "Last 30 days": Period.LAST_30_DAYS,
@@ -129,10 +130,10 @@ with kpi_cols[0]:
         st.markdown(f"## {_fmt_minutes(rollup.kpis.total_minutes)}")
         st.caption(f"Across {rollup.kpis.session_count} sessions")
 with kpi_cols[1]:
-    with st.container(border=True):
-        st.caption("Sessions")
-        st.markdown(f"## {rollup.kpis.session_count}")
-        st.caption("Completed in period")
+    render_sessions_kpi(
+        count=rollup.kpis.session_count,
+        caption="Completed in period",
+    )
 with kpi_cols[2]:
     with st.container(border=True):
         st.caption("Avg session")

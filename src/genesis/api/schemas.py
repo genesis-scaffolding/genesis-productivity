@@ -326,6 +326,7 @@ class StatisticsPeriod(StrEnum):
     and decoupled from internal renames.
     """
 
+    TODAY = "today"
     THIS_WEEK = "this-week"
     THIS_MONTH = "this-month"
     LAST_30_DAYS = "last-30-days"

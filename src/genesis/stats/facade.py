@@ -36,6 +36,7 @@ from ..tz import to_local, to_utc
 class Period(StrEnum):
     """Period selector for the rollup. Values match the wire enum."""
 
+    TODAY = "today"
     THIS_WEEK = "this-week"
     THIS_MONTH = "this-month"
     LAST_30_DAYS = "last-30-days"
@@ -68,6 +69,9 @@ def period_bounds(period: Period, today: date) -> PeriodBounds:
     the UI does).
     """
     today_start = to_utc(_time_combine(today, _time.min))
+    if period == Period.TODAY:
+        tomorrow_start = to_utc(_time_combine(today + timedelta(days=1), _time.min))
+        return PeriodBounds(start=today_start, end=tomorrow_start)
     if period == Period.THIS_WEEK:
         week_start_date = today - timedelta(days=today.weekday())
         start = to_utc(_time_combine(week_start_date, _time.min))

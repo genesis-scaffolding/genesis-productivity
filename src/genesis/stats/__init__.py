@@ -10,6 +10,7 @@ Period labels match the UI segmented control exactly so a caller can
 ask "what does this-week look like?" without knowing the underlying
 window math:
 
+    - ``today``         local midnight today through local midnight tomorrow
     - ``this-week``     Monday of the current week through end of today
     - ``this-month``    1st of the current month through end of today
     - ``last-30-days``  29 days ago through end of today

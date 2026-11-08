@@ -13,7 +13,7 @@ detail endpoints.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -154,7 +154,7 @@ def test_statistics_with_one_completed_session(
 
 @pytest.mark.parametrize(
     "period",
-    ["this-week", "this-month", "last-30-days", "all-time"],
+    ["today", "this-week", "this-month", "last-30-days", "all-time"],
 )
 def test_statistics_accepts_each_period_label(api_server: TestClient, period: str) -> None:
     token = _login(api_server)
@@ -164,6 +164,37 @@ def test_statistics_accepts_each_period_label(api_server: TestClient, period: st
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["period"] == period
+
+
+def test_statistics_today_counts_only_todays_sessions(
+    api_server_with_mock: tuple[TestClient, MockCalDAVFacade],
+) -> None:
+    client, mock = api_server_with_mock
+    token = _login(client)
+    today = date.today()
+    today_start = datetime.combine(today, time(12), tzinfo=UTC)
+
+    for label, start in (
+        ("yesterday", today_start - timedelta(days=1)),
+        ("today", today_start),
+        ("tomorrow", today_start + timedelta(days=1)),
+    ):
+        _seed_session(
+            mock,
+            label=label,
+            start=start,
+            duration_minutes=25,
+        )
+
+    resp = client.get(
+        "/productivity/statistics?period=today",
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["period"] == "today"
+    assert body["kpis"]["session_count"] == 1
+    assert [session["label"] for session in body["recent"]] == ["today"]
 
 
 def test_statistics_rejects_unknown_period(api_server: TestClient) -> None:

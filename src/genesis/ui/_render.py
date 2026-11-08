@@ -11,7 +11,8 @@ cleanly.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Any
@@ -70,6 +71,14 @@ def status_badge(status: StrEnum | str) -> None:
 def _form_key(prefix: str, uid: str) -> str:
     """Stable widget key for a given (form, entity) pair."""
     return f"{prefix}_{uid or 'new'}"
+
+
+def render_sessions_kpi(*, count: int, caption: str) -> None:
+    """Render the shared Sessions KPI."""
+    with st.container(border=True):
+        st.caption("Sessions")
+        st.markdown(f"## {count}")
+        st.caption(caption)
 
 
 # -----------------------------------------------------------------------------
@@ -856,6 +865,117 @@ def session_log_dialog(*, task: Task | None = None) -> None:
 # -----------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class FocusTemplate:
+    """The last successfully started focus form's reusable values.
+
+    Duration is deliberately excluded. ``label_baseline`` records the
+    automatically selected label so a later task change can tell a
+    task-derived label from a user-typed one.
+    """
+
+    label: str
+    task_uid: str | None
+    category: TimeLogCategory
+    mode: TimeLogMode
+    label_baseline: str
+
+
+@dataclass(frozen=True)
+class FocusFormValues:
+    """Resolved values used to seed the focus form."""
+
+    task_uid: str | None
+    label: str
+    label_baseline: str
+    category: TimeLogCategory
+    mode: TimeLogMode
+
+
+def focus_template_state_key(username: str) -> str:
+    """Return the per-user session-state key for the focus template."""
+    return f"_foc_last_template_{username}"
+
+
+def load_focus_template(
+    state: MutableMapping[Any, Any],
+    username: str,
+) -> FocusTemplate | None:
+    """Load one user's focus template from a state mapping."""
+    value = state.get(focus_template_state_key(username))
+    return value if isinstance(value, FocusTemplate) else None
+
+
+def save_focus_template(
+    state: MutableMapping[Any, Any],
+    username: str,
+    template: FocusTemplate,
+) -> None:
+    """Store one user's focus template in a state mapping."""
+    state[focus_template_state_key(username)] = template
+
+
+def resolve_focus_form_values(
+    *,
+    template: FocusTemplate | None,
+    open_tasks: list[Task],
+    explicit_task: Task | None = None,
+) -> FocusFormValues:
+    """Resolve focus-form defaults for an explicit or generic launch.
+
+    An explicit task always wins and keeps the existing task-derived
+    label and category defaults. A generic launch uses the previous
+    template. If its task is no longer open, the task falls back to
+    unaligned while the other template values are retained.
+    """
+    if explicit_task is not None:
+        selected = next((candidate for candidate in open_tasks if candidate.uid == explicit_task.uid), None)
+        if selected is None:
+            return FocusFormValues(
+                task_uid=None,
+                label="Focus session",
+                label_baseline="Focus session",
+                category=TimeLogCategory.OTHER,
+                mode=TimeLogMode.COUNTDOWN,
+            )
+        return FocusFormValues(
+            task_uid=selected.uid,
+            label=selected.title,
+            label_baseline=selected.title,
+            category=TimeLogCategory.WORK,
+            mode=TimeLogMode.COUNTDOWN,
+        )
+
+    if template is None:
+        return FocusFormValues(
+            task_uid=None,
+            label="Focus session",
+            label_baseline="Focus session",
+            category=TimeLogCategory.OTHER,
+            mode=TimeLogMode.COUNTDOWN,
+        )
+
+    selected = next((candidate for candidate in open_tasks if candidate.uid == template.task_uid), None)
+    return FocusFormValues(
+        task_uid=selected.uid if selected is not None else None,
+        label=template.label,
+        label_baseline=template.label_baseline,
+        category=template.category,
+        mode=template.mode,
+    )
+
+
+def focus_label_for_task(
+    current_label: str,
+    baseline_label: str,
+    task_label: str,
+) -> str:
+    """Update a task-derived label while preserving a custom label."""
+    if current_label == baseline_label:
+        return task_label
+    return current_label
+
+
 # Keys for the focus-create dialog widgets. The dialog is opened
 # from multiple entry points (the Focus page button and the Tasks
 # table "Focus" action), so the keys are intentionally unprefixed
@@ -872,6 +992,16 @@ _FOCUS_DIALOG_LABEL_BASELINE_KEY = "_foc_label_baseline"
 _FOCUS_DIALOG_MODE_KEY = "_foc_mode"
 _FOCUS_DIALOG_DUR_KEY = "_foc_dur"
 _FOCUS_DIALOG_CAT_KEY = "_foc_cat"
+# Tracks the selected task UID independently of the display label so
+# the label auto-update only runs when the task actually changes.
+_FOCUS_DIALOG_SELECTED_TASK_UID_KEY = "_foc_selected_task_uid"
+# Marks that this dialog launch has already been seeded. Streamlit
+# reruns the dialog body after widget interactions; reseeding on every
+# rerun would overwrite the user's in-flight changes.
+_FOCUS_DIALOG_OPEN_KEY = "_foc_open"
+
+_FOCUS_MODE_COUNTDOWN = "Count down"
+_FOCUS_MODE_COUNTUP = "Count up"
 
 # Key the Focus page reads to decide whether to open the
 # completion dialog after a session ends (auto-stop or manual
@@ -917,37 +1047,70 @@ def build_focus_session_entry(
     )
 
 
+def _session_username() -> str:
+    """Return the authenticated username from session state."""
+    username = st.session_state.get("username")
+    if not isinstance(username, str) or not username:
+        raise RuntimeError("focus template requires an authenticated session")
+    return username
+
+
+def _seed_focus_dialog_state(values: FocusFormValues, tasks: list[Task]) -> None:
+    """Seed the disposable focus-form widget state for one launch."""
+    task_label = "(unaligned)"
+    for candidate in tasks:
+        if candidate.uid == values.task_uid:
+            task_label = candidate.title
+            break
+
+    st.session_state[_FOCUS_DIALOG_TASK_KEY] = task_label
+    st.session_state[_FOCUS_DIALOG_LABEL_KEY] = values.label
+    st.session_state[_FOCUS_DIALOG_LABEL_BASELINE_KEY] = values.label_baseline
+    st.session_state[_FOCUS_DIALOG_CAT_KEY] = values.category.value
+    st.session_state[_FOCUS_DIALOG_MODE_KEY] = (
+        _FOCUS_MODE_COUNTUP if values.mode == TimeLogMode.COUNTUP else _FOCUS_MODE_COUNTDOWN
+    )
+    st.session_state[_FOCUS_DIALOG_SELECTED_TASK_UID_KEY] = values.task_uid
+    st.session_state[_FOCUS_DIALOG_OPEN_KEY] = True
+
+
 def _clear_focus_dialog_state() -> None:
     """Drop the focus-create dialog widget keys from session state.
 
-    Called from Start and Cancel so the next open starts with the
-    task-based defaults instead of the previous session's values.
+    The per-user focus template is intentionally retained. It is
+    separate from these disposable widget values and is replaced only
+    after a successful focus-form start.
     """
     for key in (
         _FOCUS_DIALOG_TASK_KEY,
         _FOCUS_DIALOG_LABEL_KEY,
         _FOCUS_DIALOG_LABEL_BASELINE_KEY,
+        _FOCUS_DIALOG_MODE_KEY,
         _FOCUS_DIALOG_CAT_KEY,
+        _FOCUS_DIALOG_SELECTED_TASK_UID_KEY,
+        _FOCUS_DIALOG_OPEN_KEY,
     ):
         st.session_state.pop(key, None)
 
 
 @st.dialog("Start focus session", width="large", on_dismiss=_clear_focus_dialog_state)
-def focus_create_dialog(*, task: Task | None = None) -> None:
+def focus_create_dialog(*, task: Task | None = None, use_previous_template: bool = False) -> None:
     """Open the new-session dialog. Call from a button body.
 
     When ``task`` is supplied, the dialog pre-selects it, defaults
     the label to ``task.title`` (editable), and defaults the
-    category to ``WORK``. Without a task, the label defaults to
-    ``"Focus session"`` and the category defaults to ``OTHER``.
+    category to ``WORK``. The explicit task takes precedence over any
+    previous template.
 
-    Widget state is intentionally NOT reset at the top of this
-    function: Streamlit re-runs the dialog body when the user
-    interacts with any widget inside it, and popping the keys
-    here would erase the user's in-flight changes (most visibly,
-    the task selectbox picks). Instead, Start and Cancel both
-    call ``_clear_focus_dialog_state`` so the next open starts
-    with task-based defaults.
+    A generic launch with ``use_previous_template=True`` starts from
+    the current user's last successfully started focus form. A missing
+    task falls back to unaligned while retaining the template's other
+    values.
+
+    Widget state is seeded only on the first execution of a dialog
+    launch. Streamlit re-runs the dialog body when the user interacts
+    with a widget, and reseeding on every rerun would erase the
+    user's in-flight changes.
     """
     facade = get_facade()
     caldav = facade.caldav
@@ -958,46 +1121,56 @@ def focus_create_dialog(*, task: Task | None = None) -> None:
     tasks = [t for t in caldav.list_tasks() if t.status in (TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS)]
     task_options: list[Task | None] = [None, *tasks]
     task_labels = ["(unaligned)"] + [t.title for t in tasks]
-    initial_idx = 0
-    if task is not None:
-        for i, candidate in enumerate(task_options):
-            if candidate is not None and candidate.uid == task.uid:
-                initial_idx = i
-                break
+
+    if _FOCUS_DIALOG_OPEN_KEY not in st.session_state:
+        template = None
+        if use_previous_template:
+            template = load_focus_template(st.session_state, _session_username())
+        values = resolve_focus_form_values(
+            template=template,
+            open_tasks=tasks,
+            explicit_task=task,
+        )
+        _seed_focus_dialog_state(values, tasks)
 
     selected_label = st.selectbox(
         "Task",
         task_labels,
-        index=initial_idx,
         key=_FOCUS_DIALOG_TASK_KEY,
         help="Pick a task to count this session against it, or leave unaligned.",
     )
     selected_task = task_options[task_labels.index(selected_label)]
+    selected_task_uid = selected_task.uid if selected_task is not None else None
 
     # Label and category defaults depend on whether a task is
     # selected. The label is editable; the category is the
     # recommended start but the user can pick anything.
     label_default = selected_task.title if selected_task is not None else "Focus session"
-    category_default = TimeLogCategory.WORK if selected_task is not None else TimeLogCategory.OTHER
     category_options = [c.value for c in TimeLogCategory]
 
-    # Auto-update the label when the task changes, unless the user
-    # has typed a custom value. The baseline records the value we
-    # last set automatically; if the current label still equals it,
-    # the user has not edited, so we replace it with the new task's
-    # expected label. If they have edited, the comparison fails and
-    # the typed value is preserved.
-    if _FOCUS_DIALOG_LABEL_BASELINE_KEY not in st.session_state:
-        st.session_state[_FOCUS_DIALOG_LABEL_BASELINE_KEY] = label_default
-    baseline_label = st.session_state[_FOCUS_DIALOG_LABEL_BASELINE_KEY]
+    # Auto-update the label only when the selected task changes. The
+    # baseline records the value we last set automatically; if the
+    # current label still equals it, the user has not edited, so we
+    # replace it with the new task's expected label. If they have
+    # edited, the comparison fails and the typed value is preserved.
     current_label = st.session_state.get(_FOCUS_DIALOG_LABEL_KEY, label_default)
-    if current_label == baseline_label:
-        st.session_state[_FOCUS_DIALOG_LABEL_KEY] = label_default
-    st.session_state[_FOCUS_DIALOG_LABEL_BASELINE_KEY] = label_default
+    baseline_label = st.session_state.get(_FOCUS_DIALOG_LABEL_BASELINE_KEY, label_default)
+    if not isinstance(current_label, str):
+        current_label = label_default
+    if not isinstance(baseline_label, str):
+        baseline_label = label_default
+    previous_task_uid = st.session_state.get(_FOCUS_DIALOG_SELECTED_TASK_UID_KEY)
+    if previous_task_uid != selected_task_uid:
+        st.session_state[_FOCUS_DIALOG_LABEL_KEY] = focus_label_for_task(
+            current_label,
+            baseline_label,
+            label_default,
+        )
+        st.session_state[_FOCUS_DIALOG_LABEL_BASELINE_KEY] = label_default
+        st.session_state[_FOCUS_DIALOG_SELECTED_TASK_UID_KEY] = selected_task_uid
 
     label = st.text_input(
         "Session label",
-        value=label_default,
         key=_FOCUS_DIALOG_LABEL_KEY,
         help=(
             "Shown on the active session card and in the time log. "
@@ -1006,12 +1179,11 @@ def focus_create_dialog(*, task: Task | None = None) -> None:
     )
     mode_label = st.radio(
         "Mode",
-        ["Count down", "Count up"],
-        index=0,
+        [_FOCUS_MODE_COUNTDOWN, _FOCUS_MODE_COUNTUP],
         key=_FOCUS_DIALOG_MODE_KEY,
         horizontal=True,
     )
-    is_countdown = mode_label == "Count down"
+    is_countdown = mode_label == _FOCUS_MODE_COUNTDOWN
     duration = st.number_input(
         "Duration (minutes)",
         min_value=1,
@@ -1024,7 +1196,6 @@ def focus_create_dialog(*, task: Task | None = None) -> None:
     st.selectbox(
         "Category",
         category_options,
-        index=category_options.index(category_default.value),
         key=_FOCUS_DIALOG_CAT_KEY,
         format_func=lambda v: v.capitalize(),
     )
@@ -1040,6 +1211,7 @@ def focus_create_dialog(*, task: Task | None = None) -> None:
         chosen_category = TimeLogCategory(
             st.session_state[_FOCUS_DIALOG_CAT_KEY],
         )
+        username = _session_username()
         entry = caldav.create_time_log_entry(
             build_focus_session_entry(
                 label=label_clean,
@@ -1048,6 +1220,20 @@ def focus_create_dialog(*, task: Task | None = None) -> None:
                 countdown_minutes=int(duration) if is_countdown else None,
                 category=chosen_category,
             )
+        )
+        label_baseline = st.session_state.get(_FOCUS_DIALOG_LABEL_BASELINE_KEY, label_clean)
+        if not isinstance(label_baseline, str):
+            label_baseline = label_clean
+        save_focus_template(
+            st.session_state,
+            username,
+            FocusTemplate(
+                label=label_clean,
+                task_uid=selected_task_uid,
+                category=chosen_category,
+                mode=mode,
+                label_baseline=label_baseline,
+            ),
         )
         # Manual-testing convenience: notify on Start so the user
         # does not have to wait 30 minutes to see the wiring

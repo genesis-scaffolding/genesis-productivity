@@ -10,8 +10,8 @@ The page renders:
   starting a new session. The same dialog is reachable from the
   Tasks page's per-row "Focus" action; here it opens with no
   pre-selected task.
-- A live fragment that shows all active sessions, ticking every
-  second, with Stop and Discard buttons.
+- A live fragment that shows a Sessions-today KPI and all active
+  sessions, ticking every second, with Stop and Discard buttons.
 
 Timing-driven work (countdown auto-stop, 30-minute milestone
 notifications) lives in the server-side :class:`FocusScheduler`
@@ -25,7 +25,7 @@ the same notifications.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 
@@ -33,10 +33,12 @@ from genesis.caldav.ical import now_utc
 from genesis.category.enums import TimeLogCategory
 from genesis.category.facade import CategoryFacade
 from genesis.entities import TimeLogEntryCreate, TimeLogMode, TimeLogStatus
+from genesis.stats import Period, compute_rollup
 from genesis.ui._render import (
     FOCUS_COMPLETION_PENDING_KEY,
     focus_completion_dialog,
     focus_create_dialog,
+    render_sessions_kpi,
 )
 from genesis.ui._state import get_facade
 
@@ -113,8 +115,23 @@ def _set_completion_pending(session) -> None:
 @st.fragment(run_every="1s")
 def _render_active_sessions() -> None:
     now = now_utc()
-    sessions = caldav.list_time_log(active_only=True)
+    entries = caldav.list_time_log(scope="all")
+    completed = [entry for entry in entries if entry.status == TimeLogStatus.COMPLETED]
+    sessions = [entry for entry in entries if entry.status != TimeLogStatus.COMPLETED]
+    sessions.sort(key=lambda entry: (entry.start, entry.uid))
 
+    today_rollup = compute_rollup(
+        completed,
+        period=Period.TODAY,
+        today=date.today(),
+        task_titles={},
+    )
+    render_sessions_kpi(
+        count=today_rollup.kpis.session_count,
+        caption="Completed today",
+    )
+
+    st.subheader("Active sessions")
     if not sessions:
         st.info("No active sessions. Start one above.")
         return
@@ -225,6 +242,7 @@ if pending is not None:
         task_title=pending["task_title"],
     )
 
+
 def _start_break(minutes: int, label: str) -> None:
     """Create and start a predefined countdown break session."""
     now = now_utc()
@@ -243,12 +261,11 @@ def _start_break(minutes: int, label: str) -> None:
 
 with st.container(horizontal=True):
     if st.button("Start focus session", type="primary", key="focus_open_btn"):
-        focus_create_dialog()
+        focus_create_dialog(use_previous_template=True)
     if st.button("Short break", key="focus_short_break_btn", help="5 minute countdown break"):
         _start_break(5, "Break")
     if st.button("Long break", key="focus_long_break_btn", help="15 minute countdown break"):
         _start_break(15, "Long break")
 
 st.divider()
-st.subheader("Active sessions")
 _render_active_sessions()

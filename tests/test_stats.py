@@ -83,6 +83,12 @@ def test_period_bounds_last_30_days_is_29_back() -> None:
     assert bounds.end == datetime(2026, 9, 10, tzinfo=UTC)
 
 
+def test_period_bounds_today_is_one_local_day() -> None:
+    bounds = period_bounds(Period.TODAY, date(2026, 9, 9))
+    assert bounds.start == datetime(2026, 9, 9, tzinfo=UTC)
+    assert bounds.end == datetime(2026, 9, 10, tzinfo=UTC)
+
+
 def test_period_bounds_all_time_is_open_ended() -> None:
     bounds = period_bounds(Period.ALL_TIME, date(2026, 9, 9))
     assert bounds.start == datetime(1970, 1, 1, tzinfo=UTC)
@@ -232,6 +238,37 @@ def test_entries_outside_period_are_excluded() -> None:
     )
     assert rollup.kpis.session_count == 1
     assert rollup.kpis.total_minutes == 30.0
+
+
+def test_today_excludes_yesterday_and_tomorrow() -> None:
+    entries = [
+        _entry(
+            uid="yesterday",
+            start=datetime(2026, 9, 8, 23, 59, tzinfo=UTC),
+            due=datetime(2026, 9, 9, 0, 0, tzinfo=UTC),
+        ),
+        _entry(
+            uid="today",
+            start=datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 9, 12, 30, tzinfo=UTC),
+        ),
+        _entry(
+            uid="tomorrow",
+            start=datetime(2026, 9, 10, 0, 0, tzinfo=UTC),
+            due=datetime(2026, 9, 10, 0, 30, tzinfo=UTC),
+        ),
+    ]
+
+    rollup = compute_rollup(
+        entries,
+        period=Period.TODAY,
+        today=date(2026, 9, 9),
+        task_titles={},
+    )
+
+    assert rollup.kpis.session_count == 1
+    assert [session.uid for session in rollup.recent] == ["today"]
+    assert len(rollup.daily) == 1
 
 
 def test_all_time_has_no_upper_bound() -> None:

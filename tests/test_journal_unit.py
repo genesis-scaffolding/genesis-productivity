@@ -238,6 +238,96 @@ class TestJournalFacade:
         assert (tmp_path / "2026-09-06.md").exists()
 
 
+class TestTaskLink:
+    """Task linkage: the ``task`` type and the ``task-id`` frontmatter."""
+
+    def test_task_type_is_not_periodic(self, tmp_path: Path) -> None:
+        # Two task entries for the same day coexist: the task type has
+        # no period anchor and no uniqueness rule.
+        facade = JournalFacade(tmp_path)
+        a = Entry(date=date(2026, 9, 5), type=EntryType.TASK, task_id="t-4f7a2b", content="a")
+        b = Entry(date=date(2026, 9, 5), type=EntryType.TASK, task_id="t-4f7a2b", content="b")
+        facade.save_entry(a)
+        facade.save_entry(b)
+        assert len(facade.list_entries()) == 2
+
+    def test_task_entry_has_no_reference_date(self, tmp_path: Path) -> None:
+        facade = JournalFacade(tmp_path)
+        entry = Entry(date=date(2026, 9, 5), type=EntryType.TASK, task_id="t-4f7a2b", content="x")
+        facade.save_entry(entry)
+        loaded = facade.get_entry(entry.uid)
+        assert loaded is not None
+        assert loaded.reference_date is None
+
+    def test_task_id_round_trips_through_frontmatter(self, tmp_path: Path) -> None:
+        facade = JournalFacade(tmp_path)
+        entry = Entry(
+            date=date(2026, 11, 5),
+            type=EntryType.TASK,
+            title="Implementation notes",
+            task_id="t-4f7a2b",
+            content="Notes for the task.",
+        )
+        facade.save_entry(entry)
+
+        raw = (tmp_path / f"{entry.uid}.md").read_text()
+        assert "task-id: t-4f7a2b" in raw
+
+        loaded = facade.get_entry(entry.uid)
+        assert loaded is not None
+        assert loaded.task_id == "t-4f7a2b"
+        assert loaded.type == EntryType.TASK
+
+    def test_entry_without_task_id_loads_with_none(self, tmp_path: Path) -> None:
+        # A file written before task linkage existed carries no
+        # ``task-id`` line and must still load.
+        (tmp_path / "j-legacy01.md").write_text("---\ndate: 2026-09-05\ntype: daily\n---\n\nbody\n")
+        facade = JournalFacade(tmp_path)
+        loaded = facade.get_entry("j-legacy01")
+        assert loaded is not None
+        assert loaded.task_id is None
+
+    def test_entry_without_task_id_writes_no_task_id_line(self, tmp_path: Path) -> None:
+        facade = JournalFacade(tmp_path)
+        entry = Entry(date=date(2026, 9, 5), content="body\n")
+        facade.save_entry(entry)
+        raw = (tmp_path / f"{entry.uid}.md").read_text()
+        assert "task-id" not in raw
+
+    def test_task_id_survives_an_unrelated_edit(self, tmp_path: Path) -> None:
+        facade = JournalFacade(tmp_path)
+        entry = Entry(date=date(2026, 9, 5), type=EntryType.TASK, task_id="t-4f7a2b", content="a")
+        facade.save_entry(entry)
+        entry.content = "a edited"
+        facade.save_entry(entry)
+        loaded = facade.get_entry(entry.uid)
+        assert loaded is not None
+        assert loaded.task_id == "t-4f7a2b"
+
+    def test_list_entries_filters_by_task_id(self, tmp_path: Path) -> None:
+        facade = JournalFacade(tmp_path)
+        linked = Entry(date=date(2026, 9, 5), type=EntryType.TASK, task_id="t-4f7a2b", content="a")
+        other = Entry(date=date(2026, 9, 5), type=EntryType.TASK, task_id="t-999999", content="b")
+        unlinked = Entry(date=date(2026, 9, 5), type=EntryType.MISC, content="c")
+        for entry in (linked, other, unlinked):
+            facade.save_entry(entry)
+
+        found = facade.list_entries(task_id="t-4f7a2b")
+        assert [e.uid for e in found] == [linked.uid]
+        assert facade.list_entries(task_id="t-missing") == []
+        assert len(facade.list_entries()) == 3
+
+    def test_task_filter_ignores_entry_type(self, tmp_path: Path) -> None:
+        # The link is the authoritative relationship: an entry of any
+        # type that points at the task shows up in the task's table.
+        facade = JournalFacade(tmp_path)
+        daily = Entry(date=date(2026, 9, 5), type=EntryType.DAILY, task_id="t-4f7a2b", content="a")
+        facade.save_entry(daily)
+        found = facade.list_entries(task_id="t-4f7a2b")
+        assert [e.uid for e in found] == [daily.uid]
+        assert found[0].type == EntryType.DAILY
+
+
 class TestReferenceDate:
     """Server-side period anchoring for periodic entries."""
 

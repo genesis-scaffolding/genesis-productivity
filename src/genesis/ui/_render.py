@@ -526,11 +526,37 @@ def contact_create_dialog() -> None:
 # -----------------------------------------------------------------------------
 
 
+def task_link_options(current_task_id: str | None = None) -> tuple[list[str], list[str | None]]:
+    """Return the (labels, uids) pair for the journal task selector.
+
+    The labels embed the task UID so two tasks with the same title stay
+    distinguishable; the UID list is what gets stored on the entry.
+    ``(none)`` is the first option and maps to ``None``.
+
+    ``current_task_id`` is the link the entry already carries. When it
+    points at a task that no longer exists it is appended as a
+    "missing task" option so the link stays visible and is preserved
+    on save instead of being silently dropped.
+    """
+    facade = get_facade()
+    tasks = facade.caldav.list_tasks()
+    labels: list[str] = ["(none)"]
+    uids: list[str | None] = [None]
+    for task in tasks:
+        labels.append(f"{task.title} ({task.uid})")
+        uids.append(task.uid)
+    if current_task_id is not None and current_task_id not in uids:
+        labels.append(f"(missing task {current_task_id})")
+        uids.append(current_task_id)
+    return labels, uids
+
+
 def journal_create_form(
     *,
     uid: str,
     key_prefix: str,
     default_type: str = "daily",
+    default_task_id: str | None = None,
     on_created: Callable[[Entry], None] | None = None,
     on_cancel: Callable[[], None] | None = None,
 ) -> None:
@@ -539,10 +565,12 @@ def journal_create_form(
     One form, two callers: the Journal page's create view and the
     ``journal_create_dialog`` the onboarding wizard opens.
 
-    ``default_type`` preselects the entry type. ``on_created`` runs
-    with the new entry after it is saved; the Journal page uses it
-    to open the entry it just made. ``on_cancel`` runs when the
-    user cancels.
+    ``default_type`` preselects the entry type. ``default_task_id``
+    preselects the task the entry links to; it is optional, so the
+    Journal page and the onboarding wizard are unaffected.
+    ``on_created`` runs with the new entry after it is saved; the
+    Journal page uses it to open the entry it just made.
+    ``on_cancel`` runs when the user cancels.
     """
     facade = get_facade()
     journal = facade.journal
@@ -552,9 +580,18 @@ def journal_create_form(
         default_type = "daily"
     cur_idx = type_labels.index(default_type)
 
+    task_labels, task_uids = task_link_options(default_task_id)
+    cur_task_idx = task_uids.index(default_task_id) if default_task_id in task_uids else 0
+    task_key = f"{key_prefix}_task"
+    if task_key not in st.session_state:
+        # Seed the widget before it is created. Seeding on every render
+        # would overwrite the user's pick on the form's submit rerun.
+        st.session_state[task_key] = task_labels[cur_task_idx]
+
     with st.form(f"{key_prefix}_form"):
         ftitle = st.text_input("Title", key=f"{key_prefix}_title")
         ftype = st.selectbox("Type", type_labels, index=cur_idx, key=f"{key_prefix}_type")
+        ftask = st.selectbox("Task", task_labels, key=task_key)
         fbody = st.text_area(
             "Content",
             height=400,
@@ -577,6 +614,7 @@ def journal_create_form(
 
     if save_clicked:
         new_type = EntryType(ftype) if ftype != "(none)" else None
+        new_task_id = task_uids[task_labels.index(ftask)]
         existing = journal.find_for_period(new_type, today) if new_type is not None else None
         if existing is not None and new_type is not None:
             st.error(
@@ -588,6 +626,7 @@ def journal_create_form(
                 date=today,
                 title=ftitle or None,
                 type=new_type,
+                task_id=new_task_id,
                 content=fbody,
             )
             try:
@@ -607,15 +646,34 @@ def journal_create_form(
             st.rerun()
 
 
-@st.dialog("New journal entry", width="large", on_dismiss="rerun")
-def journal_create_dialog(*, default_type: str = "daily") -> None:
+_JOURNAL_DIALOG_KEY_PREFIX = "_jcd"
+
+
+def journal_create_dialog(*, default_type: str = "daily", default_task_id: str | None = None) -> None:
     """Open the create-journal-entry dialog. Call from a button body.
 
-    The dialog holds the same form the Journal page uses.
+    ``default_task_id`` preselects the task the new entry links to —
+    the task detail page passes its own UID.
+
+    The widget state is reset here, in the caller-facing wrapper, so
+    each open starts from the requested defaults. Doing it inside the
+    dialog body would wipe the user's pick when the form is submitted.
     """
+    st.session_state.pop(f"{_JOURNAL_DIALOG_KEY_PREFIX}_task", None)
+    _journal_create_dialog_body(default_type=default_type, default_task_id=default_task_id)
+
+
+@st.dialog("New journal entry", width="large", on_dismiss="rerun")
+def _journal_create_dialog_body(*, default_type: str, default_task_id: str | None) -> None:
+    """Render the create-journal-entry dialog body."""
     import uuid as _uuid
 
-    journal_create_form(uid=_uuid.uuid4().hex, key_prefix="_jcd", default_type=default_type)
+    journal_create_form(
+        uid=_uuid.uuid4().hex,
+        key_prefix=_JOURNAL_DIALOG_KEY_PREFIX,
+        default_type=default_type,
+        default_task_id=default_task_id,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -1305,10 +1363,10 @@ def render_journal_entry_view(
     Shared between the journal page (its own detail view) and the
     dashboard's daily-journal expander, so the two surfaces stay in
     lockstep. Renders the title row (``## {title}`` plus a type
-    badge when the entry has a type), the markdown body (or an
-    "Empty entry." caption), and an Edit button. With
-    ``show_delete=True`` also renders a Delete button that opens
-    :func:`delete_confirm_dialog`.
+    badge when the entry has a type), the linked task when the entry
+    points at one, the markdown body (or an "Empty entry." caption),
+    and an Edit button. With ``show_delete=True`` also renders a
+    Delete button that opens :func:`delete_confirm_dialog`.
 
     The Edit button calls ``on_edit(entry)`` when supplied;
     otherwise it falls back to the same-page behaviour of setting
@@ -1328,6 +1386,13 @@ def render_journal_entry_view(
         st.markdown(f"## {title_text}")
         if entry.type is not None:
             st.badge(entry.type.value, color="blue")
+
+    if entry.task_id:
+        linked = get_facade().caldav.get_task(entry.task_id)
+        if linked is not None:
+            st.caption(f"Task: {linked.title} ({linked.uid})")
+        else:
+            st.caption(f"Task: {entry.task_id} (missing)")
 
     if entry.content.strip():
         st.markdown(entry.content)

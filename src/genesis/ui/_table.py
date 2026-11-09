@@ -73,6 +73,54 @@ TASK_TABLE_DEFAULT_SORT_KEYS: list[SortKey] = [
 ]
 
 
+# -----------------------------------------------------------------------------
+# Task table
+# -----------------------------------------------------------------------------
+
+
+def open_task_detail(uid: str) -> None:
+    """Navigate to the Tasks page in its detail state.
+
+    The task table is shared by the Tasks, Projects, Dashboard, and
+    Calendar pages, so the Open action has to leave the current page:
+    setting a ``uid`` query parameter in place would leak the task
+    detail state onto a page that has no such view. ``st.switch_page``
+    resolves the target relative to the main script, so the Tasks page
+    lives at ``pages/tasks.py`` from that base.
+    """
+    st.switch_page("pages/tasks.py", query_params={"uid": uid})
+
+
+def open_journal_entry(uid: str) -> None:
+    """Navigate to the Journal page in its entry view.
+
+    The Journal page owns opening, editing and deleting an entry; the
+    task page only links to it.
+    """
+    st.switch_page("pages/journal.py", query_params={"uid": uid})
+
+
+def handle_task_action(label: str, task: Task, *, caldav: CalDAVFacade) -> None:
+    """Run the action behind a task table row button.
+
+    "Open" navigates to the task detail view; the other labels open
+    the matching dialog.
+    """
+    if label == "Open":
+        open_task_detail(task.uid)
+    elif label == "Edit":
+        task_edit_dialog(task.uid)
+    elif label == "Focus":
+        focus_create_dialog(task=task)
+    elif label == "Log Session":
+        session_log_dialog(task=task)
+    elif label == "Delete":
+        delete_confirm_dialog(
+            f"task '{task.title}'",
+            lambda: caldav.delete_task(task.uid),
+        )
+
+
 def _parse_sort_key_entry(entry: tuple) -> tuple[str, Any, bool]:
     """Split a ``sort_keys`` entry into ``(field, none_default, reverse)``.
 
@@ -331,7 +379,7 @@ def render_tasks_table(
         if show_project_column:
             row["Project"] = _project_label(t.project_id)
         if show_actions:
-            row["actions"] = ["Focus", "Log Session", "Edit", "Delete"]
+            row["actions"] = ["Open", "Focus", "Log Session", "Edit", "Delete"]
         rows.append(row)
     df = pd.DataFrame(rows)
 
@@ -347,17 +395,7 @@ def render_tasks_table(
         if row_idx >= len(table_tasks):
             return
         target = table_tasks[row_idx]
-        if label == "Edit":
-            task_edit_dialog(target.uid)
-        elif label == "Focus":
-            focus_create_dialog(task=target)
-        elif label == "Log Session":
-            session_log_dialog(task=target)
-        elif label == "Delete":
-            delete_confirm_dialog(
-                f"task '{target.title}'",
-                lambda uid=target.uid: caldav.delete_task(uid),
-            )
+        handle_task_action(label, target, caldav=caldav)
 
     def _handle_inline_edit() -> None:
         state = st.session_state.get(key) or {}

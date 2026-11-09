@@ -39,6 +39,7 @@ from .mock_caldav import MockCalDAVFacade
 TASKS_APP = Path(__file__).parent / "_tasks_page_app.py"
 JOURNAL_APP = Path(__file__).parent / "_journal_page_app.py"
 JOURNAL_FORM_APP = Path(__file__).parent / "_journal_form_app.py"
+JOURNAL_DIALOG_APP = Path(__file__).parent / "_journal_dialog_app.py"
 
 TASK_TITLE = "Ship the thing"
 
@@ -276,6 +277,36 @@ def test_add_journal_entry_dialog_preselects_the_task_and_type(
     selects = {box.label: box.value for box in at.selectbox}
     assert selects["Type"] == "task"
     assert selects["Task"] == f"{TASK_TITLE} ({task_uid})"
+
+
+def test_create_dialog_resets_the_type_default_on_each_open(
+    fake_facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reopening the create dialog starts from the requested defaults.
+
+    A keyed ``st.selectbox`` ignores its ``index`` once the key exists in
+    session state, so a stale pick (e.g. ``task`` left behind by a prior
+    open with ``default_type="task"``) survives into the next open unless
+    the wrapper resets it. The leak is modelled by seeding the persisted
+    type key directly (AppTest drops a keyed widget's value on dialog
+    close, so it cannot be reproduced by closing and reopening), then
+    reopening with a different default: the requested default must win.
+    """
+    type_key = f"{_render._JOURNAL_DIALOG_KEY_PREFIX}_type"
+    monkeypatch.setenv("GENESIS_TEST_DIALOG_TYPE", "daily")
+
+    at = AppTest.from_file(JOURNAL_DIALOG_APP)
+    at.run()
+    assert not at.exception, f"dialog app raised: {at.exception}"
+
+    # A prior open with default_type="task" left the type key behind.
+    at.session_state[type_key] = "task"
+    at.button(key="open_create_dialog").click().run()
+    assert not at.exception, f"dialog app raised: {at.exception}"
+
+    selects = {box.label: box.value for box in at.selectbox}
+    assert selects["Type"] == "daily"
 
 
 def test_journal_entry_created_from_the_task_detail_is_linked(

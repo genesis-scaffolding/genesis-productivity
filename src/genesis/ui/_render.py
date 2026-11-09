@@ -659,7 +659,12 @@ def journal_create_dialog(*, default_type: str = "daily", default_task_id: str |
     each open starts from the requested defaults. Doing it inside the
     dialog body would wipe the user's pick when the form is submitted.
     """
+    # Reset both dropdowns so index= re-applies on each open; otherwise a
+    # stale pick (e.g. "task" from a prior task-journal open) survives and
+    # the requested default is silently ignored (keyed selectbox ignores
+    # index once the key exists in session state).
     st.session_state.pop(f"{_JOURNAL_DIALOG_KEY_PREFIX}_task", None)
+    st.session_state.pop(f"{_JOURNAL_DIALOG_KEY_PREFIX}_type", None)
     _journal_create_dialog_body(default_type=default_type, default_task_id=default_task_id)
 
 

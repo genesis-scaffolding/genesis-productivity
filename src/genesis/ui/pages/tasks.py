@@ -27,9 +27,9 @@ from genesis.ui._render import (
 from genesis.ui._state import get_facade
 from genesis.ui._table import (
     TASK_TABLE_DEFAULT_SORT_KEYS,
-    open_journal_entry,
     render_filterable_tasks_table,
     render_journal_table,
+    request_journal_entry,
 )
 
 facade = get_facade()
@@ -102,7 +102,10 @@ def _render_journal_section(uid: str) -> None:
 
     def _handle_action(label: str, entry: Entry) -> None:
         if label == "Open":
-            open_journal_entry(entry.uid)
+            # The navigation is deferred to the script body: st.switch_page
+            # inside the row-action callback is a no-op and Streamlit warns
+            # "Calling st.rerun() within a callback is a no-op.".
+            request_journal_entry(entry.uid)
         elif label == "Delete":
             delete_confirm_dialog(
                 f"entry {entry.date.isoformat()}",

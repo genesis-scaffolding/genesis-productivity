@@ -74,12 +74,48 @@ TASK_TABLE_DEFAULT_SORT_KEYS: list[SortKey] = [
 
 
 # -----------------------------------------------------------------------------
+# Deferred page switches
+# -----------------------------------------------------------------------------
+
+# A table row action runs inside a widget callback, and Streamlit
+# refuses to navigate from there: ``st.switch_page`` inside an
+# ``on_click`` callback raises the rerun exception inside the
+# callback, so the queued navigation is dropped and Streamlit warns
+# "Calling st.rerun() within a callback is a no-op.". The callback
+# therefore only records the target; the table performs the switch
+# from the script body, right after it rendered the table.
+_PENDING_PAGE_SWITCH_KEY = "_pending_page_switch"
+
+
+def request_page_switch(page: str, *, query_params: dict[str, str]) -> None:
+    """Record a page switch a table row action asked for.
+
+    Call from a widget callback. The switch is performed by
+    :func:`run_pending_page_switch` once the script body runs.
+    """
+    st.session_state[_PENDING_PAGE_SWITCH_KEY] = (page, dict(query_params))
+
+
+def run_pending_page_switch() -> None:
+    """Perform the page switch a table row action asked for, if any.
+
+    Call from the script body. A widget callback cannot navigate:
+    ``st.switch_page`` there is a no-op and Streamlit warns about it.
+    """
+    pending = st.session_state.pop(_PENDING_PAGE_SWITCH_KEY, None)
+    if pending is None:
+        return
+    page, query_params = pending
+    st.switch_page(page, query_params=query_params)
+
+
+# -----------------------------------------------------------------------------
 # Task table
 # -----------------------------------------------------------------------------
 
 
-def open_task_detail(uid: str) -> None:
-    """Navigate to the Tasks page in its detail state.
+def request_task_detail(uid: str) -> None:
+    """Ask for the Tasks page in its detail state.
 
     The task table is shared by the Tasks, Projects, Dashboard, and
     Calendar pages, so the Open action has to leave the current page:
@@ -87,17 +123,21 @@ def open_task_detail(uid: str) -> None:
     detail state onto a page that has no such view. ``st.switch_page``
     resolves the target relative to the main script, so the Tasks page
     lives at ``pages/tasks.py`` from that base.
+
+    The switch itself is deferred to the script body: a widget
+    callback cannot navigate (see :func:`request_page_switch`).
     """
-    st.switch_page("pages/tasks.py", query_params={"uid": uid})
+    request_page_switch("pages/tasks.py", query_params={"uid": uid})
 
 
-def open_journal_entry(uid: str) -> None:
-    """Navigate to the Journal page in its entry view.
+def request_journal_entry(uid: str) -> None:
+    """Ask for the Journal page in its entry view.
 
     The Journal page owns opening, editing and deleting an entry; the
-    task page only links to it.
+    task page only links to it. The switch itself is deferred to the
+    script body (see :func:`request_page_switch`).
     """
-    st.switch_page("pages/journal.py", query_params={"uid": uid})
+    request_page_switch("pages/journal.py", query_params={"uid": uid})
 
 
 def handle_task_action(label: str, task: Task, *, caldav: CalDAVFacade) -> None:
@@ -107,7 +147,7 @@ def handle_task_action(label: str, task: Task, *, caldav: CalDAVFacade) -> None:
     the matching dialog.
     """
     if label == "Open":
-        open_task_detail(task.uid)
+        request_task_detail(task.uid)
     elif label == "Edit":
         task_edit_dialog(task.uid)
     elif label == "Focus":
@@ -522,6 +562,11 @@ def render_tasks_table(
         key=key,
     )
 
+    # A row action may have asked for another page. Perform the switch
+    # here, in the script body: st.switch_page inside the row-action
+    # callback is a no-op and Streamlit warns about it.
+    run_pending_page_switch()
+
 
 # -----------------------------------------------------------------------------
 # Projects table
@@ -724,6 +769,11 @@ def render_journal_table(
         on_change=_handle_inline_edit,
         key=key,
     )
+
+    # A row action may have asked for another page. Perform the switch
+    # here, in the script body: st.switch_page inside the row-action
+    # callback is a no-op and Streamlit warns about it.
+    run_pending_page_switch()
 
 
 # -----------------------------------------------------------------------------

@@ -16,17 +16,23 @@ Covered:
 - the add-entry dialog preselects the task and the ``task`` type, and
   the shared create form links the new entry to that task;
 - the journal entry view shows the linked task and the edit form keeps
-  the link.
+  the link;
+- a table row action never navigates from inside its callback, which
+  Streamlit treats as a no-op.
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
 import pytest
 import streamlit as st
+from streamlit.proto.WidgetStates_pb2 import WidgetStates
+from streamlit.runtime.pages_manager import PagesManager
 from streamlit.testing.v1 import AppTest
 
 from genesis.caldav.facade import CalDAVFacade
@@ -40,6 +46,9 @@ TASKS_APP = Path(__file__).parent / "_tasks_page_app.py"
 JOURNAL_APP = Path(__file__).parent / "_journal_page_app.py"
 JOURNAL_FORM_APP = Path(__file__).parent / "_journal_form_app.py"
 JOURNAL_DIALOG_APP = Path(__file__).parent / "_journal_dialog_app.py"
+
+# Mirrors ``genesis.ui._table._PENDING_PAGE_SWITCH_KEY``.
+_PENDING_PAGE_SWITCH_KEY = "_pending_page_switch"
 
 TASK_TITLE = "Ship the thing"
 
@@ -114,6 +123,81 @@ def _switch_page_recorder(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, di
     return calls
 
 
+def _click_table_action(at: AppTest, *, row: int, label: str) -> AppTest:
+    """Click a per-row action button of the first table that has one.
+
+    ``AppTest`` does not model the ``ButtonColumn`` of a data editor,
+    so the click is handed to the runner as the widget state the
+    browser would send. ``AppTest._run`` is the only door into that
+    state; it re-runs the app with the given widget states.
+    """
+    frame = next(f for f in at.dataframe if "actions" in f.proto.button_click_widgets)
+    widget_id = frame.proto.button_click_widgets["actions"]
+    widget_states = WidgetStates()
+    state = widget_states.widgets.add()
+    state.id = widget_id
+    state.string_trigger_value.data = json.dumps({"row": row, "label": label})
+    return at._run(widget_states)
+
+
+def _app_with_stub_pages(tmp_path: Path) -> Path:
+    """Copy the tasks page app next to stub pages it can switch to.
+
+    ``st.switch_page`` resolves its target relative to the main script
+    and only finds the pages the app registered, so the test app needs
+    real pages to navigate to.
+    """
+    pages = tmp_path / "pages"
+    pages.mkdir()
+    (pages / "journal.py").write_text("import streamlit as st\nst.title('Journal entry page')\n", encoding="utf-8")
+    (pages / "tasks.py").write_text("import streamlit as st\nst.title('Tasks page')\n", encoding="utf-8")
+    app = tmp_path / "main.py"
+    app.write_text(TASKS_APP.read_text(encoding="utf-8"), encoding="utf-8")
+    return app
+
+
+@pytest.fixture
+def registered_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the app's page registry alive across AppTest runs.
+
+    ``AppTest`` builds a fresh pages manager per run, so the pages the
+    app registered in an earlier run are unknown while a widget
+    callback runs (the callback phase runs before the script body).
+    Sharing the manager keeps the registry, which is what lets the
+    test drive a real ``st.switch_page`` and see what Streamlit does
+    with it.
+    """
+    real_pages_manager = PagesManager
+    managers: dict[str, object] = {}
+
+    def factory(*args, **kwargs):  # type: ignore[no-untyped-def]
+        key = str(args[0])
+        if key not in managers:
+            # ``AppTest`` resets the mode flag on the name it holds, which
+            # is this factory once patched, so the real class keeps a
+            # stale value. Reset it here so the manager works the mode
+            # out from the app's own directory.
+            real_pages_manager.uses_pages_directory = None
+            managers[key] = real_pages_manager(*args, **kwargs)
+        return managers[key]
+
+    monkeypatch.setattr("streamlit.testing.v1.app_test.PagesManager", factory)
+
+
+@pytest.fixture(autouse=True)
+def _no_pending_page_switch() -> Iterator[None]:
+    """Keep a pending page switch from leaking between tests.
+
+    Outside a Streamlit run the session state is a process-wide
+    fallback, so a switch a test asked for but never ran would be
+    picked up by the next test. The key mirrors
+    ``genesis.ui._table._PENDING_PAGE_SWITCH_KEY``.
+    """
+    st.session_state.pop(_PENDING_PAGE_SWITCH_KEY, None)
+    yield
+    st.session_state.pop(_PENDING_PAGE_SWITCH_KEY, None)
+
+
 def _button_by_label(at: AppTest, label: str):
     """Return the button with the given label."""
     for button in at.button:
@@ -139,11 +223,19 @@ def test_task_table_open_action_switches_to_the_task_detail(
     fake_facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Open action leaves the current page and lands on /tasks?uid=."""
+    """The Open action leaves the current page and lands on /tasks?uid=.
+
+    The switch is deferred to the script body: a widget callback cannot
+    navigate, ``st.switch_page`` there is a no-op and Streamlit warns
+    "Calling st.rerun() within a callback is a no-op.".
+    """
     calls = _switch_page_recorder(monkeypatch)
     task = fake_facade.caldav.list_tasks()[0]
 
     _table.handle_task_action("Open", task, caldav=cast(CalDAVFacade, fake_facade.caldav))
+    assert calls == [], "the row-action callback must not navigate"
+
+    _table.run_pending_page_switch()
 
     assert calls == [("pages/tasks.py", {"uid": task.uid})]
 
@@ -152,12 +244,102 @@ def test_task_detail_journal_open_action_switches_to_the_journal_page(
     fake_facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The journal table's Open action lands on /journal?uid=."""
+    """The journal table's Open action lands on /journal?uid=.
+
+    Like the task table's Open action, the switch is deferred to the
+    script body.
+    """
     calls = _switch_page_recorder(monkeypatch)
 
-    _table.open_journal_entry("j-123")
+    _table.request_journal_entry("j-123")
+    assert calls == [], "the row-action callback must not navigate"
+
+    _table.run_pending_page_switch()
 
     assert calls == [("pages/journal.py", {"uid": "j-123"})]
+
+
+# ---------------------------------------------------------------------------
+# Row actions: no navigation from inside a callback
+# ---------------------------------------------------------------------------
+
+
+def test_task_detail_journal_open_action_navigates_without_the_callback_warning(
+    fake_facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    registered_pages: None,
+) -> None:
+    """The journal Open action lands on the journal page, warning-free.
+
+    A row action runs inside a widget callback, and Streamlit refuses
+    to navigate from there: ``st.switch_page`` raises the rerun
+    exception inside the callback, so the queued navigation is dropped
+    and Streamlit warns "Calling st.rerun() within a callback is a
+    no-op.". The action records the target instead, and the table
+    switches the page from the script body.
+    """
+    task_uid = _task_uid(fake_facade)
+    entry = Entry(date=date(2026, 9, 5), type=EntryType.TASK, title="linked", content="body", task_id=task_uid)
+    fake_facade.journal.save_entry(entry)
+
+    monkeypatch.setenv("GENESIS_TEST_TASK_UID", task_uid)
+    at = AppTest.from_file(_app_with_stub_pages(tmp_path))
+    at.run()
+    assert not at.exception, f"tasks page raised: {at.exception}"
+
+    at = _click_table_action(at, row=0, label="Open")
+
+    assert not at.exception, f"tasks page raised: {at.exception}"
+    warnings = [w.value for w in at.warning]
+    assert not [w for w in warnings if "no-op" in w], f"Streamlit warned: {warnings}"
+    assert "Journal entry page" in _texts(at)
+
+
+def test_task_list_open_action_navigates_without_the_callback_warning(
+    fake_facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    registered_pages: None,
+) -> None:
+    """The task table's Open action lands on the task page, warning-free.
+
+    Same callback rule as the journal table's Open action: the switch
+    runs from the script body, not from the row-action callback.
+    """
+    monkeypatch.delenv("GENESIS_TEST_TASK_UID", raising=False)
+    at = AppTest.from_file(_app_with_stub_pages(tmp_path))
+    at.run()
+    assert not at.exception, f"tasks page raised: {at.exception}"
+
+    at = _click_table_action(at, row=0, label="Open")
+
+    assert not at.exception, f"tasks page raised: {at.exception}"
+    warnings = [w.value for w in at.warning]
+    assert not [w for w in warnings if "no-op" in w], f"Streamlit warned: {warnings}"
+    assert "Tasks page" in _texts(at)
+
+
+def test_task_detail_journal_delete_action_opens_the_confirm_dialog(
+    fake_facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Delete action still opens the confirmation dialog.
+
+    The dialog opens from the row-action callback, which is allowed:
+    only navigating from a callback is a no-op.
+    """
+    task_uid = _task_uid(fake_facade)
+    entry = Entry(date=date(2026, 9, 5), type=EntryType.TASK, title="linked", content="body", task_id=task_uid)
+    fake_facade.journal.save_entry(entry)
+
+    at = _run_tasks_app(monkeypatch, task_uid)
+    at = _click_table_action(at, row=0, label="Delete")
+
+    assert not at.exception, f"tasks page raised: {at.exception}"
+    keys = [button.key for button in at.button]
+    assert "delcfm_entry 2026-09-05" in keys
+    assert "delcn_entry 2026-09-05" in keys
 
 
 # ---------------------------------------------------------------------------

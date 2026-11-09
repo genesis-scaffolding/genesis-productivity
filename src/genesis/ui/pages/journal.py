@@ -23,6 +23,7 @@ from genesis.ui._render import (
     delete_confirm_dialog,
     journal_create_form,
     render_journal_entry_view,
+    task_link_options,
 )
 from genesis.ui._state import get_facade
 from genesis.ui._table import render_journal_table
@@ -193,6 +194,9 @@ def _render_edit(uid: str) -> None:
     cur_type_label = entry.type.value if entry.type else "(none)"
     cur_idx = type_labels.index(cur_type_label) if cur_type_label in type_labels else 0
 
+    task_labels, task_uids = task_link_options(entry.task_id)
+    cur_task_idx = task_uids.index(entry.task_id) if entry.task_id in task_uids else 0
+
     st.caption(f"Productivity > Journal > {entry.date.isoformat()} > Edit")
     if st.button(
         "Back",
@@ -207,6 +211,7 @@ def _render_edit(uid: str) -> None:
     with st.form(f"je_edit_{uid}"):
         ftitle = st.text_input("Title", value=entry.title or "")
         ftype = st.selectbox("Type", type_labels, index=cur_idx)
+        ftask = st.selectbox("Task", task_labels, index=cur_task_idx)
         fbody = st.text_area("Content", value=entry.content, height=400)
         st.caption(f"Date: {entry.date.isoformat()} (set at creation, not editable)")
 
@@ -226,6 +231,7 @@ def _render_edit(uid: str) -> None:
             new_type = EntryType(ftype) if ftype != "(none)" else None
             entry.title = ftitle or None
             entry.type = new_type
+            entry.task_id = task_uids[task_labels.index(ftask)]
             entry.content = fbody
             try:
                 journal.save_entry(entry)
@@ -266,7 +272,7 @@ def _render_create(uid: str) -> None:
 
     journal_create_form(
         uid=uid,
-        key_prefix="je_create",
+        key_prefix=f"je_create_{uid}",
         default_type=preselected_type,
         on_created=_after_create,
         on_cancel=_go_back,

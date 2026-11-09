@@ -259,6 +259,7 @@ def _journal_to_wire(entry: Entry, project_names: dict[str, str]) -> JournalEntr
         title=entry.title,
         content=content,
         project_id=project_uid,
+        task_id=entry.task_id,
         created=entry.created,
         modified=entry.modified,
     )
@@ -638,6 +639,7 @@ def list_journals(
     subject: Annotated[str, Depends(current_subject)],
     entry_type: Annotated[str | None, Query(alias="type")] = None,
     project_id: Annotated[str | None, Query()] = None,
+    task_id: Annotated[str | None, Query()] = None,
     search_query: Annotated[str | None, Query()] = None,
     reference_date_start: Annotated[str | None, Query(alias="date_start")] = None,
     reference_date_end: Annotated[str | None, Query(alias="date_end")] = None,
@@ -686,6 +688,11 @@ def list_journals(
         all_wire = [_journal_to_wire(e, project_names) for e in all_entries]
         if project_id is not None:
             all_wire = [i for i in all_wire if i.project_id == project_id]
+        if task_id is not None:
+            # Exact match on the stored task UID. The link lives in the
+            # entry frontmatter, not in the body, so no name lookup is
+            # needed here.
+            all_wire = [i for i in all_wire if i.task_id == task_id]
         page, total, offset, limit = _paginate(all_wire, offset, limit)
         return JournalListOut(
             items=page,
@@ -714,11 +721,19 @@ def create_journal(
                 )
             content = _apply_project_footer(content, body.project_id, project_names)
 
+        task_id = body.task_id
+        if task_id is not None and facade.caldav.get_task(task_id) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown task_id: {task_id}",
+            )
+
         entry = Entry(
             date=body.date,
             reference_date=body.reference_date,
             title=body.title,
             type=body.type,
+            task_id=task_id,
             content=content,
         )
         try:
@@ -783,12 +798,27 @@ def update_journal(
                 new_uid = body.project_id
             content = _apply_project_footer(content, new_uid, project_names)
 
+        # The task link is preserved when the field is omitted. Only a
+        # newly supplied UID is validated, so an entry that points at a
+        # deleted task can still be edited.
+        task_id = existing.task_id
+        if body.clear_task_id:
+            task_id = None
+        elif body.task_id is not None:
+            if facade.caldav.get_task(body.task_id) is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unknown task_id: {body.task_id}",
+                )
+            task_id = body.task_id
+
         entry = Entry(
             uid=uid,
             date=existing.date,
             reference_date=existing.reference_date,
             title=title,
             type=type_,
+            task_id=task_id,
             content=content,
         )
         try:

@@ -12,7 +12,7 @@ public surface mirrors the real facade:
 - ``get_entry(uid) -> Entry | None``
 - ``save_entry(entry)`` (raises ``ValueError`` on periodic-collision)
 - ``delete_entry(uid) -> bool``
-- ``list_entries() -> list[Entry]``
+- ``list_entries(task_id=None) -> list[Entry]``
 - ``find_daily_for_date(target_date) -> Entry | None``
 - ``find_for_period(entry_type, on_or_in) -> Entry | None``
 - ``repair_reference_dates() -> RepairReport``
@@ -93,9 +93,16 @@ class InMemoryJournalFacade:
         self._saved_order = [u for u in self._saved_order if u != uid]
         return True
 
-    def list_entries(self) -> list[Entry]:
-        """Return all entries in reverse-insertion order (newest first)."""
-        return [self._entries[uid] for uid in reversed(self._saved_order)]
+    def list_entries(self, task_id: str | None = None) -> list[Entry]:
+        """Return all entries in reverse-insertion order (newest first).
+
+        ``task_id`` filters on an exact task UID match, mirroring the
+        real facade.
+        """
+        entries = [self._entries[uid] for uid in reversed(self._saved_order)]
+        if task_id is not None:
+            entries = [e for e in entries if e.task_id == task_id]
+        return entries
 
     def find_daily_for_date(self, target_date: date_cls) -> Entry | None:
         return self.find_for_period(EntryType.DAILY, target_date)

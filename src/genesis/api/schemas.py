@@ -202,6 +202,7 @@ class JournalEntryCreateIn(BaseModel):
     title: str | None = None
     content: str
     project_id: str | None = None
+    task_id: str | None = None
 
 
 class JournalEntryUpdateIn(BaseModel):
@@ -209,6 +210,8 @@ class JournalEntryUpdateIn(BaseModel):
     content: str | None = None
     project_id: str | None = None
     clear_project_id: bool = False
+    task_id: str | None = None
+    clear_task_id: bool = False
 
 
 class JournalEntryOut(BaseModel):
@@ -219,6 +222,7 @@ class JournalEntryOut(BaseModel):
     title: str | None
     content: str
     project_id: str | None
+    task_id: str | None
     created: UtcDateTime | None
     modified: UtcDateTime | None
 

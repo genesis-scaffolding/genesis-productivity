@@ -8,8 +8,29 @@ Identity rules:
   period. ``save_entry`` rejects a save if another entry of the same
   type already owns the period (same date for daily, same ISO week
   for weekly, same month for monthly, same year for yearly).
-- ``project`` and ``misc`` entries have no uniqueness constraint —
-  many may coexist.
+- ``project``, ``task`` and ``misc`` entries have no uniqueness
+  constraint — many may coexist.
+
+Task linkage:
+- ``Entry.task_id`` points at the task UID an entry belongs to. The
+  UID is stable across title edits, so the link survives a rename.
+  The link is stored in the frontmatter as ``task-id``; files written
+  before this field existed simply carry no ``task-id`` line and load
+  with ``task_id=None``.
+- The ``task`` entry type is the discoverable classification (the
+  visible type chip and the journal filter category). It is not
+  rigidly tied to the link: an entry of any type may carry a
+  ``task_id``, and the task's journal table lists every entry whose
+  ``task_id`` matches, regardless of type.
+- The ownership direction is journal entry -> task. Tasks carry no
+  journal ids. Deleting a task does not delete the journal entries
+  that point at it; the link is preserved and the UI shows the
+  missing task.
+- Unlike the legacy ``> Project: {name}`` body footer, the task
+  link is structured frontmatter metadata. The asymmetry is
+  deliberate: project linkage is legacy compatibility behaviour,
+  task linkage starts clean. Normalising project linkage is a
+  separate decision.
 
 Date semantics (see ADR-017):
 - ``Entry.date`` is the creation day for the entry. It is set when
@@ -17,8 +38,8 @@ Date semantics (see ADR-017):
 - ``Entry.reference_date`` is the period anchor: the calendar day for
   a daily entry, Monday of that ISO week for a weekly entry, the
   1st of the month for a monthly entry, January 1 for a yearly
-  entry, and ``None`` for project / misc / untyped entries. The
-  server computes it from ``date`` + ``type`` on save. The PATCH
+  entry, and ``None`` for project / task / misc / untyped entries.
+  The server computes it from ``date`` + ``type`` on save. The PATCH
   endpoint does not accept changes to either field; clients must
   delete and re-create to relocate an entry to a different period.
 """
@@ -54,11 +75,13 @@ class EntryType(StrEnum):
     MONTHLY = "monthly"
     YEARLY = "yearly"
     PROJECT = "project"
+    TASK = "task"
     MISC = "misc"
 
 
 # Entry types that have a period anchor and therefore participate in
-# uniqueness checks. ``project`` and ``misc`` are free-form notes.
+# uniqueness checks. ``project``, ``task`` and ``misc`` are free-form
+# notes — a ``task`` entry is not periodic, it hangs off a task UID.
 _PERIODIC_TYPES: frozenset[EntryType] = frozenset(
     {EntryType.DAILY, EntryType.WEEKLY, EntryType.MONTHLY, EntryType.YEARLY, EntryType.BRIEFING}
 )
@@ -73,11 +96,14 @@ class Entry(BaseModel):
         date: Creation day. Set at creation; not editable from the API.
         reference_date: Period anchor (Monday for weekly, 1st of month
             for monthly, January 1 for yearly, ``date`` for daily,
-            ``None`` for project / misc / untyped). Server-computed on
+            ``None`` for project / task / misc / untyped). Server-computed on
             save; not editable from the API.
         title: Optional human title shown in the journal list and detail.
         type: Optional entry type used for filter chips and the periodic
             uniqueness rule.
+        task_id: Optional UID of the task this entry belongs to. Stored
+            in the frontmatter as ``task-id``. ``None`` for entries
+            written before task linkage existed.
         content: Markdown body.
         created: When the file was created (from filesystem mtime).
         modified: When the file was last modified (from filesystem mtime).
@@ -88,6 +114,7 @@ class Entry(BaseModel):
     reference_date: date_cls | None = None
     title: str | None = None
     type: EntryType | None = None
+    task_id: str | None = None
     content: str
     created: datetime | None = None
     modified: datetime | None = None
@@ -107,7 +134,7 @@ def _normalize_reference_date(
     - weekly  -> Monday of ``on``'s ISO week
     - monthly -> 1st of ``on``'s month
     - yearly  -> January 1 of ``on``'s year
-    - project, misc, None -> ``None`` (no period anchor)
+    - project, task, misc, None -> ``None`` (no period anchor)
     """
     if entry_type is None:
         return None
@@ -237,6 +264,8 @@ class JournalFacade:
             else:
                 entry_date = date_cls.fromtimestamp(stat.st_ctime)
             entry_type = EntryType(type_str) if type_str else None
+            task_value = meta.get("task-id")
+            entry_task_id = str(task_value) if task_value is not None else None
             ref_value = meta.get("reference-date")
             if isinstance(ref_value, date_cls):
                 entry_ref = ref_value
@@ -256,6 +285,7 @@ class JournalFacade:
                 reference_date=entry_ref,
                 title=meta.get("title"),
                 type=entry_type,
+                task_id=entry_task_id,
                 content=body,
                 created=to_utc(datetime.fromtimestamp(stat.st_ctime)),
                 modified=to_utc(datetime.fromtimestamp(stat.st_mtime)),
@@ -280,8 +310,11 @@ class JournalFacade:
         - Persists ``reference-date`` to the frontmatter whenever it is
           not ``None``.
 
-        ``project`` and ``misc`` entries skip the uniqueness check; they
-        are free-form notes, not periodic anchors.
+        ``project``, ``task`` and ``misc`` entries skip the uniqueness
+        check; they are free-form notes, not periodic anchors.
+
+        The task link is persisted to the frontmatter as ``task-id``
+        whenever it is set.
         """
         normalized_ref = _normalize_reference_date(entry.type, entry.date)
         if entry.type in _PERIODIC_TYPES:
@@ -311,6 +344,8 @@ class JournalFacade:
             meta["type"] = entry.type.value
         if entry.title:
             meta["title"] = entry.title
+        if entry.task_id:
+            meta["task-id"] = entry.task_id
         path.write_text(_serialize(meta, entry.content))
 
     def delete_entry(self, uid: str) -> bool:
@@ -321,12 +356,17 @@ class JournalFacade:
         path.unlink()
         return True
 
-    def list_entries(self) -> list[Entry]:
+    def list_entries(self, task_id: str | None = None) -> list[Entry]:
         """Return all parseable entries, newest first by file mtime.
 
         Files that fail to parse (legacy or malformed) are silently
         skipped. Legacy ``YYYY-MM-DD.md`` files from the previous
         filename scheme are also skipped — the user can delete them.
+
+        ``task_id`` filters on an exact task UID match. The filter
+        applies to the link, not to the entry type: an entry of any
+        type that points at the task is returned. Passing ``None``
+        returns every entry.
         """
         entries: list[Entry] = []
         for path in sorted(
@@ -339,6 +379,8 @@ class JournalFacade:
             entry = self.get_entry(path.stem)
             if entry is not None:
                 entries.append(entry)
+        if task_id is not None:
+            entries = [e for e in entries if e.task_id == task_id]
         return entries
 
     def find_daily_for_date(self, target_date: date_cls) -> Entry | None:
@@ -354,8 +396,8 @@ class JournalFacade:
 
         The reference date is normalised server-side: any day in a week
         for ``weekly``, any day in a month for ``monthly``, any day in
-        a year for ``yearly``. Daily accepts the date as-is. Project
-        and misc have no period anchor and always return ``None``.
+        a year for ``yearly``. Daily accepts the date as-is. Project,
+        task and misc have no period anchor and always return ``None``.
         """
         normalized = _normalize_reference_date(entry_type, on_or_in)
         if normalized is None:
@@ -377,8 +419,8 @@ class JournalFacade:
 
         Idempotent: re-running on already-repaired entries is a no-op.
 
-        Legacy daily entries and untyped / project / misc entries are
-        skipped — daily entries have ``reference-date == date`` which
+        Legacy daily entries and untyped / project / task / misc entries
+        are skipped — daily entries have ``reference-date == date`` which
         is filled in on read; the others have no period anchor.
         """
         report = RepairReport()

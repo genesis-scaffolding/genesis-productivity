@@ -10,6 +10,7 @@ Marked ``@pytest.mark.integration`` per project convention.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -1083,3 +1084,47 @@ def test_journal_clear_project_id_strips_footer(api_server_real: TestClient) -> 
         headers=_auth(token),
     ).json()
     assert cleared["project_id"] is None
+
+
+@pytest.mark.integration
+def test_journal_task_id_survives_markdown_round_trip(api_server_real: TestClient) -> None:
+    """The task link is stored as ``task-id`` in the entry frontmatter."""
+    token = _login(api_server_real)
+    task = api_server_real.post(
+        "/productivity/tasks",
+        json={"title": "linked-task"},
+        headers=_auth(token),
+    ).json()
+
+    entry = api_server_real.post(
+        "/productivity/journals",
+        json={
+            "type": "task",
+            "date": "2026-09-07",
+            "title": "notes",
+            "content": "task notes",
+            "task_id": task["uid"],
+        },
+        headers=_auth(token),
+    ).json()
+    assert entry["task_id"] == task["uid"]
+
+    # The markdown file holds the link in the frontmatter.
+    journal_dir = Path(os.environ["XDG_DATA_HOME"]) / "genesis" / "journals" / "default"
+    raw = (journal_dir / f"{entry['uid']}.md").read_text()
+    assert f"task-id: {task['uid']}" in raw
+    assert "type: task" in raw
+
+    # And it comes back on read and on the task-filtered list.
+    fetched = api_server_real.get(
+        f"/productivity/journals/{entry['uid']}",
+        headers=_auth(token),
+    ).json()
+    assert fetched["task_id"] == task["uid"]
+
+    listing = api_server_real.get(
+        f"/productivity/journals?task_id={task['uid']}",
+        headers=_auth(token),
+    ).json()
+    assert listing["total"] == 1
+    assert listing["items"][0]["uid"] == entry["uid"]

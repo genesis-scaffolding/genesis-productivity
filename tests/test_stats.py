@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from genesis.category.enums import TimeLogCategory
-from genesis.entities import TimeLogEntry, TimeLogMode, TimeLogStatus
+from genesis.entities import Task, TaskStatus, TimeLogEntry, TimeLogMode, TimeLogStatus
 from genesis.stats import (
     DailyPoint,
     Kpis,
@@ -18,6 +18,7 @@ from genesis.stats import (
     RecentSession,
     Rollup,
     compute_rollup,
+    count_completed_tasks,
     duration_seconds,
     period_bounds,
 )
@@ -208,6 +209,63 @@ def test_kpis_tasks_touched_counts_unique_task_ids() -> None:
     )
     assert rollup.kpis.session_count == 4
     assert rollup.kpis.tasks_touched == 2
+
+
+# ---------------------------------------------------------------------------
+# count_completed_tasks
+# ---------------------------------------------------------------------------
+
+
+def _task(
+    *,
+    uid: str,
+    completed_at: datetime | None = None,
+    status: TaskStatus = TaskStatus.COMPLETED,
+) -> Task:
+    return Task(uid=uid, title=f"Task {uid}", status=status, completed_at=completed_at)
+
+
+def test_count_completed_tasks_counts_completions_in_period() -> None:
+    tasks = [
+        _task(uid="t1", completed_at=datetime(2026, 9, 7, 9, 0, tzinfo=UTC)),
+        _task(uid="t2", completed_at=datetime(2026, 9, 9, 18, 30, tzinfo=UTC)),
+    ]
+    assert count_completed_tasks(tasks, Period.THIS_WEEK, date(2026, 9, 9)) == 2
+
+
+def test_count_completed_tasks_excludes_completions_outside_window() -> None:
+    tasks = [
+        # Before the window (the week starts Mon 2026-09-07).
+        _task(uid="before", completed_at=datetime(2026, 9, 6, 23, 59, 59, tzinfo=UTC)),
+        # Exactly on the exclusive end (start of Thu 2026-09-10).
+        _task(uid="at_end", completed_at=datetime(2026, 9, 10, 0, 0, tzinfo=UTC)),
+        # Inside the window.
+        _task(uid="inside", completed_at=datetime(2026, 9, 8, 12, 0, tzinfo=UTC)),
+    ]
+    assert count_completed_tasks(tasks, Period.THIS_WEEK, date(2026, 9, 9)) == 1
+
+
+def test_count_completed_tasks_ignores_unfinished_tasks() -> None:
+    tasks = [
+        _task(uid="done", completed_at=datetime(2026, 9, 8, 12, 0, tzinfo=UTC)),
+        # Not COMPLETED, so the stale timestamp does not count.
+        _task(uid="reopened", completed_at=datetime(2026, 9, 8, 13, 0, tzinfo=UTC), status=TaskStatus.IN_PROGRESS),
+        # COMPLETED but without a completion timestamp.
+        _task(uid="no_timestamp", completed_at=None),
+    ]
+    assert count_completed_tasks(tasks, Period.THIS_WEEK, date(2026, 9, 9)) == 1
+
+
+def test_count_completed_tasks_all_time_has_no_upper_bound() -> None:
+    tasks = [
+        _task(uid="old", completed_at=datetime(2020, 1, 1, tzinfo=UTC)),
+        _task(uid="new", completed_at=datetime(2026, 9, 8, 12, 0, tzinfo=UTC)),
+    ]
+    assert count_completed_tasks(tasks, Period.ALL_TIME, date(2026, 9, 9)) == 2
+
+
+def test_count_completed_tasks_with_no_tasks() -> None:
+    assert count_completed_tasks([], Period.THIS_WEEK, date(2026, 9, 9)) == 0
 
 
 # ---------------------------------------------------------------------------

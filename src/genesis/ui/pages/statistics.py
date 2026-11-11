@@ -29,7 +29,7 @@ import streamlit as st
 
 from genesis.category.enums import TimeLogCategory
 from genesis.entities import TimeLogEntry, TimeLogEntryUpdate
-from genesis.stats import Period, compute_rollup
+from genesis.stats import Period, compute_rollup, count_completed_tasks
 from genesis.tz import format_local
 from genesis.ui._render import render_sessions_kpi, session_log_dialog
 from genesis.ui._state import get_facade
@@ -77,15 +77,21 @@ all_completed = caldav.list_time_log()
 
 # One request for the whole tasks collection; a uid missing from the
 # map means the task was deleted (or is unparseable), so we label it
-# "(deleted)" the same way the per-task GETs did before.
-task_titles = {t.uid: t.title for t in caldav.list_tasks()}
+# "(deleted)" the same way the per-task GETs did before. The same list
+# feeds the completed-task count.
+tasks = caldav.list_tasks()
+task_titles = {t.uid: t.title for t in tasks}
+
+period = _PERIOD_LABEL_TO_ENUM[period_label]
+today = date.today()
 
 rollup = compute_rollup(
     entries=all_completed,
-    period=_PERIOD_LABEL_TO_ENUM[period_label],
-    today=date.today(),
+    period=period,
+    today=today,
     task_titles=task_titles,
 )
+tasks_completed = count_completed_tasks(tasks, period, today)
 
 
 # -----------------------------------------------------------------------------
@@ -141,9 +147,9 @@ with kpi_cols[2]:
         st.caption("Per session")
 with kpi_cols[3]:
     with st.container(border=True):
-        st.caption("Tasks touched")
-        st.markdown(f"## {rollup.kpis.tasks_touched}")
-        st.caption("Unique aligned tasks")
+        st.caption("Tasks completed")
+        st.markdown(f"## {tasks_completed}")
+        st.caption("Completed in period")
 
 st.write("")
 st.subheader("By category")

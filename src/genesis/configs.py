@@ -428,11 +428,20 @@ def _build_recurrence(raw: dict) -> dict:
     ``DEFAULT_MATERIALIZED_FUTURE_COUNT``. The env var is read
     explicitly because this loader merges plain dicts; a nested
     settings field is not populated from the environment on its own.
+
+    The raw value is passed through to the model, so a malformed
+    value (a non-numeric environment variable, a count outside the
+    accepted range) fails the pydantic validation of
+    :class:`RecurrenceConfig` instead of raising a bare ``ValueError``
+    from this function.
     """
     yaml_recurrence = raw.get("recurrence") or {}
     env_count = os.environ.get("GENESIS__RECURRENCE__DEFAULT_MATERIALIZED_FUTURE_COUNT")
     if env_count is not None and env_count != "":
-        count = int(env_count)
-    else:
-        count = int(yaml_recurrence.get("default_materialized_future_count", DEFAULT_MATERIALIZED_FUTURE_COUNT))
-    return {"default_materialized_future_count": count}
+        return {"default_materialized_future_count": env_count}
+    return {
+        "default_materialized_future_count": yaml_recurrence.get(
+            "default_materialized_future_count",
+            DEFAULT_MATERIALIZED_FUTURE_COUNT,
+        )
+    }

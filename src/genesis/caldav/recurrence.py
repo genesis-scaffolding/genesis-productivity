@@ -21,7 +21,7 @@ Vocabulary used throughout:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from ..entities import (
@@ -80,6 +80,11 @@ _DATE_FIELD_OFFSETS = {
     "assigned_date": "assigned_offset_days",
     "hard_deadline": "deadline_offset_days",
     "scheduled_start": "scheduled_offset_days",
+}
+
+_DATE_FIELD_LOCAL_TIME = {
+    "hard_deadline": "deadline_local_time",
+    "scheduled_start": "scheduled_local_time",
 }
 
 
@@ -581,6 +586,15 @@ def update_task_scoped(
 
     new_start_date, new_start_index = _reanchor(series, task, selected_after, new_rule, actions)
 
+    # A re-anchor happens when the chain moves to another occurrence
+    # (the selected one is not the chain anchor) or when the anchored
+    # FIELD changed. The second case matters even when the selected
+    # occurrence sits at the chain anchor: the template offsets are
+    # relative to the anchored field, so they must be recomputed from
+    # the new anchor instead of staying relative to the old one.
+    anchor_field_changed = new_rule.anchor.value != series.rule.anchor.value
+    reanchored = anchor_field_changed or new_start_index != series.start_index
+
     template = series.template.model_copy(deep=True)
     if "title" in dump:
         template.title = selected_after.title
@@ -600,7 +614,7 @@ def update_task_scoped(
         actions=actions,
         new_start_date=new_start_date,
         new_anchor=new_rule.anchor.value,
-        reanchored=new_start_index != series.start_index,
+        reanchored=reanchored,
     )
 
     series.rule = new_rule
@@ -658,6 +672,15 @@ def _reanchor(
     return series.start_date + timedelta(days=anchor_delta), series.start_index
 
 
+def _local_time_for(field: str, task: Task) -> time | None:
+    """Return the local wall-clock time of one of the datetime fields."""
+    if field == "hard_deadline":
+        return to_local(task.hard_deadline).time() if task.hard_deadline is not None else None
+    if field == "scheduled_start":
+        return to_local(task.scheduled_start).time() if task.scheduled_start is not None else None
+    return None
+
+
 def _apply_date_offsets(
     template: RecurrenceTemplate,
     *,
@@ -674,13 +697,20 @@ def _apply_date_offsets(
     A field the edit did not touch keeps its offset: the offsets are
     relative to the chain anchor, so a field shift is expressed as a
     day delta applied to the offset, not as an absolute date.
+
+    A re-anchor recomputes every offset (and every local time) from
+    the selected occurrence, because the anchor the offsets are
+    relative to has changed.
     """
     old_anchor = series.rule.anchor.value
     for field in _DATE_FIELDS:
         offset_attr = _DATE_FIELD_OFFSETS[field]
+        local_time_attr = _DATE_FIELD_LOCAL_TIME.get(field)
         if reanchored:
             value = _field_date(selected_after, field)
             setattr(template, offset_attr, None if value is None else (value - new_start_date).days)
+            if local_time_attr is not None:
+                setattr(template, local_time_attr, _local_time_for(field, selected_after))
             continue
         if field == old_anchor:
             if field in actions:
@@ -702,15 +732,8 @@ def _apply_date_offsets(
             current = getattr(template, offset_attr)
             base = current if current is not None else 0
             setattr(template, offset_attr, base + (new_value - old_value).days)
-
-    if "hard_deadline" in actions:
-        template.deadline_local_time = (
-            to_local(selected_after.hard_deadline).time() if selected_after.hard_deadline is not None else None
-        )
-    if "scheduled_start" in actions:
-        template.scheduled_local_time = (
-            to_local(selected_after.scheduled_start).time() if selected_after.scheduled_start is not None else None
-        )
+        if local_time_attr is not None:
+            setattr(template, local_time_attr, _local_time_for(field, selected_after))
 
 
 def deactivate_series(store: RecurrenceStore, series_uid: str) -> None:
@@ -726,6 +749,23 @@ def deactivate_series(store: RecurrenceStore, series_uid: str) -> None:
     series.active = False
     series.modified = now_utc()
     store.save_series(series)
+
+
+def clear_series_project(store: RecurrenceStore, project_uid: str) -> None:
+    """Unlink every series template from a deleted project.
+
+    Deleting a project clears the project link on its tasks. The
+    series templates must follow, otherwise the next materialized
+    occurrence is created with a dangling project id. The series
+    itself stays active: the work is still recurring, it is just not
+    attached to a project any more.
+    """
+    for series in store.list_series():
+        if series.template.project_id != project_uid:
+            continue
+        series.template.project_id = None
+        series.modified = now_utc()
+        store.save_series(series)
 
 
 def cancel_future(store: RecurrenceStore, uid: str) -> CancelFutureResult:

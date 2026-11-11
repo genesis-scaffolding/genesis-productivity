@@ -106,3 +106,21 @@ def test_global_default_applies_to_new_series_only(tmp_path: Path, monkeypatch: 
     stored = facade.caldav.get_series(first.series.uid)
     assert stored is not None
     assert stored.materialized_future_count == 1
+
+
+def test_non_numeric_environment_value_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A malformed environment value fails the pydantic validation.
+
+    It must not surface as a bare ``ValueError`` from the loader.
+    """
+    path = _write_config(tmp_path, "")
+    monkeypatch.setenv("GENESIS__RECURRENCE__DEFAULT_MATERIALIZED_FUTURE_COUNT", "not-a-number")
+    with pytest.raises(ValidationError):
+        Configs(yaml_path=path)
+
+
+def test_non_numeric_yaml_value_is_rejected(tmp_path: Path) -> None:
+    """A malformed YAML value fails the pydantic validation."""
+    path = _write_config(tmp_path, "recurrence:\n  default_materialized_future_count: 'four'\n")
+    with pytest.raises(ValidationError):
+        Configs(yaml_path=path)

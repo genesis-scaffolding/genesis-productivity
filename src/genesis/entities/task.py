@@ -98,9 +98,11 @@ class Task(BaseModel):
 class TaskCreate(BaseModel):
     """Data for creating a new task.
 
-    The ``recurrence_*`` fields are set by the recurrence layer, not by
-    the caller: a series creates its occurrences with deterministic
-    UIDs and their own occurrence metadata.
+    The recurrence metadata (``recurrence_series_uid``,
+    ``recurrence_occurrence``, ``recurrence_index``) is not part of
+    this model: the recurrence layer builds the occurrences of a
+    series itself, with deterministic UIDs and their own occurrence
+    metadata.
     """
 
     title: str
@@ -111,9 +113,6 @@ class TaskCreate(BaseModel):
     scheduled_duration: int | None = None
     priority: int | None = None
     project_id: str | None = None
-    recurrence_series_uid: str | None = None
-    recurrence_occurrence: date | None = None
-    recurrence_index: int | None = None
 
     model_config = {"extra": "ignore"}
 

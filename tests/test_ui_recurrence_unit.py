@@ -62,6 +62,33 @@ class _FakeFacade:
         self.caldav = caldav
         self.configs = _FakeConfigs(count)
 
+    def create_recurrent_task(
+        self,
+        data,
+        *,
+        frequency,
+        interval=1,
+        anchor,
+        materialized_future_count=None,
+    ):
+        """Create a recurrent task, resolving the global default.
+
+        Mirrors ``genesis.core.facade.Facade.create_recurrent_task``.
+        """
+        count = materialized_future_count
+        if count is None:
+            count = self.configs.recurrence.default_materialized_future_count
+        rule = RecurrenceRule(
+            frequency=RecurrenceFrequency(frequency),
+            interval=interval,
+            anchor=RecurrenceAnchor(anchor),
+        )
+        return self.caldav.create_recurrent_task(
+            data,
+            rule=rule,
+            materialized_future_count=count,
+        )
+
 
 @pytest.fixture
 def facade(monkeypatch: pytest.MonkeyPatch) -> _FakeFacade:
@@ -477,3 +504,96 @@ def test_inline_scope_does_not_apply_to_plain_tasks(
     assert scope == "current"
     assert content.title == "Renamed"
     assert status is None
+
+
+def test_create_dialog_state_is_cleared_on_close() -> None:
+    """The create dialog drops its widget state when it closes.
+
+    Otherwise a value typed during an earlier open would be reused,
+    including the materialized-future count that the global default
+    seeds.
+    """
+    st.session_state["_ntd_title"] = "Pay rent"
+    st.session_state["_ntd_horizon_1"] = 7
+    st.session_state["unrelated"] = "keep"
+
+    _render._clear_create_dialog_state()
+
+    assert "_ntd_title" not in st.session_state
+    assert "_ntd_horizon_1" not in st.session_state
+    assert st.session_state["unrelated"] == "keep"
+
+
+def test_create_horizon_follows_the_global_default(facade: _FakeFacade) -> None:
+    """A new widget starts from the current global default.
+
+    The widget key carries the resolved default, so a changed default
+    cannot be shadowed by a value typed during an earlier open.
+    """
+    facade.configs.recurrence = RecurrenceConfig(default_materialized_future_count=1)
+    first = _render.default_materialized_future_count(facade)
+    facade.configs.recurrence = RecurrenceConfig(default_materialized_future_count=4)
+    second = _render.default_materialized_future_count(facade)
+    assert (first, second) == (1, 4)
+
+
+def test_inline_edit_does_not_fall_back_to_another_scope(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected all-future edit is surfaced, not downgraded.
+
+    Clearing the anchor field of an anchored series is rejected by
+    the engine. The edit must not be applied to the selected
+    occurrence instead.
+    """
+    from genesis.entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
+
+    caldav = facade.caldav
+    created = caldav.create_recurrent_task(
+        TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+        rule=RecurrenceRule(
+            frequency=RecurrenceFrequency.MONTHLY,
+            interval=1,
+            anchor=RecurrenceAnchor.ASSIGNED_DATE,
+        ),
+        materialized_future_count=2,
+    )
+    st.session_state["test_tasks__edit_scope"] = "all-future"
+
+    error = _table.apply_inline_edit(
+        cast(CalDAVFacade, caldav),
+        "test_tasks",
+        created.task,
+        TaskUpdate(clear_assigned_date=True),
+    )
+
+    assert error is not None
+    assert "assigned_date" in error
+    # Nothing was written: the selected occurrence keeps its date and
+    # its title.
+    stored = caldav.get_task(created.task.uid)
+    assert stored is not None
+    assert stored.assigned_date == date(2026, 1, 31)
+    assert stored.title == "Pay rent"
+
+
+def test_inline_edit_applies_the_all_future_scope(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The all-future scope reaches every later occurrence."""
+    created = _series(facade, count=3)
+    st.session_state["test_tasks__edit_scope"] = "all-future"
+
+    error = _table.apply_inline_edit(
+        cast(CalDAVFacade, facade.caldav),
+        "test_tasks",
+        created.task,
+        TaskUpdate(title="Renamed"),
+    )
+
+    assert error is None
+    tasks = facade.caldav.list_series_tasks(created.series.uid)
+    titles = sorted(t.title for t in tasks)
+    assert titles == ["Pay rent", "Renamed", "Renamed", "Renamed"]

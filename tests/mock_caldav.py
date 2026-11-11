@@ -147,6 +147,10 @@ class MockCalDAVFacade:
             if task.project_id == uid:
                 task.project_id = None
                 task.modified = self._now()
+        # The recurrence series templates must follow, so the next
+        # materialized occurrence is not created with a dangling
+        # project id (ADR-033).
+        recurrence.clear_series_project(self._recurrence_store(), uid)
         del self._projects[uid]
         return True
 

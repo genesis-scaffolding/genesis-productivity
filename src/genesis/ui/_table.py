@@ -116,6 +116,12 @@ def run_pending_page_switch() -> None:
 # -----------------------------------------------------------------------------
 
 
+# Key the inline-edit handler stores an error message in. A widget
+# callback cannot render on the page itself, so the message is handed
+# to the script body through the session state.
+_INLINE_EDIT_ERROR_KEY = "_inline_edit_error"
+
+
 def request_task_detail(uid: str) -> None:
     """Ask for the Tasks page in its detail state.
 
@@ -376,6 +382,33 @@ def plan_inline_edit(key: str, task: Task, update: TaskUpdate) -> tuple[str, Tas
     return scope, _without_status(update), TaskUpdate(status=update.status)
 
 
+def apply_inline_edit(
+    caldav: CalDAVFacade,
+    key: str,
+    task: Task,
+    update: TaskUpdate,
+) -> str | None:
+    """Apply an inline table edit and return an error message, if any.
+
+    The scope comes from the table's explicit scope control. An edit
+    the chosen scope rejects is *not* applied under another scope: the
+    error is returned so the caller can surface it, because silently
+    routing the edit to a different scope would apply a change the
+    user did not ask for.
+    """
+    scope, content_update, status_update = plan_inline_edit(key, task, update)
+    if scope != EDIT_SCOPE_ALL_FUTURE:
+        caldav.update_task(task.uid, update)
+        return None
+    try:
+        caldav.update_task_scoped(task.uid, content_update, scope=EDIT_SCOPE_ALL_FUTURE)
+    except ValueError as exc:
+        return str(exc)
+    if status_update is not None:
+        caldav.update_task(task.uid, status_update)
+    return None
+
+
 def recurrence_labels(tasks: list[Task], caldav: CalDAVFacade) -> dict[str, tuple[str, str, str]]:
     """Return per-task (recurrence, role, series) labels.
 
@@ -616,17 +649,14 @@ def render_tasks_table(
                 continue
             # A status change is always a per-occurrence operation; the
             # inline scope only governs the content columns.
-            scope, content_update, status_update = plan_inline_edit(key, original, update)
-            if scope == EDIT_SCOPE_ALL_FUTURE:
-                try:
-                    caldav.update_task_scoped(original.uid, content_update, scope=EDIT_SCOPE_ALL_FUTURE)
-                except ValueError:
-                    caldav.update_task(original.uid, update)
-                else:
-                    if status_update is not None:
-                        caldav.update_task(original.uid, status_update)
-            else:
-                caldav.update_task(original.uid, update)
+            error = apply_inline_edit(caldav, key, original, update)
+            if error is not None:
+                # The chosen scope rejected the edit. The callback
+                # cannot render on the page, so the message is handed
+                # to the script body through the session state. The
+                # edit was not applied, so there is nothing to reward.
+                st.session_state[_INLINE_EDIT_ERROR_KEY] = error
+                continue
             # ADR-026: if the user just transitioned this task to
             # COMPLETED via inline edit, fire the XP event. The
             # intent is read from the changes dict (already known
@@ -684,6 +714,12 @@ def render_tasks_table(
         on_change=_handle_inline_edit,
         key=key,
     )
+
+    # An inline edit that the chosen scope rejected leaves a message
+    # behind. The callback cannot render it, so the script body does.
+    inline_error = st.session_state.pop(_INLINE_EDIT_ERROR_KEY, None)
+    if inline_error:
+        st.error(inline_error)
 
     # A row action may have asked for another page. Perform the switch
     # here, in the script body: st.switch_page inside the row-action

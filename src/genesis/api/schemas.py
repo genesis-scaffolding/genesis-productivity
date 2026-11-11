@@ -222,6 +222,26 @@ class SeriesFutureOccurrenceOut(BaseModel):
     occurrence_date: datetime.date | None
 
 
+class RecurrenceTemplateOut(BaseModel):
+    """The future-occurrence template of a series.
+
+    The dates are expressed as day offsets from the series anchor, so
+    a client can reason about the shape of the future occurrences
+    without recomputing them.
+    """
+
+    title: str
+    description: str | None
+    project_id: str | None
+    priority: int | None
+    scheduled_duration: int | None
+    deadline_local_time: str | None
+    scheduled_local_time: str | None
+    assigned_offset_days: int | None
+    deadline_offset_days: int | None
+    scheduled_offset_days: int | None
+
+
 class RecurrenceSeriesOut(BaseModel):
     """Inspection state of a recurrence series."""
 
@@ -234,6 +254,7 @@ class RecurrenceSeriesOut(BaseModel):
     active: bool
     current_task_uid: str | None
     future_occurrences: list[SeriesFutureOccurrenceOut]
+    template: RecurrenceTemplateOut
 
 
 class RecurrenceSeriesUpdateIn(BaseModel):

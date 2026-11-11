@@ -134,7 +134,22 @@ def next_occurrence_date(base: date, frequency: str, interval: int) -> date:
     return occurrence_date(base, rule, 1)
 
 
-@st.dialog("New task", width="large", on_dismiss="rerun")
+_CREATE_DIALOG_STATE_PREFIX = "_ntd_"
+
+
+def _clear_create_dialog_state() -> None:
+    """Drop the create-dialog widget state when the dialog closes.
+
+    The widgets of a closed dialog would otherwise be reused the next
+    time it opens, including the materialized-future count that the
+    global default seeds. The global default must win over a value
+    typed during an earlier open.
+    """
+    for key in [k for k in st.session_state.keys() if str(k).startswith(_CREATE_DIALOG_STATE_PREFIX)]:
+        st.session_state.pop(key, None)
+
+
+@st.dialog("New task", width="large", on_dismiss=_clear_create_dialog_state)
 def task_create_dialog(*, project_id: str | None = None) -> None:
     """Open the create-task dialog. Call from a button body.
 
@@ -241,7 +256,10 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
                 min_value=1,
                 max_value=100,
                 value=horizon_value,
-                key="_ntd_horizon",
+                # The key carries the resolved default, so a change of
+                # the global default starts a fresh widget instead of
+                # restoring the value typed during an earlier open.
+                key=f"_ntd_horizon_{horizon_value}",
                 help="How many future occurrences stay materialized ahead of the current one.",
             )
         )
@@ -284,13 +302,11 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
         )
         if is_recurrent:
             try:
-                facade.caldav.create_recurrent_task(
+                facade.create_recurrent_task(
                     task_data,
-                    rule=RecurrenceRule(
-                        frequency=RecurrenceFrequency(frequency_value),
-                        interval=interval_value,
-                        anchor=RecurrenceAnchor(anchor_value),
-                    ),
+                    frequency=frequency_value,
+                    interval=interval_value,
+                    anchor=anchor_value,
                     materialized_future_count=horizon_value,
                 )
             except ValueError as exc:
@@ -344,11 +360,12 @@ def task_edit_dialog(uid: str) -> None:
     edit_scope = EDIT_SCOPE_CURRENT
     if is_recurrent:
         scope_labels = ["This instance", "All future instances"]
-        scope_index = 0 if st.session_state.get(f"{kp}_scope_choice") == EDIT_SCOPE_ALL_FUTURE else 0
+        # The radio keeps its own key, so Streamlit restores the
+        # scope the user picked the last time this dialog was open.
         scope_choice = st.radio(
             "Applies to",
             scope_labels,
-            index=scope_index,
+            index=0,
             key=f"{kp}_scope_choice",
             horizontal=True,
             help="Edit this occurrence only, or every later occurrence of the series.",

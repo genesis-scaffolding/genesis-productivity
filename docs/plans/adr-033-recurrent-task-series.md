@@ -156,4 +156,32 @@ the places where the code differs from the wording of the plan.
   rebuilds the scheduled time of a future occurrence, so a scheduled
   time keeps its local wall-clock meaning across a daylight-saving
   transition.
+- **The idempotency guarantee is occurrence-level.** The deterministic
+  occurrence UID and the logical-index check make a materialization
+  resumable: a retry after a partial write creates only the missing
+  indexes, and two writers cannot materialize one index twice. A
+  per-series mutation lock and an ETag-protected series update are
+  *not* implemented; two writers that change the series record at the
+  same time can still overwrite each other. ADR-033 §3 records the
+  same limitation.
+- **Deleting a project clears the series templates.** The series
+  stays active, but its template no longer points at the deleted
+  project, so the next materialized occurrence is not created with a
+  dangling project id. Cancelling a project deactivates the series
+  before the cascade cancels its occurrences.
+- **One place resolves the materialized horizon.** The core facade
+  (`Facade.create_recurrent_task`) reads
+  `configs.recurrence.default_materialized_future_count` when the
+  request does not carry an explicit count. The API and the UI both
+  go through it.
+- **A rule change requires the all-future scope.** The API rejects a
+  `PATCH` that carries a recurrence rule change with
+  `scope=current` (400) instead of answering 200 for a request that
+  changed nothing.
+- **The series inspection reports the template.** The response of
+  `GET /recurrences/{uid}` carries the future template, so a client
+  can understand a future edit without guessing.
+- **A rejected inline edit is surfaced.** When the table's explicit
+  scope rejects an inline edit, the error is shown to the user; the
+  edit is never applied under a different scope.
 

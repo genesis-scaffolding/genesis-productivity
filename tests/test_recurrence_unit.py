@@ -686,6 +686,41 @@ class TestProjectCascade:
         tasks = facade.list_series_tasks(created.series.uid)
         assert all(t.project_id is None for t in tasks)
 
+    def test_deleting_a_project_clears_the_series_template(self) -> None:
+        """The next materialized occurrence must not re-attach.
+
+        The series stays active, but its template must not point at
+        the deleted project any more.
+        """
+        from genesis.entities import ProjectCreate
+
+        facade = _facade()
+        project = facade.create_project(ProjectCreate(name="Rent"))
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31), project_id=project.uid),
+            rule=_rule(),
+            materialized_future_count=1,
+        )
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.template.project_id == project.uid
+
+        facade.delete_project(project.uid)
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.active is True
+        assert series.template.project_id is None
+
+        # Completing the current materializes a new tail occurrence.
+        # It must not carry the deleted project.
+        facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+        tasks = facade.list_series_tasks(created.series.uid)
+        assert len(tasks) == 3
+        assert all(t.project_id is None for t in tasks)
+        newest = max(tasks, key=lambda t: t.recurrence_index or 0)
+        assert newest.project_id != project.uid
+
 
 class TestUidCollision:
     """A deterministic occurrence UID must not overwrite another task."""
@@ -709,3 +744,101 @@ class TestUidCollision:
 
         with pytest.raises(ValueError, match="already used"):
             facade.resize_series(created.series.uid, 3)
+
+
+class TestAnchorFieldChange:
+    """Changing the anchored field re-anchors the chain."""
+
+    def _series_with_deadline(self, facade: MockCalDAVFacade, count: int = 2):
+        """Create a series anchored on the assigned date with a deadline."""
+        return facade.create_recurrent_task(
+            TaskCreate(
+                title="Pay rent",
+                assigned_date=date(2026, 1, 31),
+                hard_deadline=datetime(2026, 2, 5, 12, 0, tzinfo=UTC),
+            ),
+            rule=_rule(RecurrenceFrequency.MONTHLY, 1, RecurrenceAnchor.ASSIGNED_DATE),
+            materialized_future_count=count,
+        )
+
+    def test_anchor_field_change_on_the_chain_anchor_reanchors(self) -> None:
+        """The offsets follow the new anchor field.
+
+        The selected occurrence sits at the chain anchor, so the
+        re-anchor does not move the chain index. The template offsets
+        must still be recomputed: they are relative to the anchored
+        field, and the anchored field changed.
+        """
+        from genesis.entities import RecurrenceRuleUpdate
+
+        facade = _facade()
+        created = self._series_with_deadline(facade, count=2)
+        tasks = _by_index(facade, created.series.uid)
+        selected = tasks[0]
+        assert selected.recurrence_index == 0
+
+        facade.update_task_scoped(
+            selected.uid,
+            TaskUpdate(title="Pay rent"),
+            scope="all-future",
+            rule_change=RecurrenceRuleUpdate(anchor=RecurrenceAnchor.HARD_DEADLINE),
+        )
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.rule.anchor == RecurrenceAnchor.HARD_DEADLINE
+        # The chain is re-anchored on the deadline of the selected
+        # occurrence, which is 2026-02-05.
+        assert series.start_date == date(2026, 2, 5)
+        assert series.start_index == 0
+        # The offsets are now relative to the deadline.
+        assert series.template.deadline_offset_days == 0
+        assert series.template.assigned_offset_days == (date(2026, 1, 31) - date(2026, 2, 5)).days
+        assert series.template.deadline_local_time is not None
+
+    def test_anchor_field_change_keeps_the_future_occurrences_consistent(self) -> None:
+        """The affected futures are rebuilt against the new anchor."""
+        from genesis.entities import RecurrenceRuleUpdate
+
+        facade = _facade()
+        created = self._series_with_deadline(facade, count=2)
+        tasks = _by_index(facade, created.series.uid)
+        selected = tasks[0]
+
+        facade.update_task_scoped(
+            selected.uid,
+            TaskUpdate(title="Pay rent"),
+            scope="all-future",
+            rule_change=RecurrenceRuleUpdate(anchor=RecurrenceAnchor.HARD_DEADLINE),
+        )
+
+        tasks = _by_index(facade, created.series.uid)
+        # The chain is anchored on 2026-02-05: the future occurrences
+        # are one and two months later, and their assigned dates keep
+        # the offset to the anchor (-5 days).
+        assert tasks[1].assigned_date == date(2026, 3, 5) + timedelta(days=-5)
+        assert tasks[1].hard_deadline is not None
+        assert tasks[1].hard_deadline.date() == date(2026, 3, 5)
+        assert tasks[2].assigned_date == date(2026, 4, 5) + timedelta(days=-5)
+
+    def test_anchor_field_change_from_a_later_occurrence_reanchors(self) -> None:
+        """The same change from a later occurrence re-anchors there."""
+        from genesis.entities import RecurrenceRuleUpdate
+
+        facade = _facade()
+        created = self._series_with_deadline(facade, count=3)
+        tasks = _by_index(facade, created.series.uid)
+        later = tasks[2]
+
+        facade.update_task_scoped(
+            later.uid,
+            TaskUpdate(title="Pay rent"),
+            scope="all-future",
+            rule_change=RecurrenceRuleUpdate(anchor=RecurrenceAnchor.HARD_DEADLINE),
+        )
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.rule.anchor == RecurrenceAnchor.HARD_DEADLINE
+        assert series.start_index == 2
+        assert series.template.deadline_offset_days == 0

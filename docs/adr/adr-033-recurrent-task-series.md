@@ -174,13 +174,20 @@ The CalDAV resource path is therefore stable for a logical occurrence,
 so concurrent or retried writers update the same object instead of
 creating duplicates.
 
-Before creating an occurrence, the facade checks whether that logical
+Before creating an occurrence, the engine checks whether that logical
 occurrence already exists and verifies that an existing UID belongs to
-the same series and index. Series mutations are serialized and use the
-CalDAV ETag, so retrying after a partial failure resumes at the first
-missing index instead of duplicating one of the N objects. A direct
-third-party CalDAV client that edits a task's status without going
-through the Genesis facade is outside the supported recurrence contract.
+the same series and index. The guarantee this gives is
+*occurrence-level idempotency*: a retried or concurrent writer
+addresses the same CalDAV resource for a logical occurrence, and a
+write that failed half-way through resumes at the first missing index
+instead of duplicating one of the N objects. It is not a
+series-level lock: two writers that change the series record itself
+at the same time can still overwrite each other's rule, template, or
+horizon. Serializing the series mutations (a per-series lock plus an
+ETag-protected update with a reload-and-retry path) is not
+implemented in this round and stays open. A direct third-party CalDAV
+client that edits a task's status without going through the Genesis
+facade is outside the supported recurrence contract.
 
 ### 4. Edit scope
 
@@ -206,7 +213,9 @@ materialized future task and to the template for later unmaterialized
 occurrences. Instance lifecycle status remains a per-occurrence
 operation. A future-scope request that tries to change status is
 rejected rather than silently completing or cancelling several
-occurrences.
+occurrences. A rule change only has a meaning for the future chain,
+so a request that carries one with the `current` scope is rejected
+instead of being answered with a change that did nothing.
 
 Changing the rule or anchor in future scope re-anchors the future
 chain and recomputes every affected future row. The chain keeps its
@@ -215,7 +224,8 @@ anchored field, so the monthly clamping day of the series is
 preserved: a January 31 series stays on the 31st. A field the edit
 did not touch keeps its offset. Changing the anchored *field* (rather
 than its value) re-anchors the chain at the selected occurrence and
-recomputes the offsets from it. The current occurrence and any
+recomputes the offsets from it, whether or not the selected
+occurrence is the chain anchor. The current occurrence and any
 completed history are never moved or rewritten, and the occurrence
 indexes stay stable so the deterministic occurrence UIDs keep
 pointing at the same logical occurrences.
@@ -301,7 +311,9 @@ The Streamlit UI mirrors the API contract:
   the renewal.
 - The shared task table has an edit-scope control for recurring tasks.
   Inline content, date, priority, and project edits use that scope;
-  status changes remain current-occurrence operations.
+  status changes remain current-occurrence operations. An inline edit
+  the chosen scope rejects is reported to the user; it is never
+  applied under a different scope.
 - The task table shows the recurrence rule, effective N, and series
   UID. It also labels each row as current, a numbered future in the N-
   occurrence window, or history. For N greater than 1, all N future
@@ -322,9 +334,12 @@ Project cancellation and deletion must not leave an active recurrence
 series pointing at cancelled tasks. Cancelling a project deactivates
 the series of its occurrences before the cascade cancels them, so no
 replacement occurrence is materialized over cancelled work. Deleting a
-project only unlinks its tasks; the series stays active. The backup
-manifest gains an optional recurrence-series count; raw backup and
-restore continue to use the existing literal CalDAV archive format.
+project only unlinks its tasks; the series stays active, but the
+project link is cleared from the series templates too, so the next
+materialized occurrence is not created with a dangling project id.
+The backup manifest gains an optional recurrence-series count; raw
+backup and restore continue to use the existing literal CalDAV
+archive format.
 
 ## Status
 
@@ -355,8 +370,11 @@ Negative:
   operations must be idempotent and use compensating cleanup when
   creation fails part-way through.
 - Concurrent completion or future-update requests need locking or
-  occurrence-level idempotency checks. Two writers must not materialize
-  the same occurrence twice.
+  occurrence-level idempotency checks. Two writers must not
+  materialize the same occurrence twice. This round implements the
+  occurrence-level part (the deterministic UID and the logical-index
+  check); a per-series lock and an ETag-protected series update are
+  not implemented yet.
 - Materialized occurrences consume more storage than one recurring
   VTODO. The rolling horizon limits this to current, N futures, and
   retained history. A larger N multiplies the number of CalDAV writes

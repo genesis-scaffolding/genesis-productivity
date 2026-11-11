@@ -916,3 +916,39 @@ class TestRecurrenceSeriesIntegration:
         for task in facade.list_tasks():
             assert task.uid != series_uid
         assert len(facade.list_series()) == 1
+
+
+@pytest.mark.integration
+class TestRecurrenceSeriesFilter:
+    """The series filter is pushed down to the CalDAV query."""
+
+    def test_tasks_filter_by_series_uid(self, facade: CalDAVFacade) -> None:
+        """list_tasks(series_uid=...) returns only that series' tasks."""
+        from genesis.entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
+
+        rule = RecurrenceRule(
+            frequency=RecurrenceFrequency.MONTHLY,
+            interval=1,
+            anchor=RecurrenceAnchor.ASSIGNED_DATE,
+        )
+        first = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=rule,
+            materialized_future_count=2,
+        )
+        second = facade.create_recurrent_task(
+            TaskCreate(title="Health insurance", assigned_date=date(2026, 1, 31)),
+            rule=rule,
+            materialized_future_count=1,
+        )
+        facade.create_task(TaskCreate(title="Plain task"))
+
+        listed = facade.list_tasks(series_uid=first.series.uid)
+        assert len(listed) == 3
+        assert all(t.recurrence_series_uid == first.series.uid for t in listed)
+
+        other = facade.list_tasks(series_uid=second.series.uid)
+        assert len(other) == 2
+        assert all(t.recurrence_series_uid == second.series.uid for t in other)
+
+        assert len(facade.list_tasks()) == 6

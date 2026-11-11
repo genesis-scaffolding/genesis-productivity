@@ -34,7 +34,6 @@ from ...entities import (
     ProjectUpdate,
     RecurrenceAnchor,
     RecurrenceFrequency,
-    RecurrenceRule,
     RecurrenceRuleUpdate,
     TaskCreate,
     TaskStatus,
@@ -68,9 +67,11 @@ from ..schemas import (
     RecurrenceAnchorWire,
     RecurrenceFrequencyWire,
     RecurrenceRuleUpdateIn,
+    RecurrenceScope,
     RecurrenceSeriesOut,
     RecurrenceSeriesResizeOut,
     RecurrenceSeriesUpdateIn,
+    RecurrenceTemplateOut,
     SeriesFutureOccurrenceOut,
     StatisticsOut,
     StatisticsPeriod,
@@ -275,17 +276,6 @@ def _series_by_uid(facade: Facade, tasks) -> dict[str, Any]:
     return series_by_uid
 
 
-def _resolved_horizon(facade: Facade, requested: int | None) -> int:
-    """Resolve the materialized-future count for a new series.
-
-    An explicit request wins; otherwise the per-user global default
-    applies (ADR-033).
-    """
-    if requested is not None:
-        return requested
-    return facade.configs.recurrence.default_materialized_future_count
-
-
 def _project_name_lookup(facade: Facade) -> dict[str, str]:
     """Map project UID -> name for resolving journal footers."""
     return {p.uid: p.name for p in facade.caldav.list_projects()}
@@ -485,6 +475,7 @@ def list_tasks(
     scheduled_start_end: Annotated[datetime | None, Query()] = None,
     completed_at_start: Annotated[datetime | None, Query()] = None,
     completed_at_end: Annotated[datetime | None, Query()] = None,
+    series_uid: Annotated[str | None, Query()] = None,
     sort_by: Annotated[list[str] | None, Query()] = None,
     order: Annotated[str, Query()] = "asc",
     offset: Annotated[int | None, Query()] = None,
@@ -502,6 +493,7 @@ def list_tasks(
             end=server_end,
             completed_at_start=completed_at_start,
             completed_at_end=completed_at_end,
+            series_uid=series_uid,
             sort_by=_task_sort_field(sort_by),
             sort_order=order,
         )
@@ -611,20 +603,21 @@ def create_task(
 
 
 def _create_recurrent_task(facade: Facade, body: TaskCreateIn, data: TaskCreate) -> TaskOut:
-    """Create a recurrent task and return its current occurrence."""
+    """Create a recurrent task and return its current occurrence.
+
+    The core facade resolves the materialized horizon: an explicit
+    count wins, otherwise the per-user global default applies
+    (ADR-033).
+    """
     recurrence = body.recurrence
     assert recurrence is not None
-    rule = RecurrenceRule(
-        frequency=RecurrenceFrequency(recurrence.frequency.value),
-        interval=recurrence.interval,
-        anchor=RecurrenceAnchor(recurrence.anchor.value),
-    )
-    horizon = _resolved_horizon(facade, recurrence.materialized_future_count)
     try:
-        created = facade.caldav.create_recurrent_task(
+        created = facade.create_recurrent_task(
             data,
-            rule=rule,
-            materialized_future_count=horizon,
+            frequency=recurrence.frequency.value,
+            interval=recurrence.interval,
+            anchor=recurrence.anchor.value,
+            materialized_future_count=recurrence.materialized_future_count,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -692,15 +685,24 @@ def update_task(
         if body.status is not None:
             kwargs["status"] = wire_to_task_status(body.status)
 
-        scope = body.scope.value if body.scope is not None else "current"
+        scope = body.scope.value if body.scope is not None else RecurrenceScope.CURRENT.value
         rule_change = _rule_change(body.recurrence)
 
-        if scope == "all-future":
-            return _update_task_all_future(facade, uid, existing, body, kwargs, rule_change)
+        if scope == RecurrenceScope.ALL_FUTURE.value:
+            return _update_task_all_future(facade, uid, kwargs, rule_change)
+
+        if rule_change is not None:
+            # A rule change re-anchors the future chain; it has no
+            # meaning for a single occurrence. Silently ignoring it
+            # would answer 200 for a request that did nothing.
+            raise HTTPException(
+                status_code=400,
+                detail="a recurrence rule change requires scope=all-future",
+            )
 
         if not kwargs:
             out = _task_to_wire(existing)
-            out.scope = body.scope
+            out.scope = RecurrenceScope.CURRENT
             out.affected_uids = [existing.uid]
             return out
 
@@ -721,7 +723,7 @@ def update_task(
 
         series = facade.caldav.get_series(task.recurrence_series_uid) if task and task.recurrence_series_uid else None
         out = _task_to_wire(task, series)
-        out.scope = body.scope
+        out.scope = RecurrenceScope.CURRENT
         out.affected_uids = [task.uid] if task is not None else []
         return out
     finally:
@@ -742,8 +744,6 @@ def _rule_change(body: RecurrenceRuleUpdateIn | None) -> RecurrenceRuleUpdate | 
 def _update_task_all_future(
     facade: Facade,
     uid: str,
-    existing,
-    body: TaskUpdateIn,
     kwargs: dict[str, Any],
     rule_change: RecurrenceRuleUpdate | None,
 ) -> TaskOut:
@@ -761,7 +761,7 @@ def _update_task_all_future(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     series = facade.caldav.get_series(result.task.recurrence_series_uid) if result.task.recurrence_series_uid else None
     out = _task_to_wire(result.task, series)
-    out.scope = body.scope
+    out.scope = RecurrenceScope.ALL_FUTURE
     out.affected_uids = result.affected_uids
     return out
 
@@ -829,6 +829,22 @@ def read_recurrence_series(
                 )
                 for occurrence in state.future_occurrences
             ],
+            template=RecurrenceTemplateOut(
+                title=state.template.title,
+                description=state.template.description,
+                project_id=state.template.project_id,
+                priority=state.template.priority,
+                scheduled_duration=state.template.scheduled_duration,
+                deadline_local_time=(
+                    state.template.deadline_local_time.isoformat() if state.template.deadline_local_time else None
+                ),
+                scheduled_local_time=(
+                    state.template.scheduled_local_time.isoformat() if state.template.scheduled_local_time else None
+                ),
+                assigned_offset_days=state.template.assigned_offset_days,
+                deadline_offset_days=state.template.deadline_offset_days,
+                scheduled_offset_days=state.template.scheduled_offset_days,
+            ),
         )
     finally:
         facade.shutdown()

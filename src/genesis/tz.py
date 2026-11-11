@@ -56,8 +56,6 @@ def to_utc_walltime(dt: datetime) -> datetime:
     Used by the recurrence layer (ADR-033) to rebuild scheduled times
     for future occurrences.
     """
-    if dt.tzinfo is None:
-        return dt.astimezone(UTC)
     return dt.astimezone(UTC)
 
 

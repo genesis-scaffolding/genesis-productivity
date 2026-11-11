@@ -195,8 +195,11 @@ def update_project(facade: CalDAVFacade, uid: str, data: ProjectUpdate) -> Proje
 def delete_project(facade: CalDAVFacade, uid: str) -> bool:
     """Delete a project.
 
-    Clears project_id from any tasks that reference this project, then
-    removes the project itself.
+    Clears project_id from any tasks that reference this project and
+    from the template of every recurrence series that points at it,
+    then removes the project itself. Without the template cleanup the
+    next materialized occurrence of such a series would be created
+    with a dangling project id (ADR-033).
     """
     try:
         obj = _get_calendar(facade).object_by_uid(uid)
@@ -206,9 +209,11 @@ def delete_project(facade: CalDAVFacade, uid: str) -> bool:
         return False
 
     # Clear project_id on linked tasks before removing the project itself.
+    from . import recurrence as _recurrence
     from . import tasks as _tasks
 
     _tasks._clear_project_id_on_tasks(facade, uid)
+    _recurrence.clear_series_project(_recurrence.CalDAVRecurrenceStore(facade), uid)
 
     obj.delete()
     return True

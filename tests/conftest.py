@@ -195,6 +195,37 @@ def _build_mock_facade() -> object:
                 )
             )
 
+        def create_recurrent_task(
+            self,
+            data,
+            *,
+            frequency,
+            interval=1,
+            anchor,
+            materialized_future_count=None,
+        ):
+            """Create a recurrent task, resolving the global default.
+
+            Mirrors ``genesis.core.facade.Facade.create_recurrent_task``
+            so the API and the UI resolve the materialized horizon in
+            one place.
+            """
+            from genesis.entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
+
+            count = materialized_future_count
+            if count is None:
+                count = self.configs.recurrence.default_materialized_future_count
+            rule = RecurrenceRule(
+                frequency=RecurrenceFrequency(frequency),
+                interval=interval,
+                anchor=RecurrenceAnchor(anchor),
+            )
+            return self.caldav.create_recurrent_task(
+                data,
+                rule=rule,
+                materialized_future_count=count,
+            )
+
         def complete_task(self, uid):
             from genesis.entities import TaskStatus, TaskUpdate
 

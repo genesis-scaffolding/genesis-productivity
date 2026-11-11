@@ -156,9 +156,17 @@ def test_read_missing_series_is_404(api_server: TestClient) -> None:
 
 
 def test_list_by_series_uid_returns_current_futures_and_history(api_server: TestClient) -> None:
+    """The series filter narrows the list to one series.
+
+    Two series are seeded so the assertion proves the filter works
+    and not merely that the fixture happens to hold one series' tasks.
+    """
     token = _login(api_server)
-    body = _create_recurrent(api_server, token, count=2)
+    body = _create_recurrent(api_server, token, count=2, title="Pay rent")
     series_uid = body["recurrence"]["series_uid"]
+    other = _create_recurrent(api_server, token, count=1, title="Health insurance")
+    other_series_uid = other["recurrence"]["series_uid"]
+    assert other_series_uid != series_uid
 
     api_server.patch(
         f"/productivity/tasks/{body['uid']}",
@@ -169,9 +177,21 @@ def test_list_by_series_uid_returns_current_futures_and_history(api_server: Test
     listed = api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token))
     assert listed.status_code == 200, listed.text
     items = listed.json()["items"]
+    # The completed current occurrence, its two futures, and the tail
+    # occurrence materialized when the current was completed.
     assert len(items) == 4
+    assert {item["recurrence"]["series_uid"] for item in items} == {series_uid}
     assert any(item["status"] == "completed" for item in items)
     assert all(item["recurrence"]["series_uid"] == series_uid for item in items)
+
+    # Without the filter both series are listed.
+    unfiltered = api_server.get("/productivity/tasks", headers=_auth(token))
+    assert unfiltered.status_code == 200, unfiltered.text
+    assert unfiltered.json()["total"] == 6
+    assert {item["recurrence"]["series_uid"] for item in unfiltered.json()["items"]} == {
+        series_uid,
+        other_series_uid,
+    }
 
 
 def test_list_enrichment_fetches_each_series_once(api_server_with_mock) -> None:
@@ -433,3 +453,96 @@ def test_task_status_values_are_unchanged(api_server: TestClient) -> None:
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "completed"
     assert TaskStatus.COMPLETED.value == "completed"
+
+
+def test_read_series_includes_the_template(api_server: TestClient) -> None:
+    """The series inspection reports the future template."""
+    token = _login(api_server)
+    body = _create_recurrent(api_server, token, count=4)
+    series_uid = body["recurrence"]["series_uid"]
+
+    resp = api_server.get(f"/productivity/recurrences/{series_uid}", headers=_auth(token))
+    assert resp.status_code == 200, resp.text
+    template = resp.json()["template"]
+    assert template["title"] == "Pay rent"
+    assert template["assigned_offset_days"] == 0
+    assert template["deadline_offset_days"] is None
+    assert template["scheduled_offset_days"] is None
+    assert template["project_id"] is None
+    assert template["priority"] is None
+
+
+def test_patch_scope_defaults_to_current_in_the_response(api_server: TestClient) -> None:
+    """The response reports the applied scope, not the requested one."""
+    token = _login(api_server)
+    body = _create_recurrent(api_server, token, count=2)
+    resp = api_server.patch(
+        f"/productivity/tasks/{body['uid']}",
+        json={"title": "Renamed"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["scope"] == "current"
+    assert resp.json()["affected_uids"] == [body["uid"]]
+
+
+def test_patch_with_an_explicit_current_scope_reports_current(api_server: TestClient) -> None:
+    token = _login(api_server)
+    body = _create_recurrent(api_server, token, count=2)
+    resp = api_server.patch(
+        f"/productivity/tasks/{body['uid']}",
+        json={"title": "Renamed", "scope": "current"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["scope"] == "current"
+
+
+def test_patch_with_an_explicit_all_future_scope_reports_all_future(api_server: TestClient) -> None:
+    token = _login(api_server)
+    body = _create_recurrent(api_server, token, count=2)
+    resp = api_server.patch(
+        f"/productivity/tasks/{body['uid']}",
+        json={"title": "Renamed", "scope": "all-future"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["scope"] == "all-future"
+
+
+def test_patch_with_a_rule_change_and_the_current_scope_is_rejected(api_server: TestClient) -> None:
+    """A rule change needs the all-future scope.
+
+    Answering 200 for a request that changed nothing would hide the
+    mistake from the caller.
+    """
+    token = _login(api_server)
+    body = _create_recurrent(api_server, token, count=2)
+    resp = api_server.patch(
+        f"/productivity/tasks/{body['uid']}",
+        json={"recurrence": {"frequency": "weekly"}},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 400, resp.text
+    assert "all-future" in resp.json()["detail"]
+
+    # The rule is unchanged.
+    series = api_server.get(f"/productivity/recurrences/{body['recurrence']['series_uid']}", headers=_auth(token))
+    assert series.status_code == 200, series.text
+    assert series.json()["frequency"] == "monthly"
+
+
+def test_patch_with_a_rule_change_and_the_all_future_scope_is_applied(api_server: TestClient) -> None:
+    token = _login(api_server)
+    body = _create_recurrent(api_server, token, count=2)
+    resp = api_server.patch(
+        f"/productivity/tasks/{body['uid']}",
+        json={"recurrence": {"frequency": "weekly"}, "scope": "all-future"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["scope"] == "all-future"
+
+    series = api_server.get(f"/productivity/recurrences/{body['recurrence']['series_uid']}", headers=_auth(token))
+    assert series.status_code == 200, series.text
+    assert series.json()["frequency"] == "weekly"

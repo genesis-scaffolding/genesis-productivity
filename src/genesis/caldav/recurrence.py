@@ -698,6 +698,11 @@ def _apply_date_offsets(
     relative to the chain anchor, so a field shift is expressed as a
     day delta applied to the offset, not as an absolute date.
 
+    Every touched datetime field also refreshes its local wall-clock
+    time, including the anchored one: an edit that moves the scheduled
+    start from 12:00 to 18:00 must move the future occurrences to
+    18:00 as well. A cleared field clears its local time.
+
     A re-anchor recomputes every offset (and every local time) from
     the selected occurrence, because the anchor the offsets are
     relative to has changed.
@@ -712,12 +717,16 @@ def _apply_date_offsets(
             if local_time_attr is not None:
                 setattr(template, local_time_attr, _local_time_for(field, selected_after))
             continue
-        if field == old_anchor:
-            if field in actions:
-                value = _field_date(selected_after, field)
-                setattr(template, offset_attr, None if value is None else 0)
-            continue
         if field not in actions:
+            continue
+        # The field was touched. Its local time follows the edit, be
+        # it the anchored field, a plain field, or a field that was
+        # cleared (which clears the local time with it).
+        if local_time_attr is not None:
+            setattr(template, local_time_attr, _local_time_for(field, selected_after))
+        if field == old_anchor:
+            value = _field_date(selected_after, field)
+            setattr(template, offset_attr, None if value is None else 0)
             continue
         if actions[field] == "clear":
             setattr(template, offset_attr, None)
@@ -732,8 +741,6 @@ def _apply_date_offsets(
             current = getattr(template, offset_attr)
             base = current if current is not None else 0
             setattr(template, offset_attr, base + (new_value - old_value).days)
-        if local_time_attr is not None:
-            setattr(template, local_time_attr, _local_time_for(field, selected_after))
 
 
 def deactivate_series(store: RecurrenceStore, series_uid: str) -> None:

@@ -8,7 +8,7 @@ horizon resizing, cancellation, and the retry-safety of the engine.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 
@@ -842,3 +842,113 @@ class TestAnchorFieldChange:
         assert series.rule.anchor == RecurrenceAnchor.HARD_DEADLINE
         assert series.start_index == 2
         assert series.template.deadline_offset_days == 0
+
+
+class TestLocalTimeAfterEdit:
+    """The local clock time of a touched datetime field follows the edit."""
+
+    def _scheduled_series(self, facade: MockCalDAVFacade, hour: int = 12, count: int = 2):
+        """Create a series anchored on the scheduled start."""
+        return facade.create_recurrent_task(
+            TaskCreate(
+                title="Pay rent",
+                assigned_date=date(2026, 1, 15),
+                scheduled_start=datetime(2026, 1, 15, hour, 0, tzinfo=UTC),
+                scheduled_duration=30,
+            ),
+            rule=_rule(RecurrenceFrequency.MONTHLY, 1, RecurrenceAnchor.SCHEDULED_START),
+            materialized_future_count=count,
+        )
+
+    def test_changing_the_anchored_scheduled_start_moves_the_local_time(self) -> None:
+        """An edit of the anchored datetime field refreshes its time.
+
+        The template keeps the local wall-clock time of the anchored
+        field. Moving the scheduled start from 12:00 to 18:00 must
+        move the future occurrences with it.
+        """
+        facade = _facade()
+        created = self._scheduled_series(facade, hour=12, count=2)
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.template.scheduled_local_time == time(12, 0)
+
+        facade.update_task_scoped(
+            created.task.uid,
+            TaskUpdate(scheduled_start=datetime(2026, 1, 15, 18, 0, tzinfo=UTC)),
+            scope="all-future",
+        )
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.template.scheduled_local_time == time(18, 0)
+
+        tasks = _by_index(facade, created.series.uid)
+        for index in (1, 2):
+            start = tasks[index].scheduled_start
+            assert start is not None
+            assert start.astimezone().timetz().replace(tzinfo=None) == time(18, 0)
+
+    def test_changing_the_anchored_hard_deadline_moves_the_local_time(self) -> None:
+        """The same holds for a hard-deadline anchored series."""
+        facade = _facade()
+        created = facade.create_recurrent_task(
+            TaskCreate(
+                title="Pay rent",
+                assigned_date=date(2026, 1, 15),
+                hard_deadline=datetime(2026, 1, 15, 12, 0, tzinfo=UTC),
+            ),
+            rule=_rule(RecurrenceFrequency.MONTHLY, 1, RecurrenceAnchor.HARD_DEADLINE),
+            materialized_future_count=2,
+        )
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.template.deadline_local_time == time(12, 0)
+
+        facade.update_task_scoped(
+            created.task.uid,
+            TaskUpdate(hard_deadline=datetime(2026, 1, 15, 18, 0, tzinfo=UTC)),
+            scope="all-future",
+        )
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.template.deadline_local_time == time(18, 0)
+
+        tasks = _by_index(facade, created.series.uid)
+        for index in (1, 2):
+            deadline = tasks[index].hard_deadline
+            assert deadline is not None
+            assert deadline.astimezone().timetz().replace(tzinfo=None) == time(18, 0)
+
+    def test_clearing_a_datetime_field_clears_its_local_time(self) -> None:
+        """A cleared field drops its local time from the template."""
+        facade = _facade()
+        created = facade.create_recurrent_task(
+            TaskCreate(
+                title="Pay rent",
+                assigned_date=date(2026, 1, 15),
+                scheduled_start=datetime(2026, 1, 15, 12, 0, tzinfo=UTC),
+                scheduled_duration=30,
+            ),
+            rule=_rule(RecurrenceFrequency.MONTHLY, 1, RecurrenceAnchor.ASSIGNED_DATE),
+            materialized_future_count=2,
+        )
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.template.scheduled_local_time == time(12, 0)
+
+        facade.update_task_scoped(
+            created.task.uid,
+            TaskUpdate(clear_scheduled_start=True),
+            scope="all-future",
+        )
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.template.scheduled_local_time is None
+        assert series.template.scheduled_offset_days is None
+
+        tasks = _by_index(facade, created.series.uid)
+        for index in (1, 2):
+            assert tasks[index].scheduled_start is None

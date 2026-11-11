@@ -306,3 +306,58 @@ def test_import_against_already_empty_user(backup_facade: SimpleNamespace, tmp_p
 
     report = backup.import_from_bytes(archive)
     assert report.projects == 1
+
+
+@pytest.mark.integration
+def test_recurrence_series_survives_a_backup_round_trip(backup_facade: SimpleNamespace) -> None:
+    """A recurrence series and its occurrences survive export and restore.
+
+    The series record lives in its own CalDAV collection; the raw
+    archive covers the whole user subtree, so it is included without a
+    new archive format.
+    """
+    from genesis.entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
+
+    caldav = backup_facade.caldav
+    backup = backup_facade.backup
+
+    created = caldav.create_recurrent_task(
+        TaskCreate(title="Pay rent", assigned_date=__import__("datetime").date(2026, 1, 31)),
+        rule=RecurrenceRule(
+            frequency=RecurrenceFrequency.MONTHLY,
+            interval=1,
+            anchor=RecurrenceAnchor.ASSIGNED_DATE,
+        ),
+        materialized_future_count=4,
+    )
+
+    archive = backup.export_to_bytes()
+    validation = backup.validate_archive(archive)
+    assert validation.ok, validation.issues
+    assert validation.manifest is not None
+    assert validation.manifest.counts.recurrences == 1
+    assert validation.manifest.counts.tasks == 5
+
+    # Wipe everything the public API can reach, then restore. The
+    # series is cancelled first: a live series keeps its window
+    # materialized, so deleting the occurrences one by one would
+    # simply create new ones.
+    caldav.cancel_future(created.task.uid)
+    for t in caldav.list_tasks():
+        caldav.delete_task(t.uid)
+    assert caldav.list_tasks() == []
+    # The series record itself survives: it lives in its own
+    # collection and is deactivated, not deleted.
+    assert [s.active for s in caldav.list_series()] == [False]
+
+    backup.import_from_bytes(archive)
+
+    series = caldav.get_series(created.series.uid)
+    assert series is not None
+    assert series.materialized_future_count == 4
+    assert series.highest_materialized_index == 4
+    assert series.rule.frequency.value == "monthly"
+
+    tasks = caldav.list_series_tasks(created.series.uid)
+    assert len(tasks) == 5
+    assert sorted(t.recurrence_index for t in tasks) == [0, 1, 2, 3, 4]

@@ -75,6 +75,43 @@ the freshly-written rights file.
 
 See ADR-019 for the full story.
 
+## Recurrent tasks
+
+A recurrent task is a series of ordinary tasks. The current
+occurrence renews itself: the next occurrence appears by itself, so
+"Pay rent" no longer needs four manually cloned tasks. See ADR-033.
+
+- **Create**: the task dialog has a "Recurring task" switch with the
+  frequency, the interval, the anchor date field, and "Future
+  occurrences to keep ready" (the materialized horizon, default 1).
+- **Edit scope**: the edit dialog asks whether the change applies to
+  this instance or to all future instances. The task table has the
+  same choice for inline edits.
+- **Cancel future**: the edit dialog can cancel every future
+  occurrence of the series. The current occurrence and the completed
+  history stay.
+- **Horizon**: the number of future occurrences kept ready can be
+  changed per series. The global default for new series lives in
+  `configs.yaml`:
+
+```yaml
+recurrence:
+  default_materialized_future_count: 1
+```
+
+  or in the environment as
+  `GENESIS__RECURRENCE__DEFAULT_MATERIALIZED_FUTURE_COUNT`. Changing
+  the global default affects new series only; existing series keep
+  their own count and can be resized from the task dialog or the API.
+
+The API mirrors the same operations:
+`POST /productivity/tasks` with a `recurrence` object,
+`GET /productivity/tasks?series_uid=...`,
+`GET /productivity/recurrences/{series_uid}`,
+`PATCH /productivity/recurrences/{series_uid}`, a `scope` field on
+`PATCH /productivity/tasks/{uid}`, and
+`POST /productivity/tasks/{uid}/cancel-future`.
+
 ## Focus session notifications
 
 Focus session timing (countdown auto-stop and 30-minute milestone

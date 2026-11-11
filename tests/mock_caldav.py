@@ -1,8 +1,9 @@
 """Mock CalDAV backend for testing.
 
 Stores data in memory and implements the same interface as CalDAVFacade.
-Mirrors the four-collection model from ADR-012 and maintains shadow VEVENTs
-for tasks with scheduled_start.
+Mirrors the fixed-collection model from ADR-012, maintains shadow VEVENTs
+for tasks with scheduled_start, and mirrors the materialized recurrence
+series of ADR-033 through the shared recurrence engine.
 """
 
 from __future__ import annotations
@@ -10,8 +11,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
+from genesis.caldav import recurrence
 from genesis.caldav.constants import DEFAULT_SHADOW_DURATION_MINUTES
 from genesis.caldav.ical import new_uid
+from genesis.caldav.recurrence import RecurrenceStore
 from genesis.category.enums import TimeLogCategory
 from genesis.entities import (
     Event,
@@ -22,6 +25,7 @@ from genesis.entities import (
     ProjectCreate,
     ProjectStatus,
     ProjectUpdate,
+    RecurrenceSeries,
     Task,
     TaskCreate,
     TaskStatus,
@@ -51,6 +55,7 @@ class MockCalDAVFacade:
         self._events: dict[str, Event] = {}
         self._time_log: dict[str, TimeLogEntry] = {}
         self._xp_events: dict[str, XpEvent] = {}
+        self._series: dict[str, RecurrenceSeries] = {}
 
     # -------------------------------------------------------------------------
     # Helpers
@@ -121,7 +126,14 @@ class MockCalDAVFacade:
 
         if update_data.get("status") in (ProjectStatus.CANCELED, ProjectStatus.COMPLETED):
             cascade_status = update_data["status"]
-            for task in self.list_tasks(project_id=uid):
+            project_tasks = self.list_tasks(project_id=uid)
+            # Deactivate the recurrence series of the project first:
+            # the cascade cancels the occurrences, and a live series
+            # would otherwise renew itself over cancelled work
+            # (ADR-033).
+            for series_uid in {t.recurrence_series_uid for t in project_tasks if t.recurrence_series_uid}:
+                recurrence.deactivate_series(self._recurrence_store(), series_uid)
+            for task in project_tasks:
                 if task.status in (TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS):
                     self.update_task(task.uid, TaskUpdate(status=cascade_status))
 
@@ -174,6 +186,7 @@ class MockCalDAVFacade:
         end: datetime | None = None,
         completed_at_start: datetime | None = None,
         completed_at_end: datetime | None = None,
+        series_uid: str | None = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ) -> list[Task]:
@@ -188,6 +201,8 @@ class MockCalDAVFacade:
         tasks = list(self._tasks.values())
         if project_id is not None:
             tasks = [t for t in tasks if t.project_id == project_id]
+        if series_uid is not None:
+            tasks = [t for t in tasks if t.recurrence_series_uid == series_uid]
         if status is not None:
             tasks = [t for t in tasks if t.status == status]
         if completed_at_start is not None or completed_at_end is not None:
@@ -237,15 +252,70 @@ class MockCalDAVFacade:
 
         task.modified = self._now()
         self._reconcile_shadow(task)
+        if task.recurrence_series_uid:
+            recurrence.reconcile_series(self._recurrence_store(), task.recurrence_series_uid)
         return task
 
     def delete_task(self, uid: str) -> bool:
         if uid not in self._tasks:
             return False
+        task = self._tasks.pop(uid)
         # Remove shadow event if present
         self._events.pop(uid, None)
-        del self._tasks[uid]
+        if task.recurrence_series_uid:
+            recurrence.reconcile_series(self._recurrence_store(), task.recurrence_series_uid)
         return True
+
+    # -------------------------------------------------------------------------
+    # Recurrence series (ADR-033)
+    # -------------------------------------------------------------------------
+
+    def _recurrence_store(self) -> _MockRecurrenceStore:
+        """Return the in-memory recurrence store."""
+        return _MockRecurrenceStore(self)
+
+    def create_recurrent_task(self, data: TaskCreate, *, rule, materialized_future_count: int):
+        """Create a recurrent task with its series and future occurrences."""
+        return recurrence.create_recurrent_task(
+            self._recurrence_store(),
+            data,
+            rule=rule,
+            materialized_future_count=materialized_future_count,
+        )
+
+    def update_task_scoped(self, uid: str, data: TaskUpdate, *, scope: str = "current", rule_change=None):
+        """Update a task with an explicit edit scope."""
+        return recurrence.update_task_scoped(
+            self._recurrence_store(),
+            uid,
+            data,
+            scope=scope,
+            rule_change=rule_change,
+        )
+
+    def cancel_future(self, uid: str):
+        """Cancel the future occurrences of the task's series."""
+        return recurrence.cancel_future(self._recurrence_store(), uid)
+
+    def resize_series(self, series_uid: str, materialized_future_count: int):
+        """Change the materialized horizon of a running series."""
+        return recurrence.resize_series(self._recurrence_store(), series_uid, materialized_future_count)
+
+    def get_series(self, series_uid: str) -> RecurrenceSeries | None:
+        """Return one recurrence series, or None."""
+        return self._recurrence_store().get_series(series_uid)
+
+    def list_series(self) -> list[RecurrenceSeries]:
+        """Return every recurrence series."""
+        return self._recurrence_store().list_series()
+
+    def list_series_tasks(self, series_uid: str) -> list[Task]:
+        """Return every task that belongs to the given series."""
+        return self._recurrence_store().list_series_tasks(series_uid)
+
+    def get_series_state(self, series_uid: str):
+        """Return the inspection state of a series, or None."""
+        return recurrence.series_state(self._recurrence_store(), series_uid)
 
     # -------------------------------------------------------------------------
     # Events
@@ -508,3 +578,50 @@ class MockCalDAVFacade:
             task_id=task.uid,
             modified=task.modified,
         )
+
+
+class _MockRecurrenceStore(RecurrenceStore):
+    """In-memory recurrence store for the mock backend (ADR-033).
+
+    Implements the same contract as the CalDAV-backed store, so the
+    shared recurrence engine drives both. Reads return copies, exactly
+    like the real backend, which parses a fresh entity per read.
+    """
+
+    def __init__(self, facade: MockCalDAVFacade) -> None:
+        self._facade = facade
+
+    def list_series(self) -> list[RecurrenceSeries]:
+        return [series.model_copy(deep=True) for series in self._facade._series.values()]
+
+    def get_series(self, uid: str) -> RecurrenceSeries | None:
+        series = self._facade._series.get(uid)
+        return series.model_copy(deep=True) if series is not None else None
+
+    def save_series(self, series: RecurrenceSeries) -> None:
+        self._facade._series[series.uid] = series.model_copy(deep=True)
+
+    def delete_series(self, uid: str) -> None:
+        self._facade._series.pop(uid, None)
+
+    def list_series_tasks(self, series_uid: str) -> list[Task]:
+        return [
+            task.model_copy(deep=True)
+            for task in self._facade._tasks.values()
+            if task.recurrence_series_uid == series_uid
+        ]
+
+    def get_task(self, uid: str) -> Task | None:
+        task = self._facade._tasks.get(uid)
+        return task.model_copy(deep=True) if task is not None else None
+
+    def put_task(self, task: Task) -> Task:
+        self._facade._tasks[task.uid] = task.model_copy(deep=True)
+        self._facade._reconcile_shadow(task)
+        return task
+
+    def delete_task(self, uid: str) -> None:
+        self._facade._tasks.pop(uid, None)
+
+    def delete_task_shadow(self, uid: str) -> None:
+        self._facade._events.pop(uid, None)

@@ -23,12 +23,16 @@ from genesis.category.enums import TimeLogCategory
 from genesis.entities import (
     Contact,
     ContactCreate,
+    RecurrenceAnchor,
+    RecurrenceFrequency,
+    RecurrenceRule,
     Task,
     TaskStatus,
     TaskUpdate,
     TimeLogEntryCreate,
     TimeLogMode,
     TimeLogStatus,
+    occurrence_date,
 )
 from genesis.journal.facade import Entry, EntryType
 from genesis.notify import messages
@@ -84,6 +88,50 @@ def render_sessions_kpi(*, count: int, caption: str) -> None:
 # -----------------------------------------------------------------------------
 # Task dialogs
 # -----------------------------------------------------------------------------
+
+EDIT_SCOPE_CURRENT = "current"
+"""Edit scope: only the selected occurrence."""
+
+EDIT_SCOPE_ALL_FUTURE = "all-future"
+"""Edit scope: the selected occurrence and every later one."""
+
+
+def default_materialized_future_count(facade) -> int:
+    """Return the per-user default number of future occurrences to keep ready.
+
+    Falls back to 1 when the facade carries no configuration (the
+    in-memory test facade, for instance).
+    """
+    configs = getattr(facade, "configs", None)
+    recurrence_cfg = getattr(configs, "recurrence", None)
+    count = getattr(recurrence_cfg, "default_materialized_future_count", None)
+    if isinstance(count, int) and count > 0:
+        return count
+    return 1
+
+
+def _anchor_preview_date(
+    anchor: str,
+    assigned_date: date | None,
+    hard_deadline_date: date | None,
+    scheduled_start: datetime | None,
+) -> date | None:
+    """Return the date the recurrence would anchor on, or None."""
+    if anchor == RecurrenceAnchor.ASSIGNED_DATE.value:
+        return assigned_date
+    if anchor == RecurrenceAnchor.HARD_DEADLINE.value:
+        return hard_deadline_date
+    return scheduled_start.date() if scheduled_start is not None else None
+
+
+def next_occurrence_date(base: date, frequency: str, interval: int) -> date:
+    """Return the date of the occurrence after ``base``."""
+    rule = RecurrenceRule(
+        frequency=RecurrenceFrequency(frequency),
+        interval=interval,
+        anchor=RecurrenceAnchor.ASSIGNED_DATE,
+    )
+    return occurrence_date(base, rule, 1)
 
 
 @st.dialog("New task", width="large", on_dismiss="rerun")
@@ -151,6 +199,62 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
     priority = st.number_input("Priority", min_value=1, max_value=9, value=5, key="_ntd_prio")
 
     st.divider()
+    st.caption("Recurrence")
+    is_recurrent = st.checkbox(
+        "Recurring task",
+        key="_ntd_recurring",
+        help="Renew this task automatically: the next occurrence appears by itself.",
+    )
+    frequency_value = RecurrenceFrequency.MONTHLY.value
+    interval_value = 1
+    anchor_value = RecurrenceAnchor.ASSIGNED_DATE.value
+    horizon_value = default_materialized_future_count(facade)
+    if is_recurrent:
+        recurrence_cols = st.columns(3)
+        with recurrence_cols[0]:
+            frequency_value = st.selectbox(
+                "Repeats",
+                [f.value for f in RecurrenceFrequency],
+                key="_ntd_freq",
+            )
+        with recurrence_cols[1]:
+            interval_value = int(
+                st.number_input(
+                    "Every (units)",
+                    min_value=1,
+                    max_value=52,
+                    value=1,
+                    key="_ntd_interval",
+                    help="1 means every day / week / month / year.",
+                )
+            )
+        with recurrence_cols[2]:
+            anchor_value = st.selectbox(
+                "Anchor",
+                [a.value for a in RecurrenceAnchor],
+                key="_ntd_anchor",
+                help="The date field the recurrence is measured from.",
+            )
+        horizon_value = int(
+            st.number_input(
+                "Future occurrences to keep ready",
+                min_value=1,
+                max_value=100,
+                value=horizon_value,
+                key="_ntd_horizon",
+                help="How many future occurrences stay materialized ahead of the current one.",
+            )
+        )
+        preview_base = _anchor_preview_date(anchor_value, assigned_date, hard_deadline_date, scheduled_start)
+        if preview_base is None:
+            st.warning("The anchor date is missing: set the anchored date field to make this task recurrent.")
+        else:
+            st.caption(
+                f"Next occurrence: {next_occurrence_date(preview_base, frequency_value, interval_value).isoformat()} "
+                f"({horizon_value} ahead)",
+            )
+
+    st.divider()
     action_cols = st.columns([1, 1, 6])
     if action_cols[0].button("Cancel", key="_ntd_cancel"):
         st.rerun()
@@ -168,19 +272,34 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
         hard_deadline_dt = datetime.combine(hard_deadline_date, time(23, 59, 59)) if hard_deadline_date else None
         hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
 
-        facade.caldav.create_task(
-            TaskCreate(
-                title=title,
-                description=description or None,
-                project_id=selected_project_uid,
-                scheduled_start=scheduled_start_utc,
-                scheduled_duration=(scheduled_duration if scheduled_start_utc is not None else None),
-                hard_deadline=hard_deadline_utc,
-                assigned_date=assigned_date,
-                priority=priority,
-            )
+        task_data = TaskCreate(
+            title=title,
+            description=description or None,
+            project_id=selected_project_uid,
+            scheduled_start=scheduled_start_utc,
+            scheduled_duration=(scheduled_duration if scheduled_start_utc is not None else None),
+            hard_deadline=hard_deadline_utc,
+            assigned_date=assigned_date,
+            priority=priority,
         )
-        st.toast(f"Created task: {title}")
+        if is_recurrent:
+            try:
+                facade.caldav.create_recurrent_task(
+                    task_data,
+                    rule=RecurrenceRule(
+                        frequency=RecurrenceFrequency(frequency_value),
+                        interval=interval_value,
+                        anchor=RecurrenceAnchor(anchor_value),
+                    ),
+                    materialized_future_count=horizon_value,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            st.toast(f"Created recurring task: {title}")
+        else:
+            facade.caldav.create_task(task_data)
+            st.toast(f"Created task: {title}")
         st.rerun()
 
 
@@ -196,6 +315,11 @@ def task_edit_dialog(uid: str) -> None:
         return
 
     kp = _form_key("etd", uid)
+    is_recurrent = bool(task.recurrence_series_uid)
+    series_state = None
+    if is_recurrent:
+        series_state = facade.caldav.get_series_state(task.recurrence_series_uid or "")
+
     projects = facade.caldav.list_projects()
     project_options = [(p.uid, p.name) for p in projects]
     project_labels = ["(none)"] + [name for _, name in project_options]
@@ -217,6 +341,22 @@ def task_edit_dialog(uid: str) -> None:
     project_uid = project_uids[project_labels.index(project_label)]
     from genesis.entities import TaskStatus
 
+    edit_scope = EDIT_SCOPE_CURRENT
+    if is_recurrent:
+        scope_labels = ["This instance", "All future instances"]
+        scope_index = 0 if st.session_state.get(f"{kp}_scope_choice") == EDIT_SCOPE_ALL_FUTURE else 0
+        scope_choice = st.radio(
+            "Applies to",
+            scope_labels,
+            index=scope_index,
+            key=f"{kp}_scope_choice",
+            horizontal=True,
+            help="Edit this occurrence only, or every later occurrence of the series.",
+        )
+        edit_scope = EDIT_SCOPE_ALL_FUTURE if scope_choice == scope_labels[1] else EDIT_SCOPE_CURRENT
+        if edit_scope == EDIT_SCOPE_ALL_FUTURE:
+            st.caption("Status changes always apply to this instance only.")
+
     status_label = st.selectbox(
         "Status",
         [s.value for s in TaskStatus],
@@ -230,6 +370,7 @@ def task_edit_dialog(uid: str) -> None:
         value=task.priority or 5,
         key=f"{kp}_prio",
     )
+
 
     sched_cols = st.columns(2)
     with sched_cols[0]:
@@ -275,6 +416,9 @@ def task_edit_dialog(uid: str) -> None:
     if scheduled_start_date is not None and schedule_time is not None:
         combined_scheduled = datetime.combine(scheduled_start_date, schedule_time)
 
+    if is_recurrent and series_state is not None:
+        _render_series_section(facade, series_state, kp, uid)
+
     st.divider()
     action_cols = st.columns([1, 1, 1, 6])
     if action_cols[0].button("Save", type="primary", key=f"{kp}_save"):
@@ -304,14 +448,110 @@ def task_edit_dialog(uid: str) -> None:
         elif combined_scheduled_utc is not None:
             update_kwargs["scheduled_start"] = combined_scheduled_utc
             update_kwargs["scheduled_duration"] = scheduled_duration
-        facade.caldav.update_task(uid, TaskUpdate(**update_kwargs))
-        st.toast("Task updated")
+
+        if edit_scope == EDIT_SCOPE_ALL_FUTURE:
+            # The status is a per-occurrence operation: it never rides
+            # along with a future-scope edit.
+            status_value = update_kwargs.pop("status")
+            try:
+                result = facade.caldav.update_task_scoped(
+                    uid,
+                    TaskUpdate(**update_kwargs),
+                    scope=EDIT_SCOPE_ALL_FUTURE,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+                return
+            if status_value != task.status:
+                facade.caldav.update_task(uid, TaskUpdate(status=status_value))
+            st.toast(f"Updated {len(result.affected_uids)} future occurrences")
+        elif is_recurrent:
+            # The scope is explicit even when it is the current
+            # occurrence, so the same operation serves both scopes.
+            facade.caldav.update_task_scoped(uid, TaskUpdate(**update_kwargs), scope=EDIT_SCOPE_CURRENT)
+            st.toast("Task updated")
+        else:
+            facade.caldav.update_task(uid, TaskUpdate(**update_kwargs))
+            st.toast("Task updated")
         st.rerun()
     if action_cols[1].button("Cancel", key=f"{kp}_cancel"):
         st.rerun()
     if action_cols[2].button("Delete", key=f"{kp}_del"):
         facade.caldav.delete_task(uid)
         st.toast("Task deleted")
+        st.rerun()
+
+
+def _render_series_section(facade, series_state, kp: str, uid: str) -> None:
+    """Render the series inspection, horizon control, and cancel action.
+
+    The section shows the rule, the effective number of materialized
+    future occurrences, the current occurrence, and the ordered future
+    occurrences. The horizon can be changed on the running series;
+    shrinking it cancels the farthest extra future occurrences and asks
+    for a confirmation first.
+    """
+    st.divider()
+    st.subheader("Series")
+    st.caption(
+        f"{series_state.frequency.value.capitalize()} every {series_state.interval} "
+        f"| {series_state.materialized_future_count} ahead "
+        f"| series {series_state.uid}"
+        f"{'' if series_state.active else ' | cancelled'}",
+    )
+    st.write(f"Current occurrence: {series_state.current_task_uid or '(none)'}")
+    with st.expander(f"Future occurrences ({len(series_state.future_occurrences)})"):
+        if series_state.future_occurrences:
+            for occurrence in series_state.future_occurrences:
+                st.write(f"{occurrence.occurrence_date} - {occurrence.uid}")
+        else:
+            st.write("(none)")
+
+    horizon = int(
+        st.number_input(
+            "Future occurrences to keep ready",
+            min_value=1,
+            max_value=100,
+            value=series_state.materialized_future_count,
+            key=f"{kp}_horizon",
+            disabled=not series_state.active,
+        )
+    )
+    shrinking = horizon < series_state.materialized_future_count
+    confirmed = True
+    if shrinking:
+        confirmed = st.checkbox(
+            f"Cancel the {series_state.materialized_future_count - horizon} farthest future occurrences",
+            key=f"{kp}_horizon_confirm",
+        )
+        st.caption("The current occurrence and the completed history are kept.")
+    if st.button(
+        "Apply horizon",
+        key=f"{kp}_horizon_apply",
+        disabled=not confirmed or horizon == series_state.materialized_future_count,
+    ):
+        result = facade.caldav.resize_series(series_state.uid, horizon)
+        st.toast(
+            f"Horizon set to {result.materialized_future_count} "
+            f"({len(result.created_task_uids)} created, {len(result.canceled_task_uids)} cancelled)",
+        )
+        st.rerun()
+
+    st.caption(
+        "Cancel the future to stop the renewal: every occurrence after this one is "
+        "cancelled. The current occurrence and the completed history stay.",
+    )
+    cancel_confirmed = st.checkbox(
+        "I understand that all future occurrences are cancelled",
+        key=f"{kp}_cancel_future_confirm",
+    )
+    if st.button(
+        "Cancel future",
+        key=f"{kp}_cancel_future",
+        disabled=not cancel_confirmed or not series_state.active,
+    ):
+        result = facade.caldav.cancel_future(uid)
+        st.toast(f"Cancelled {len(result.canceled_uids)} future occurrences")
         st.rerun()
 
 

@@ -92,6 +92,31 @@ def _render_metadata(task: Task) -> None:
             st.write(value)
 
 
+def _render_recurrence(task: Task) -> None:
+    """Render the recurrence series of a task, when it has one."""
+    if not task.recurrence_series_uid:
+        return
+    state = caldav.get_series_state(task.recurrence_series_uid)
+    if state is None:
+        st.caption(f"Recurrence series {task.recurrence_series_uid} (no longer available)")
+        return
+    st.subheader("Recurrence")
+    st.caption(
+        f"{state.frequency.value.capitalize()} every {state.interval} "
+        f"| {state.materialized_future_count} future occurrences kept ready "
+        f"| series {state.uid}"
+        f"{'' if state.active else ' | cancelled'}",
+    )
+    st.write(f"This occurrence: {task.recurrence_occurrence} (index {task.recurrence_index})")
+    st.write(f"Current occurrence: {state.current_task_uid or '(none)'}")
+    with st.expander(f"Future occurrences ({len(state.future_occurrences)})"):
+        if state.future_occurrences:
+            for occurrence in state.future_occurrences:
+                st.write(f"{occurrence.occurrence_date} - {occurrence.uid}")
+        else:
+            st.write("(none)")
+
+
 def _render_journal_section(uid: str) -> None:
     """Render the journal entries linked to the task."""
     st.subheader("Journal Entries")
@@ -156,6 +181,10 @@ def _render_detail(uid: str) -> None:
     st.write("")
 
     _render_metadata(task)
+
+    st.write("")
+
+    _render_recurrence(task)
 
     st.write("")
 

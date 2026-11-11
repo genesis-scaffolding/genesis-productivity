@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 from ..caldav.ical import (
     event_from_ical,
     project_from_ical,
+    recurrence_series_from_ical,
     task_from_ical,
     time_log_from_ical,
 )
@@ -261,6 +262,7 @@ class BackupFacade:
             journal=len(journal.list_entries()),
             profile=profile_files,
             contacts=len(carddav.list_contacts()),
+            recurrences=len(caldav.list_series()),
         )
 
     # -------------------------------------------------------------------------
@@ -499,7 +501,12 @@ class BackupFacade:
             if component.name != "VTODO":
                 continue
             summary = str(component.get("summary") or "")
-            if "X-MODE" in component:
+            if "X-RECURRENCE-FREQUENCY" in component:
+                # A series record. Task occurrences carry the series
+                # UID but not the rule, so the frequency property is
+                # the marker that distinguishes them.
+                recurrence_series_from_ical(component)
+            elif "X-MODE" in component:
                 time_log_from_ical(component)
             elif "X-ASSIGNED-DATE" in component or "X-PROJECT-ID" in component:
                 task_from_ical(component)

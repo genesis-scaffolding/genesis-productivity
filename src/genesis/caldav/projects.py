@@ -175,10 +175,17 @@ def update_project(facade: CalDAVFacade, uid: str, data: ProjectUpdate) -> Proje
     obj.save()
 
     if update_data.get("status") in (ProjectStatus.CANCELED, ProjectStatus.COMPLETED):
+        from . import recurrence as _recurrence
         from . import tasks as _tasks
 
         cascade_status = update_data["status"]
-        for task in _tasks.list_tasks(facade, project_id=uid):
+        project_tasks = _tasks.list_tasks(facade, project_id=uid)
+        # Deactivate the recurrence series of the project first: the
+        # cascade cancels the occurrences, and a live series would
+        # otherwise renew itself over cancelled work (ADR-033).
+        for series_uid in {t.recurrence_series_uid for t in project_tasks if t.recurrence_series_uid}:
+            _recurrence.deactivate_series(_recurrence.CalDAVRecurrenceStore(facade), series_uid)
+        for task in project_tasks:
             if task.status in (TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS):
                 _tasks.update_task(facade, task.uid, TaskUpdate(status=cascade_status))
 

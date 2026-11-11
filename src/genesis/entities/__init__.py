@@ -3,6 +3,26 @@
 from .contact import Contact, ContactCreate, ContactUpdate
 from .event import Event, EventCreate, EventStatus, EventUpdate
 from .project import Project, ProjectCreate, ProjectStatus, ProjectUpdate
+from .recurrence import (
+    MAX_MATERIALIZED_FUTURE_COUNT,
+    MIN_MATERIALIZED_FUTURE_COUNT,
+    CancelFutureResult,
+    RecurrenceAnchor,
+    RecurrenceCreateResult,
+    RecurrenceFrequency,
+    RecurrenceRule,
+    RecurrenceRuleUpdate,
+    RecurrenceSeries,
+    RecurrenceTemplate,
+    ScopedTaskUpdateResult,
+    SeriesFutureOccurrence,
+    SeriesResizeResult,
+    SeriesState,
+    add_months,
+    add_years,
+    days_in_month,
+    occurrence_date,
+)
 from .task import Task, TaskCreate, TaskStatus, TaskUpdate
 from .time_log import (
     TimeLogEntry,
@@ -14,6 +34,13 @@ from .time_log import (
 from .xp_event import XpEvent, XpEventCreate, XpEventKind
 
 __all__ = [
+    "add_months",
+    "add_years",
+    "days_in_month",
+    "occurrence_date",
+    "MAX_MATERIALIZED_FUTURE_COUNT",
+    "MIN_MATERIALIZED_FUTURE_COUNT",
+    "CancelFutureResult",
     "Contact",
     "ContactCreate",
     "ContactUpdate",
@@ -25,6 +52,17 @@ __all__ = [
     "ProjectCreate",
     "ProjectStatus",
     "ProjectUpdate",
+    "RecurrenceAnchor",
+    "RecurrenceCreateResult",
+    "RecurrenceFrequency",
+    "RecurrenceRule",
+    "RecurrenceRuleUpdate",
+    "RecurrenceSeries",
+    "RecurrenceTemplate",
+    "ScopedTaskUpdateResult",
+    "SeriesFutureOccurrence",
+    "SeriesResizeResult",
+    "SeriesState",
     "Task",
     "TaskCreate",
     "TaskStatus",

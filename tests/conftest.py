@@ -108,9 +108,10 @@ def _build_mock_facade() -> object:
         tests can flip ``game.enabled`` in place."""
 
         def __init__(self) -> None:
-            from genesis.configs import GameConfig
+            from genesis.configs import GameConfig, RecurrenceConfig
 
             self.game = GameConfig(enabled=True)
+            self.recurrence = RecurrenceConfig()
 
     class _MockFacade:
         def __init__(self) -> None:

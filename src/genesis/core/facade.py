@@ -328,6 +328,44 @@ class Facade:
             occurred_at=occurred_at,
         )
 
+    # -------------------------------------------------------------------------
+    # Recurrent tasks (ADR-033)
+    # -------------------------------------------------------------------------
+
+    def create_recurrent_task(
+        self,
+        data,
+        *,
+        frequency: str,
+        interval: int = 1,
+        anchor: str,
+        materialized_future_count: int | None = None,
+    ):
+        """Create a recurrent task and its series (ADR-033).
+
+        ``materialized_future_count`` is the number of future
+        occurrences kept materialized ahead of the current occurrence.
+        When it is omitted the per-user global default
+        (``configs.recurrence.default_materialized_future_count``) is
+        used. The resolved value is persisted on the series, so a later
+        change of the global default does not resize this series.
+        """
+        from ..entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
+
+        count = materialized_future_count
+        if count is None:
+            count = self.configs.recurrence.default_materialized_future_count
+        rule = RecurrenceRule(
+            frequency=RecurrenceFrequency(frequency),
+            interval=interval,
+            anchor=RecurrenceAnchor(anchor),
+        )
+        return self.caldav.create_recurrent_task(
+            data,
+            rule=rule,
+            materialized_future_count=count,
+        )
+
     def complete_task(self, uid: str):
         """Mark a task COMPLETED and fire the XP event.
 

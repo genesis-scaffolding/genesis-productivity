@@ -38,6 +38,7 @@ class Counts(BaseModel):
     journal: int = 0
     profile: int = 0
     contacts: int = 0
+    recurrences: int = 0
 
     model_config = ConfigDict(extra="ignore")
 

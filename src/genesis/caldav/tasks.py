@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 # -----------------------------------------------------------------------------
 
 
-def _populate_task(component: Component, task: Task) -> None:
+def populate_task(component: Component, task: Task) -> None:
     """Apply task fields to an existing icalendar Component in place.
 
     DTSTAMP, CREATED, and LAST-MODIFIED are intentionally not managed here;
@@ -65,6 +65,12 @@ def _populate_task(component: Component, task: Task) -> None:
     set_or_delete("x-scheduled-duration", task.scheduled_duration)
     set_or_delete("priority", task.priority)
     set_or_delete("x-project-id", task.project_id)
+    if task.recurrence_series_uid:
+        set_or_delete("x-recurrence-series-id", task.recurrence_series_uid)
+    if task.recurrence_occurrence:
+        set_or_delete("x-recurrence-occurrence", task.recurrence_occurrence)
+    if task.recurrence_index is not None:
+        set_or_delete("x-recurrence-index", task.recurrence_index)
     if task.status == TaskStatus.COMPLETED:
         set_or_delete("completed", task.completed_at or now_utc())
     else:
@@ -139,7 +145,7 @@ def create_task(facade: CalDAVFacade, data: TaskCreate) -> Task:
     )
 
     _get_tasks_calendar(facade).add_todo(task_to_ical(task))
-    _reconcile_shadow(facade, task)
+    reconcile_shadow(facade, task)
     return task
 
 
@@ -185,6 +191,7 @@ def list_tasks(
     end: datetime | None = None,
     completed_at_start: datetime | None = None,
     completed_at_end: datetime | None = None,
+    series_uid: str | None = None,
     sort_by: list[str] | None = None,
     sort_order: str = "asc",
 ) -> list[Task]:
@@ -193,6 +200,7 @@ def list_tasks(
 
     Filters applied server-side:
         - project_id -> X-PROJECT-ID exact match
+        - series_uid -> X-RECURRENCE-SERIES-ID exact match (ADR-033)
         - status     -> STATUS exact match
         - search     -> SUMMARY substring match
         - start/end  -> VTODO time-range (RFC 4791 §9.9). The range is
@@ -234,6 +242,8 @@ def list_tasks(
     )
     if project_id is not None:
         searcher.add_property_filter("X-PROJECT-ID", project_id, operator="==")
+    if series_uid is not None:
+        searcher.add_property_filter("X-RECURRENCE-SERIES-ID", series_uid, operator="==")
     if effective_status is not None:
         searcher.add_property_filter("STATUS", effective_status.value, operator="==")
     if search:
@@ -293,31 +303,11 @@ def update_task(facade: CalDAVFacade, uid: str, data: TaskUpdate) -> Task | None
     except Exception:
         return None
 
-    update_data = data.model_dump(exclude_unset=True)
-    clear_scheduled = update_data.pop("clear_scheduled_start", False)
-    clear_project = update_data.pop("clear_project_id", False)
-    clear_assigned = update_data.pop("clear_assigned_date", False)
+    apply_task_update(task, data)
 
-    for key, value in update_data.items():
-        setattr(task, key, value)
-
-    if clear_scheduled:
-        task.scheduled_start = None
-    if clear_project:
-        task.project_id = None
-    if clear_assigned:
-        task.assigned_date = None
-
-    if update_data.get("status") == TaskStatus.COMPLETED and task.completed_at is None:
-        task.completed_at = now_utc()
-    elif "status" in update_data and task.status != TaskStatus.COMPLETED and task.completed_at is not None:
-        task.completed_at = None
-
-    task.modified = now_utc()
-
-    _populate_task(obj.icalendar_component, task)
+    populate_task(obj.icalendar_component, task)
     obj.save()
-    _reconcile_shadow(facade, task)
+    reconcile_shadow(facade, task)
     return task
 
 
@@ -330,12 +320,7 @@ def delete_task(facade: CalDAVFacade, uid: str) -> bool:
     if obj is None:
         return False
 
-    shadow = _try_load_event(facade, uid)
-    if shadow is not None:
-        try:
-            shadow.delete()
-        except Exception:
-            pass
+    delete_shadow(facade, uid)
 
     obj.delete()
     return True
@@ -346,12 +331,10 @@ def delete_task(facade: CalDAVFacade, uid: str) -> bool:
 # -----------------------------------------------------------------------------
 
 
-def _reconcile_shadow(facade: CalDAVFacade, task: Task) -> None:
+def reconcile_shadow(facade: CalDAVFacade, task: Task) -> None:
     """Create, update, or delete the shadow VEVENT to match the task."""
     if task.scheduled_start is None:
-        shadow = _try_load_event(facade, task.uid)
-        if shadow is not None:
-            shadow.delete()
+        delete_shadow(facade, task.uid)
         return
 
     duration = task.scheduled_duration if task.scheduled_duration is not None else DEFAULT_SHADOW_DURATION_MINUTES
@@ -373,6 +356,52 @@ def _reconcile_shadow(facade: CalDAVFacade, task: Task) -> None:
         _get_events_calendar(facade).save_event(event_to_ical(shadow_event))
 
 
+def delete_shadow(facade: CalDAVFacade, uid: str) -> None:
+    """Delete the shadow VEVENT of a task, if it has one.
+
+    Used when a task is deleted or when a future occurrence is
+    cancelled: the calendar appointment goes away, the task record
+    stays.
+    """
+    shadow = _try_load_event(facade, uid)
+    if shadow is not None:
+        try:
+            shadow.delete()
+        except Exception:
+            pass
+
+
+def apply_task_update(task: Task, data: TaskUpdate) -> Task:
+    """Apply a :class:`TaskUpdate` to a task entity, in place.
+
+    The entity is mutated and returned. ``clear_*`` flags win over a
+    value supplied in the same call. Completing a task stamps
+    ``completed_at``; leaving the completed state clears it.
+    """
+    update_data = data.model_dump(exclude_unset=True)
+    clear_scheduled = update_data.pop("clear_scheduled_start", False)
+    clear_project = update_data.pop("clear_project_id", False)
+    clear_assigned = update_data.pop("clear_assigned_date", False)
+
+    for key, value in update_data.items():
+        setattr(task, key, value)
+
+    if clear_scheduled:
+        task.scheduled_start = None
+    if clear_project:
+        task.project_id = None
+    if clear_assigned:
+        task.assigned_date = None
+
+    if update_data.get("status") == TaskStatus.COMPLETED and task.completed_at is None:
+        task.completed_at = now_utc()
+    elif "status" in update_data and task.status != TaskStatus.COMPLETED and task.completed_at is not None:
+        task.completed_at = None
+
+    task.modified = now_utc()
+    return task
+
+
 # -----------------------------------------------------------------------------
 # Cross-module helpers
 # -----------------------------------------------------------------------------
@@ -392,7 +421,7 @@ def _clear_project_id_on_tasks(facade: CalDAVFacade, project_uid: str) -> None:
             continue
         if obj is None:
             continue
-        _populate_task(obj.icalendar_component, task)
+        populate_task(obj.icalendar_component, task)
         try:
             obj.save()
         except Exception:

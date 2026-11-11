@@ -24,6 +24,8 @@ from genesis.entities import Contact, ContactUpdate, Project, ProjectStatus, Pro
 from genesis.journal.facade import Entry
 from genesis.tz import to_local, to_utc
 from genesis.ui._render import (
+    EDIT_SCOPE_ALL_FUTURE,
+    EDIT_SCOPE_CURRENT,
     delete_confirm_dialog,
     focus_create_dialog,
     session_log_dialog,
@@ -289,6 +291,10 @@ def render_filterable_tasks_table(
     the cache-based stable sort (ADR-023). When provided, the table
     freezes its display order on first render, does not re-sort on
     inline edits, and shows a Re-sort button to force a refresh.
+
+    An explicit edit-scope control is rendered above the table
+    (ADR-033). Inline edits of a recurring task follow the selected
+    scope; the default is "this instance".
     """
     statuses_all = [s.value for s in TaskStatus]
     default = [s.value for s in (default_statuses or TaskStatus)]
@@ -313,6 +319,97 @@ def render_filterable_tasks_table(
         sort_keys=sort_keys,
         show_actions=show_actions,
     )
+
+
+def _render_edit_scope_control(key: str) -> None:
+    """Render the inline edit-scope control for recurring tasks.
+
+    An inline edit is an edit path, so it must not silently pick a
+    scope. The control is stored under ``f"{key}__edit_scope"`` and
+    read by the inline-edit handler.
+    """
+    scope_key = f"{key}__edit_scope"
+    st.selectbox(
+        "Inline edit scope",
+        options=[EDIT_SCOPE_CURRENT, EDIT_SCOPE_ALL_FUTURE],
+        key=scope_key,
+        format_func=lambda v: "This instance" if v == EDIT_SCOPE_CURRENT else "All future instances",
+        help="Applies inline edits of recurring tasks to this occurrence only, or to every later occurrence.",
+    )
+
+
+def _edit_scope(key: str) -> str:
+    """Return the inline edit scope selected for the table."""
+    scope = st.session_state.get(f"{key}__edit_scope", EDIT_SCOPE_CURRENT)
+    return scope if scope in (EDIT_SCOPE_CURRENT, EDIT_SCOPE_ALL_FUTURE) else EDIT_SCOPE_CURRENT
+
+
+def _without_status(update: TaskUpdate) -> TaskUpdate:
+    """Return the update without its status field.
+
+    A status change is a per-occurrence operation, so it never rides
+    along with a future-scope edit.
+    """
+    dump = update.model_dump(exclude_unset=True)
+    dump.pop("status", None)
+    return TaskUpdate(**dump)
+
+
+def plan_inline_edit(key: str, task: Task, update: TaskUpdate) -> tuple[str, TaskUpdate, TaskUpdate | None]:
+    """Decide how an inline edit is applied.
+
+    Returns ``(scope, content_update, status_update)``. The scope
+    comes from the table's explicit scope control; it only applies to
+    a task that belongs to a recurrence series. A status change is
+    always a per-occurrence operation, so in the all-future scope the
+    content goes to the later occurrences and the status to the
+    selected one.
+    """
+    scope = _edit_scope(key)
+    if scope != EDIT_SCOPE_ALL_FUTURE:
+        return scope, update, None
+    if not task.recurrence_series_uid:
+        # Not a recurrent task: the scope does not apply.
+        return EDIT_SCOPE_CURRENT, update, None
+    if update.status is None:
+        return scope, update, None
+    return scope, _without_status(update), TaskUpdate(status=update.status)
+
+
+def recurrence_labels(tasks: list[Task], caldav: CalDAVFacade) -> dict[str, tuple[str, str, str]]:
+    """Return per-task (recurrence, role, series) labels.
+
+    The series of every distinct series is fetched once, not once per
+    task. The label pairs are:
+
+    - ``recurrence``: e.g. "Monthly, 4 ahead";
+    - ``role``: "Current", "Future 1 of 4", or "History";
+    - ``series``: the series UID (empty for ordinary tasks).
+    """
+    series_uids = {t.recurrence_series_uid for t in tasks if t.recurrence_series_uid}
+    states: dict[str, Any] = {}
+    for uid in series_uids:
+        state = caldav.get_series_state(uid)
+        if state is not None:
+            states[uid] = state
+
+    labels: dict[str, tuple[str, str, str]] = {}
+    for task in tasks:
+        series_uid = task.recurrence_series_uid
+        state = states.get(series_uid or "")
+        if state is None:
+            labels[task.uid] = ("", "", "")
+            continue
+        recurrence_label = f"{state.frequency.value.capitalize()}, {state.materialized_future_count} ahead"
+        future_uids = [occurrence.uid for occurrence in state.future_occurrences]
+        if task.uid == state.current_task_uid:
+            role = "Current"
+        elif task.uid in future_uids:
+            role = f"Future {future_uids.index(task.uid) + 1} of {len(future_uids)}"
+        else:
+            role = "History"
+        labels[task.uid] = (recurrence_label, role, series_uid or "")
+    return labels
 
 
 def render_tasks_table(
@@ -364,6 +461,12 @@ def render_tasks_table(
         st.info("No tasks to show.")
         return
 
+    # An inline edit of a recurring task needs an explicit scope, so
+    # the control is rendered whenever the table holds at least one
+    # occurrence of a series.
+    if any(t.recurrence_series_uid for t in tasks):
+        _render_edit_scope_control(key)
+
     if sort_keys is not None:
         sort_cache_key = f"{key}__sort"
         if st.button(
@@ -396,6 +499,7 @@ def render_tasks_table(
         return "(missing)"
 
     rows: list[dict] = []
+    recurrence_info = recurrence_labels(tasks, caldav)
     for t in tasks:
         # Strip tz for the dataframe; on edit, the value comes back as
         # naive local and we convert via to_utc before storing.
@@ -407,6 +511,7 @@ def render_tasks_table(
         # the next level (priority) breaks ties. See _handle_inline_edit
         # for the write path.
         dl_local = to_local(t.hard_deadline) if t.hard_deadline else None
+        recurrence_label, role_label, series_label = recurrence_info.get(t.uid, ("", "", ""))
         row: dict = {
             "uid": t.uid,
             "Title": t.title,
@@ -415,6 +520,9 @@ def render_tasks_table(
             "Deadline": dl_local.date() if dl_local else None,
             "Assigned": t.assigned_date,
             "Status": t.status.value,
+            "Recurrence": recurrence_label,
+            "Role": role_label,
+            "Series": series_label,
         }
         if show_project_column:
             row["Project"] = _project_label(t.project_id)
@@ -506,7 +614,19 @@ def render_tasks_table(
 
             if not touched:
                 continue
-            caldav.update_task(original.uid, update)
+            # A status change is always a per-occurrence operation; the
+            # inline scope only governs the content columns.
+            scope, content_update, status_update = plan_inline_edit(key, original, update)
+            if scope == EDIT_SCOPE_ALL_FUTURE:
+                try:
+                    caldav.update_task_scoped(original.uid, content_update, scope=EDIT_SCOPE_ALL_FUTURE)
+                except ValueError:
+                    caldav.update_task(original.uid, update)
+                else:
+                    if status_update is not None:
+                        caldav.update_task(original.uid, status_update)
+            else:
+                caldav.update_task(original.uid, update)
             # ADR-026: if the user just transitioned this task to
             # COMPLETED via inline edit, fire the XP event. The
             # intent is read from the changes dict (already known
@@ -539,6 +659,9 @@ def render_tasks_table(
         "Deadline": st.column_config.DateColumn("Deadline", format="YYYY-MM-DD"),
         "Assigned": st.column_config.DateColumn("Assigned", format="YYYY-MM-DD"),
         "Status": st.column_config.SelectboxColumn("Status", options=statuses_all, required=True),
+        "Recurrence": st.column_config.TextColumn("Recurrence", disabled=True, width="small"),
+        "Role": st.column_config.TextColumn("Occurrence", disabled=True, width="small"),
+        "Series": st.column_config.TextColumn("Series", disabled=True, width="small"),
     }
     if show_project_column:
         column_config["Project"] = st.column_config.SelectboxColumn(

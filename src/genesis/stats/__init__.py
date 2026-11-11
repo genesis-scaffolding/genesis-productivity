@@ -1,10 +1,10 @@
 """Statistics rollup facade.
 
-Pure aggregation over completed time log entries. No I/O, no UI, no
-network. Both the Streamlit Statistics page and the FastAPI
-``/productivity/statistics`` endpoint call :func:`compute_rollup` to
-get a :class:`Rollup`. The UI formats the result for display; the
-API serialises it as JSON.
+Pure aggregation over completed time log entries and task completion
+timestamps. No I/O, no UI, no network. Both the Streamlit Statistics
+page and the FastAPI ``/productivity/statistics`` endpoint call
+:func:`compute_rollup` to get a :class:`Rollup`. The UI formats the
+result for display; the API serialises it as JSON.
 
 Period labels match the UI segmented control exactly so a caller can
 ask "what does this-week look like?" without knowing the underlying
@@ -31,6 +31,7 @@ from .facade import (
     Rollup,
     TaskBucket,
     compute_rollup,
+    count_completed_tasks,
     duration_seconds,
     period_bounds,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "RecentSession",
     "Rollup",
     "compute_rollup",
+    "count_completed_tasks",
     "duration_seconds",
     "period_bounds",
 ]

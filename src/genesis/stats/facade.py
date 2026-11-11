@@ -1,9 +1,9 @@
 """Statistics rollup logic.
 
-Pure aggregation over completed time log entries. Used by the
-Streamlit Statistics page and the FastAPI ``/productivity/statistics``
-endpoint. No imports from the UI or the API package — those modules
-are callers, not dependencies.
+Pure aggregation over completed time log entries and task completion
+timestamps. Used by the Streamlit Statistics page and the FastAPI
+``/productivity/statistics`` endpoint. No imports from the UI or the
+API package — those modules are callers, not dependencies.
 
 Period scope
 ------------
@@ -29,7 +29,7 @@ from datetime import time as _time
 from enum import StrEnum
 
 from ..category.enums import TimeLogCategory
-from ..entities import TimeLogEntry
+from ..entities import Task, TaskStatus, TimeLogEntry
 from ..tz import to_local, to_utc
 
 
@@ -114,6 +114,35 @@ class Kpis:
     minutes_by_category: dict[TimeLogCategory, float]
 
 
+def count_completed_tasks(tasks: list[Task], period: Period, today: date) -> int:
+    """Count tasks completed within ``period``.
+
+    A task counts when its status is ``COMPLETED``, its
+    ``completed_at`` timestamp is set, and that timestamp falls in the
+    half-open window ``[bounds.start, bounds.end)``. The window comes
+    from :func:`period_bounds`, so the count uses the same local
+    calendar boundaries as the rest of the statistics page.
+
+    Args:
+        tasks: Tasks to inspect, typically ``caldav.list_tasks()``.
+        period: Which window to count over.
+        today: Reference date for the period bounds. Pass
+            ``date.today()`` at the call site.
+
+    Returns:
+        The number of matching tasks. Tasks that are not completed,
+        or that carry no completion timestamp, are never counted.
+    """
+    bounds = period_bounds(period, today)
+    return sum(
+        1
+        for task in tasks
+        if task.status == TaskStatus.COMPLETED
+        and task.completed_at is not None
+        and _in_bounds(task.completed_at, bounds)
+    )
+
+
 @dataclass(frozen=True)
 class DailyPoint:
     """Minutes of focus for a single local day.
@@ -195,12 +224,17 @@ class Rollup:
     recent: list[RecentSession]
 
 
-def _in_period(entry: TimeLogEntry, bounds: PeriodBounds) -> bool:
-    if entry.start < bounds.start:
+def _in_bounds(moment: datetime, bounds: PeriodBounds) -> bool:
+    """Return True iff ``moment`` falls in the half-open window."""
+    if moment < bounds.start:
         return False
-    if bounds.end is not None and entry.start >= bounds.end:
+    if bounds.end is not None and moment >= bounds.end:
         return False
     return True
+
+
+def _in_period(entry: TimeLogEntry, bounds: PeriodBounds) -> bool:
+    return _in_bounds(entry.start, bounds)
 
 
 def compute_rollup(

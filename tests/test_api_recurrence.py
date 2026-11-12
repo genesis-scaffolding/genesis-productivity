@@ -471,6 +471,62 @@ def test_patch_series_shrinking_the_horizon_cancels_the_farthest_rows(api_server
     assert len(payload["canceled_task_uids"]) == 3
 
 
+def test_a_title_only_patch_leaves_a_finished_series_finished(api_server: TestClient) -> None:
+    """A content-only update does not resurrect a finished series.
+
+    Deleting every occurrence leaves the series with nothing to
+    renew: it finishes. Only a schedule change brings it back.
+    """
+    token = _login(api_server)
+    body = _create_recurrent(api_server, token, count=2)
+    series_uid = body["recurrence"]["series_uid"]
+
+    listed = api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token))
+    for item in listed.json()["items"]:
+        api_server.delete(f"/productivity/tasks/{item['uid']}", headers=_auth(token))
+
+    resp = api_server.patch(
+        f"/productivity/recurrences/{series_uid}",
+        json={"title": "Pay the rent"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["active"] is False
+
+    series = api_server.get(f"/productivity/recurrences/{series_uid}", headers=_auth(token))
+    assert series.json()["stop_reason"] == "finished"
+    assert series.json()["active"] is False
+    assert api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token)).json()[
+        "total"
+    ] == 0
+
+
+def test_a_schedule_patch_reactivates_a_finished_series(api_server: TestClient) -> None:
+    """A new end date that allows another occurrence brings it back."""
+    token = _login(api_server)
+    body = _create_recurrent(api_server, token, count=2)
+    series_uid = body["recurrence"]["series_uid"]
+
+    listed = api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token))
+    for item in listed.json()["items"]:
+        api_server.delete(f"/productivity/tasks/{item['uid']}", headers=_auth(token))
+
+    resp = api_server.patch(
+        f"/productivity/recurrences/{series_uid}",
+        json={"end_date": "2027-05-21"},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["active"] is True
+    assert resp.json()["end_date"] == "2027-05-21"
+
+    series = api_server.get(f"/productivity/recurrences/{series_uid}", headers=_auth(token))
+    assert series.json()["stop_reason"] is None
+    assert api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token)).json()[
+        "total"
+    ] > 0
+
+
 def test_patch_series_on_a_cancelled_series_is_409(api_server: TestClient) -> None:
     token = _login(api_server)
     body = _create_recurrent(api_server, token, count=2)

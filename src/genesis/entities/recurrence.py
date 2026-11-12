@@ -178,8 +178,9 @@ class RecurrenceSeries(BaseModel):
         start_date: The anchor date of the occurrence at
             ``start_index``.
         start_index: Index of the occurrence ``start_date`` belongs to.
-            Normally 0; moves forward when a future-scope edit
-            re-anchors the future chain.
+            Normally 0: the chain is anchored on the first
+            occurrence, and the anchor moves only when the anchored
+            field of the series changes.
         template: Content template for future occurrences.
         materialized_future_count: Effective horizon N. The number of
             open future occurrences kept materialized ahead of the
@@ -362,14 +363,3 @@ class CancelSeriesResult(BaseModel):
     series_uid: str
     canceled_uids: list[str] = Field(default_factory=list)
     active: bool = False
-
-
-class SeriesResizeResult(BaseModel):
-    """Result of changing the materialized horizon of a series."""
-
-    series_uid: str
-    materialized_future_count: int
-    current_task_uid: str | None = None
-    future_task_uids: list[str] = Field(default_factory=list)
-    created_task_uids: list[str] = Field(default_factory=list)
-    canceled_task_uids: list[str] = Field(default_factory=list)

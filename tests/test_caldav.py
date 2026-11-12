@@ -853,12 +853,14 @@ class TestRecurrenceSeriesIntegration:
         assert completed[0].completed_at is not None
 
     def test_resizing_persists_the_new_occurrences(self, facade: CalDAVFacade) -> None:
+        from genesis.entities import SeriesUpdate
+
         created = facade.create_recurrent_task(
             TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
             rule=_monthly_rule(),
             materialized_future_count=1,
         )
-        result = facade.resize_series(created.series.uid, 4)
+        result = facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=4))
         assert len(result.created_task_uids) == 3
 
         reconnected = CalDAVFacade(

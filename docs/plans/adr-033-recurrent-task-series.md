@@ -34,8 +34,8 @@
 4. **`src/genesis/caldav/recurrence.py`**
    - Implement the v1 daily, weekly, monthly, and yearly date arithmetic.
    - Implement idempotent series creation, an N-occurrence rolling
-     materialization window, the series edit, the series
-     cancellation, and runtime horizon resizing.
+     materialization window, the series edit, and the series
+     cancellation. The horizon is changed through the series edit.
    - Use `(series_uid, recurrence_index)` as the logical occurrence
      identity so retries resume at the first missing index.
    - Derive a stable `t-` UID from that identity so concurrent or
@@ -47,9 +47,8 @@
 
 5. **`src/genesis/caldav/tasks.py` and `src/genesis/caldav/facade.py`**
    - Expose recurrent creation, the series edit, the series
-     cancellation, the series listing, series filtering, series
-     inspection, and runtime horizon resizing through the CalDAV
-     facade.
+     cancellation, the series listing, series filtering, and series
+     inspection through the CalDAV facade.
    - Reconcile shadow VEVENTs for every materialized occurrence and for
      futures cancelled by a horizon reduction.
    - Guard the task write path against a series-owned change.
@@ -167,6 +166,13 @@ the places where the code differs from the wording of the plan.
   is one smaller until the current occurrence completes, and the
   natural renewal restores it. The index is never reused because the
   highest materialized index only grows.
+- **The series form warns about the content overwrite.** The form
+  states, above the Save button, that the details also revert the
+  individual edits the user made on the open occurrences.
+- **The horizon is changed through the series edit.** `resize_series`
+  was dropped: the series edit owns the horizon, so a second entry
+  point for it would only duplicate the logic (and it was reachable
+  from the tests alone).
 - **A series finishes when it has no open occurrence left.** The
   end date caps the materialized window; it does not finish the
   series by itself. A series whose occurrences are all terminal is
@@ -175,9 +181,12 @@ the places where the code differs from the wording of the plan.
 - **Reactivating a finished series needs a schedule change.** The
   series comes back when the rule, the anchor, the start date, or the
   end date changed *and* the new configuration allows another
-  occurrence. A content-only edit (a new title) leaves the series
-  finished. When the series had no open occurrence left, the next
-  occurrence becomes the new current one.
+  occurrence. The test is a *value* comparison, not a presence test:
+  the series form always sends the whole schedule, so a presence test
+  would read every content-only save as a schedule change and
+  resurrect the series. A content-only edit (a new title) leaves the
+  series finished. When the series had no open occurrence left, the
+  next occurrence becomes the new current one.
 - **The end date is inclusive.** An occurrence may start on the end
   date; the one after it is not materialized. Shortening the end date
   cancels the open occurrences that fall after it.

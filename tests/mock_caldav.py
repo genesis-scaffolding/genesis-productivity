@@ -315,10 +315,6 @@ class MockCalDAVFacade:
         """Cancel the future window of a series and stop its renewal."""
         return recurrence.cancel_series(self._recurrence_store(), series_uid)
 
-    def resize_series(self, series_uid: str, materialized_future_count: int):
-        """Change the materialized horizon of a running series."""
-        return recurrence.resize_series(self._recurrence_store(), series_uid, materialized_future_count)
-
     def list_series_summaries(self):
         """Return the summary row of every recurrence series."""
         return recurrence.series_summaries(self._recurrence_store())

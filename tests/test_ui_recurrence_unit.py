@@ -500,6 +500,66 @@ def test_the_series_form_saves_the_content(
     assert {t.title for t in tasks} == {"Pay the rent"}
 
 
+def test_the_series_form_does_not_resurrect_a_finished_series(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A content-only save leaves a finished series finished.
+
+    The form always sends the whole schedule; a finished series is
+    only reactivated by a schedule *change*.
+    """
+    created = _series(facade, count=2)
+    for task in list(facade.caldav.list_series_tasks(created.series.uid)):
+        facade.caldav.delete_task(task.uid)
+
+    at = _open_series(monkeypatch, created.series.uid)
+    at.text_input(key="sed_" + created.series.uid + "_title").set_value("Pay the rent").run()
+    _widget_by_label(at.button, "Save").click().run()
+
+    assert not at.exception, f"dialog raised: {at.exception}"
+    series = facade.caldav.get_series(created.series.uid)
+    assert series is not None
+    assert series.active is False
+    assert series.stop_reason == "finished"
+    assert series.template.title == "Pay the rent"
+    assert facade.caldav.list_series_tasks(created.series.uid) == []
+
+
+def test_the_series_form_reactivates_a_finished_series_with_a_schedule_change(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new interval brings a finished series back."""
+    created = _series(facade, count=2)
+    for task in list(facade.caldav.list_series_tasks(created.series.uid)):
+        facade.caldav.delete_task(task.uid)
+
+    at = _open_series(monkeypatch, created.series.uid)
+    _widget_by_label(at.number_input, "Every (units)").set_value(2).run()
+    _widget_by_label(at.button, "Save").click().run()
+
+    assert not at.exception, f"dialog raised: {at.exception}"
+    series = facade.caldav.get_series(created.series.uid)
+    assert series is not None
+    assert series.active is True
+    assert series.stop_reason is None
+    assert series.rule.interval == 2
+    assert len(facade.caldav.list_series_tasks(created.series.uid)) == 3
+
+
+def test_the_series_form_warns_that_it_overwrites_the_occurrence_edits(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The form states that a content edit reverts the per-occurrence edits."""
+    created = _series(facade, count=2)
+    at = _open_series(monkeypatch, created.series.uid)
+
+    texts = _texts(at)
+    assert "overwrite the individual edits" in texts
+
+
 # ---------------------------------------------------------------------------
 # Series cancellation
 # ---------------------------------------------------------------------------

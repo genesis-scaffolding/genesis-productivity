@@ -78,6 +78,16 @@ def _by_index(facade: MockCalDAVFacade, series_uid: str) -> dict[int, Task]:
     return {t.recurrence_index or 0: t for t in facade.list_series_tasks(series_uid)}
 
 
+def _finish_series(facade: MockCalDAVFacade, series_uid: str) -> None:
+    """Delete every occurrence of a series: it has nothing left to renew.
+
+    The series then *finishes*: it stops renewing, but it is not
+    cancelled, and a schedule change can bring it back.
+    """
+    for task in list(facade.list_series_tasks(series_uid)):
+        facade.delete_task(task.uid)
+
+
 # -----------------------------------------------------------------------------
 # Rule arithmetic
 # -----------------------------------------------------------------------------
@@ -515,6 +525,59 @@ class TestSeriesEdit:
         assert tasks[4].status == TaskStatus.CANCELED
         assert tasks[5].status == TaskStatus.NEEDS_ACTION
 
+    def test_a_content_only_edit_leaves_a_finished_series_finished(self) -> None:
+        """A finished series stays finished when only the content changes.
+
+        The reactivation test compares the *effective* schedule, so a
+        payload that repeats the current rule, anchor, and dates (the
+        series form always sends them) is not a schedule change.
+        """
+        facade = _facade()
+        created = _create(facade, count=2)
+        _finish_series(facade, created.series.uid)
+
+        result = facade.update_series(created.series.uid, SeriesUpdate(title="Pay the rent"))
+
+        assert result.active is False
+        assert result.created_task_uids == []
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.stop_reason == "finished"
+        assert series.active is False
+        assert series.template.title == "Pay the rent"
+        assert facade.list_series_tasks(created.series.uid) == []
+
+    def test_a_schedule_change_reactivates_a_finished_series(self) -> None:
+        """A new rule brings the series back."""
+        facade = _facade()
+        created = _create(facade, count=2)
+        _finish_series(facade, created.series.uid)
+
+        result = facade.update_series(created.series.uid, SeriesUpdate(interval=2))
+
+        assert result.active is True
+        assert len(result.created_task_uids) == 3
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.stop_reason is None
+        assert series.active is True
+        assert series.rule.interval == 2
+
+    def test_a_new_end_date_reactivates_a_finished_series(self) -> None:
+        """An end date that allows another occurrence brings it back."""
+        facade = _facade()
+        created = _create(facade, count=2)
+        _finish_series(facade, created.series.uid)
+
+        result = facade.update_series(created.series.uid, SeriesUpdate(end_date=date(2026, 5, 31)))
+
+        assert result.active is True
+        assert len(result.created_task_uids) >= 1
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.stop_reason is None
+        assert series.end_date == date(2026, 5, 31)
+
 
 # -----------------------------------------------------------------------------
 # End date
@@ -660,33 +723,39 @@ class TestDeleteOccurrence:
 
 
 class TestHorizonResizing:
-    """Changing the materialized horizon of a running series."""
+    """Changing the materialized horizon through the series edit."""
 
     def test_growing_from_one_to_four_creates_three(self) -> None:
         facade = _facade()
         created = _create(facade, count=1)
-        result = facade.resize_series(created.series.uid, 4)
+        result = facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=4))
 
         assert len(result.created_task_uids) == 3
         assert result.materialized_future_count == 4
-        assert len(result.future_task_uids) == 4
+        state = facade.get_series_state(created.series.uid)
+        assert state is not None
+        assert len(state.future_occurrences) == 4
         assert sorted(_by_index(facade, created.series.uid)) == [0, 1, 2, 3, 4]
 
     def test_growing_from_two_to_four_creates_two(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
-        result = facade.resize_series(created.series.uid, 4)
+        result = facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=4))
 
         assert len(result.created_task_uids) == 2
-        assert len(result.future_task_uids) == 4
+        state = facade.get_series_state(created.series.uid)
+        assert state is not None
+        assert len(state.future_occurrences) == 4
 
     def test_shrinking_from_four_to_one_cancels_the_farthest_three(self) -> None:
         facade = _facade()
         created = _create(facade, count=4)
-        result = facade.resize_series(created.series.uid, 1)
+        result = facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=1))
 
         assert len(result.canceled_task_uids) == 3
-        assert len(result.future_task_uids) == 1
+        state = facade.get_series_state(created.series.uid)
+        assert state is not None
+        assert len(state.future_occurrences) == 1
         tasks = _by_index(facade, created.series.uid)
         assert tasks[0].status == TaskStatus.NEEDS_ACTION
         assert tasks[1].status == TaskStatus.NEEDS_ACTION
@@ -697,7 +766,7 @@ class TestHorizonResizing:
         facade = _facade()
         created = _create(facade, count=4)
         facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
-        facade.resize_series(created.series.uid, 1)
+        facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=1))
         tasks = _by_index(facade, created.series.uid)
         assert tasks[0].status == TaskStatus.COMPLETED
         assert tasks[0].completed_at is not None
@@ -705,8 +774,8 @@ class TestHorizonResizing:
     def test_expanding_after_a_reduction_does_not_resurrect(self) -> None:
         facade = _facade()
         created = _create(facade, count=4)
-        facade.resize_series(created.series.uid, 1)
-        facade.resize_series(created.series.uid, 3)
+        facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=1))
+        facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=3))
         tasks = _by_index(facade, created.series.uid)
         assert tasks[2].status == TaskStatus.CANCELED
         assert tasks[3].status == TaskStatus.CANCELED
@@ -716,16 +785,16 @@ class TestHorizonResizing:
     def test_resizing_to_the_same_count_is_a_noop(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
-        result = facade.resize_series(created.series.uid, 2)
+        result = facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=2))
         assert result.created_task_uids == []
         assert result.canceled_task_uids == []
 
-    def test_resizing_an_inactive_series_is_rejected(self) -> None:
+    def test_resizing_a_cancelled_series_is_rejected(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
         facade.cancel_series(created.series.uid)
-        with pytest.raises(ValueError, match="not active"):
-            facade.resize_series(created.series.uid, 4)
+        with pytest.raises(ValueError, match="cancelled"):
+            facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=4))
 
     def test_reduction_removes_the_shadow_event(self) -> None:
         facade = _facade()
@@ -737,7 +806,7 @@ class TestHorizonResizing:
         shadow_uids = {event.uid for event in facade.list_events()}
         assert len(shadow_uids) == 3
 
-        facade.resize_series(created.series.uid, 1)
+        facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=1))
         remaining = {event.uid for event in facade.list_events()}
         assert len(remaining) == 2
 
@@ -1108,7 +1177,7 @@ class TestUidCollision:
         )
 
         with pytest.raises(ValueError, match="already used"):
-            facade.resize_series(created.series.uid, 3)
+            facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=3))
 
 
 class TestLocalTimeAfterEdit:

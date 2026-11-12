@@ -151,10 +151,13 @@ daylight-saving transition does not move the task to a different local
 time.
 
 The series has an optional end date. An occurrence is only materialized
-when its date is on or before the end date. When the next occurrence
-would fall after the end date, the series finishes: it stops renewing
-and no further occurrence is created. The end date is optional because
-an open-ended series is the common case.
+when its date is on or before the end date, and the end date caps the
+materialized window: a series whose end date leaves room for two more
+occurrences keeps two, not N. The end date does not end the series by
+itself. A series with open occurrences is still active even when its
+end date has passed; it finishes when it has no open occurrence left
+(section 6). The end date is optional because an open-ended series is
+the common case.
 
 Weekday lists, month-position rules, and exception dates are deferred
 rather than implied by a partly understood RRULE string.
@@ -256,7 +259,9 @@ materialized horizon. Saving a series edit:
 - re-derives the schedule of every *open* occurrence of the series from
   the new rule and the new start date;
 - rewrites the content template of the series and applies it to every
-  open occurrence;
+  open occurrence. An individual content edit of an open occurrence is
+  therefore overwritten by a later series content edit; the series form
+  states this before saving;
 - cancels the open occurrences that fall after a shortened end date;
 - grows or shrinks the materialized window;
 - never rewrites a completed or cancelled occurrence. History is
@@ -308,10 +313,14 @@ A cancelled series is final. Its rule, its schedule, and its horizon
 are frozen: a series update on a cancelled series is refused. The user
 who wants a different recurrence creates a new series.
 
-A series that reaches its end date, or whose occurrences are all
-terminal, *finishes* instead of being cancelled. A finished series can
-be updated again: extending or removing its end date, or changing its
-rule, reactivates it and materializes the missing occurrences.
+A series whose occurrences are all terminal *finishes* instead of
+being cancelled: it stops renewing, but it is not final. The end date
+only caps the materialized window (section 2), so a series whose end
+date has passed and which still has open occurrences is still active.
+A finished series can be updated again: a schedule change that allows
+another occurrence (extending or removing its end date, or changing its
+rule) reactivates it and materializes the missing occurrences. A
+content-only change (a new title) leaves the series finished.
 
 The existing `DELETE /productivity/tasks/{uid}` keeps its current
 meaning: it deletes the selected occurrence. It is not a substitute for

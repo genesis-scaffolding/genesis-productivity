@@ -652,8 +652,8 @@ def render_tasks_table(
         key=key,
     )
 
-    # An inline edit that the chosen scope rejected leaves a message
-    # behind. The callback cannot render it, so the script body does.
+    # A refused inline edit leaves a message behind. The callback
+    # cannot render it, so the script body does.
     inline_error = st.session_state.pop(_INLINE_EDIT_ERROR_KEY, None)
     if inline_error:
         st.error(inline_error)

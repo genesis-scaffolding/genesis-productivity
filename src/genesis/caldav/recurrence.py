@@ -43,7 +43,6 @@ from ..entities import (
     RecurrenceSeries,
     RecurrenceTemplate,
     SeriesFutureOccurrence,
-    SeriesResizeResult,
     SeriesState,
     SeriesSummary,
     SeriesUpdate,
@@ -52,7 +51,6 @@ from ..entities import (
     TaskCreate,
     TaskStatus,
     TaskUpdate,
-    occurrence_role,
 )
 from ..entities import occurrence_date as _occurrence_date
 from ..tz import to_local, to_utc_walltime
@@ -318,11 +316,6 @@ def resolve_series_occurrences(
     futures.sort(key=lambda t: (_index_of(t), t.uid))
     history = [t for t in tasks if is_terminal(t)]
     return current, futures, history
-
-
-def occurrence_roles(series: RecurrenceSeries, tasks: list[Task]) -> dict[str, str]:
-    """Map every occurrence UID of a series to its role."""
-    return {task.uid: occurrence_role(series, task) for task in tasks}
 
 
 def series_owned_changes(task: Task, data: TaskUpdate) -> list[str]:
@@ -691,6 +684,18 @@ def update_series(store: RecurrenceStore, series_uid: str, changes: SeriesUpdate
     if new_end_date is not None and new_end_date < new_start_date:
         raise ValueError("the end date must not be before the start date")
 
+    # The schedule changed when an *effective* value differs from the
+    # current one, not when a field is merely present in the payload.
+    # The UI form always sends the whole schedule, so a content-only
+    # save must not look like a schedule change.
+    schedule_changed = (
+        new_rule.frequency != series.rule.frequency
+        or new_rule.interval != series.rule.interval
+        or new_rule.anchor != series.rule.anchor
+        or new_start_date != series.start_date
+        or new_end_date != series.end_date
+    )
+
     series.rule = new_rule
     series.start_date = new_start_date
     series.template = template
@@ -698,14 +703,6 @@ def update_series(store: RecurrenceStore, series_uid: str, changes: SeriesUpdate
     series.materialized_future_count = new_horizon
 
     # -- a finished series comes back when the schedule allows another occurrence
-    schedule_changed = (
-        "frequency" in dump
-        or "interval" in dump
-        or "anchor" in dump
-        or "start_date" in dump
-        or "end_date" in dump
-        or bool(dump.get("clear_end_date"))
-    )
     created_uids: list[str] = []
     if series.stop_reason == STOP_REASON_FINISHED and schedule_changed and _allows_another_occurrence(series):
         series.active = True
@@ -862,70 +859,6 @@ def clear_series_project(store: RecurrenceStore, project_uid: str) -> None:
         series.template.project_id = None
         series.modified = now_utc()
         store.save_series(series)
-
-
-def resize_series(store: RecurrenceStore, series_uid: str, materialized_future_count: int) -> SeriesResizeResult:
-    """Change the materialized horizon of a running series.
-
-    Growing the horizon materializes the missing tail occurrences.
-    Shrinking it keeps the current occurrence and the nearest future
-    occurrences and cancels the farthest extras; cancelled indexes are
-    never resurrected by a later expansion.
-
-    Raises:
-        ValueError: When the series does not exist, is not active, or
-            the requested count is out of range.
-    """
-    if not (MIN_MATERIALIZED_FUTURE_COUNT <= materialized_future_count <= MAX_MATERIALIZED_FUTURE_COUNT):
-        raise ValueError(
-            f"materialized_future_count must be between {MIN_MATERIALIZED_FUTURE_COUNT} "
-            f"and {MAX_MATERIALIZED_FUTURE_COUNT}, got {materialized_future_count}",
-        )
-    series = store.get_series(series_uid)
-    if series is None:
-        raise ValueError("recurrence series not found")
-    if not series.active:
-        raise ValueError("recurrence series is not active")
-
-    now = now_utc()
-    tasks = store.list_series_tasks(series_uid)
-    current, futures, _history = resolve_series_occurrences(series, tasks)
-    created_uids: list[str] = []
-    canceled_uids: list[str] = []
-
-    if materialized_future_count > series.materialized_future_count:
-        created = _materialize(
-            store,
-            series,
-            tasks,
-            target_count=materialized_future_count,
-            now=now,
-        )
-        created_uids = [t.uid for t in created]
-    elif materialized_future_count < series.materialized_future_count:
-        drop = futures[materialized_future_count:]
-        for occurrence in drop:
-            occurrence.status = TaskStatus.CANCELED
-            occurrence.completed_at = None
-            occurrence.modified = now
-            store.put_task(occurrence)
-            store.delete_task_shadow(occurrence.uid)
-            canceled_uids.append(occurrence.uid)
-
-    series.materialized_future_count = materialized_future_count
-    series.modified = now
-    store.save_series(series)
-
-    tasks = store.list_series_tasks(series_uid)
-    current, futures, _history = resolve_series_occurrences(series, tasks)
-    return SeriesResizeResult(
-        series_uid=series.uid,
-        materialized_future_count=materialized_future_count,
-        current_task_uid=current.uid if current is not None else None,
-        future_task_uids=[t.uid for t in futures],
-        created_task_uids=created_uids,
-        canceled_task_uids=canceled_uids,
-    )
 
 
 def series_summary(store: RecurrenceStore, series_uid: str) -> SeriesSummary | None:

@@ -598,6 +598,11 @@ def series_edit_dialog(series_uid: str) -> None:
             f"Saving applies the schedule and the details to the {fhorizon + 1} open "
             "occurrences of this series. Completed history is not changed.",
         )
+        st.caption(
+            "The details also overwrite the individual edits you made on the open "
+            "occurrences: a title or a priority you changed on one occurrence is "
+            "reverted by this save.",
+        )
 
         save_clicked = st.form_submit_button("Save", type="primary", icon=":material/save:")
         cancel_clicked = st.form_submit_button("Cancel", type="tertiary")

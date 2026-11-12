@@ -2,8 +2,10 @@
 
 The tests drive the in-memory CalDAV backend, which runs the same
 recurrence engine as the real one. They cover the rule arithmetic, the
-materialized horizon (N), the rolling renewal, the two edit scopes,
-horizon resizing, cancellation, and the retry-safety of the engine.
+materialized horizon (N), the rolling renewal, the ownership rule of
+the series-owned fields, the series edit, the end date, the delete
+that does not come back, the series cancellation, and the retry-safety
+of the engine.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from genesis.entities import (
     RecurrenceAnchor,
     RecurrenceFrequency,
     RecurrenceRule,
+    SeriesUpdate,
     Task,
     TaskCreate,
     TaskStatus,
@@ -53,6 +56,8 @@ def _create(
     rule: RecurrenceRule | None = None,
     scheduled_start: datetime | None = None,
     hard_deadline: datetime | None = None,
+    end_date: date | None = None,
+    project_id: str | None = None,
 ):
     return facade.create_recurrent_task(
         TaskCreate(
@@ -61,9 +66,11 @@ def _create(
             scheduled_start=scheduled_start,
             scheduled_duration=30 if scheduled_start is not None else None,
             hard_deadline=hard_deadline,
+            project_id=project_id,
         ),
         rule=rule or _rule(),
         materialized_future_count=count,
+        end_date=end_date,
     )
 
 
@@ -89,6 +96,7 @@ class TestRuleArithmetic:
         assert occurrence_date(date(2026, 1, 1), rule, 2) == date(2026, 1, 15)
 
     def test_weekly_interval_two_is_fortnightly(self) -> None:
+        """A fortnightly series advances two weeks per occurrence."""
         rule = _rule(RecurrenceFrequency.WEEKLY, 2)
         assert occurrence_date(date(2026, 1, 1), rule, 1) == date(2026, 1, 15)
         assert occurrence_date(date(2026, 1, 1), rule, 2) == date(2026, 1, 29)
@@ -176,6 +184,11 @@ class TestCreation:
         with pytest.raises(ValueError, match="materialized_future_count"):
             _create(facade, count=101)
 
+    def test_an_end_date_before_the_start_date_is_rejected(self) -> None:
+        facade = _facade()
+        with pytest.raises(ValueError, match="end date"):
+            _create(facade, assigned=date(2026, 1, 31), end_date=date(2025, 12, 31))
+
     def test_failed_creation_cleans_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A half-written series leaves nothing behind."""
         facade = _facade()
@@ -234,15 +247,6 @@ class TestRollingRenewal:
         assert state.current_task_uid != created.task.uid
         assert len(state.future_occurrences) == 1
 
-    def test_deleting_the_current_skips_it(self) -> None:
-        facade = _facade()
-        created = _create(facade, count=1)
-        facade.delete_task(created.task.uid)
-        state = facade.get_series_state(created.series.uid)
-        assert state is not None
-        assert state.current_task_uid != created.task.uid
-        assert len(state.future_occurrences) == 1
-
     def test_cancelling_one_future_fills_the_slot(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
@@ -268,80 +272,386 @@ class TestRollingRenewal:
 
 
 # -----------------------------------------------------------------------------
-# Edit scopes
+# Ownership: the series owns the schedule
 # -----------------------------------------------------------------------------
 
 
-class TestEditScopes:
-    """The two edit scopes."""
+class TestSeriesOwnedFields:
+    """The five series-owned fields are read-only on an occurrence."""
 
-    def test_current_scope_leaves_the_futures_alone(self) -> None:
+    def test_a_change_of_the_assigned_date_is_refused(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        with pytest.raises(ValueError, match="assigned_date"):
+            facade.update_task(created.task.uid, TaskUpdate(assigned_date=date(2026, 3, 5)))
+        stored = facade.get_task(created.task.uid)
+        assert stored is not None
+        assert stored.assigned_date == date(2026, 1, 31)
+
+    def test_a_change_of_the_hard_deadline_is_refused(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2, hard_deadline=datetime(2026, 1, 31, 12, 0, tzinfo=UTC))
+        with pytest.raises(ValueError, match="hard_deadline"):
+            facade.update_task(
+                created.task.uid,
+                TaskUpdate(hard_deadline=datetime(2026, 2, 5, 12, 0, tzinfo=UTC)),
+            )
+
+    def test_a_change_of_the_scheduled_start_is_refused(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2, scheduled_start=datetime(2026, 1, 31, 9, 0, tzinfo=UTC))
+        with pytest.raises(ValueError, match="scheduled_start"):
+            facade.update_task(
+                created.task.uid,
+                TaskUpdate(scheduled_start=datetime(2026, 2, 5, 9, 0, tzinfo=UTC)),
+            )
+
+    def test_a_change_of_the_duration_is_refused(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2, scheduled_start=datetime(2026, 1, 31, 9, 0, tzinfo=UTC))
+        with pytest.raises(ValueError, match="scheduled_duration"):
+            facade.update_task(created.task.uid, TaskUpdate(scheduled_duration=60))
+
+    def test_a_change_of_the_project_is_refused(self) -> None:
+        from genesis.entities import ProjectCreate
+
+        facade = _facade()
+        project = facade.create_project(ProjectCreate(name="Rent"))
+        created = _create(facade, count=2, project_id=project.uid)
+        with pytest.raises(ValueError, match="project_id"):
+            facade.update_task(created.task.uid, TaskUpdate(project_id="p-other"))
+
+    def test_the_error_names_the_series(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        with pytest.raises(ValueError) as excinfo:
+            facade.update_task(created.task.uid, TaskUpdate(assigned_date=date(2026, 3, 5)))
+        message = str(excinfo.value)
+        assert created.series.uid in message
+        assert "/productivity/recurrences/" in message
+
+    def test_an_unchanged_write_is_accepted(self) -> None:
+        """A client that sends the full object unchanged is not rejected."""
+        facade = _facade()
+        created = _create(facade, count=2, scheduled_start=datetime(2026, 1, 31, 9, 0, tzinfo=UTC))
+        stored = facade.get_task(created.task.uid)
+        assert stored is not None
+        updated = facade.update_task(
+            created.task.uid,
+            TaskUpdate(
+                title="Pay rent",
+                assigned_date=stored.assigned_date,
+                scheduled_start=stored.scheduled_start,
+                scheduled_duration=stored.scheduled_duration,
+                project_id=stored.project_id,
+            ),
+        )
+        assert updated is not None
+
+    def test_an_ordinary_task_keeps_its_dates(self) -> None:
+        facade = _facade()
+        task = facade.create_task(TaskCreate(title="Plain", assigned_date=date(2026, 1, 31)))
+        updated = facade.update_task(task.uid, TaskUpdate(assigned_date=date(2026, 2, 5)))
+        assert updated is not None
+        assert updated.assigned_date == date(2026, 2, 5)
+
+
+class TestInstanceEdit:
+    """An occurrence edit changes the occurrence and nothing else."""
+
+    def test_the_content_change_stays_on_the_occurrence(self) -> None:
         facade = _facade()
         created = _create(facade, count=3)
-        result = facade.update_task_scoped(created.task.uid, TaskUpdate(title="Only me"), scope="current")
+        facade.update_task(created.task.uid, TaskUpdate(title="Pay rent (January)"))
 
-        assert result.affected_uids == [created.task.uid]
         tasks = _by_index(facade, created.series.uid)
-        assert tasks[0].title == "Only me"
+        assert tasks[0].title == "Pay rent (January)"
         assert tasks[1].title == "Pay rent"
+        assert tasks[2].title == "Pay rent"
         series = facade.get_series(created.series.uid)
         assert series is not None
         assert series.template.title == "Pay rent"
 
-    def test_all_future_scope_changes_every_future(self) -> None:
-        facade = _facade()
-        created = _create(facade, count=3)
-        result = facade.update_task_scoped(created.task.uid, TaskUpdate(title="All of them"), scope="all-future")
-
-        assert len(result.affected_uids) == 3
-        tasks = _by_index(facade, created.series.uid)
-        assert tasks[0].title == "Pay rent"
-        for index in (1, 2, 3):
-            assert tasks[index].title == "All of them"
-        series = facade.get_series(created.series.uid)
-        assert series is not None
-        assert series.template.title == "All of them"
-
-    def test_all_future_scope_on_a_future_changes_only_later_ones(self) -> None:
-        facade = _facade()
-        created = _create(facade, count=3)
-        second = _by_index(facade, created.series.uid)[2]
-        result = facade.update_task_scoped(second.uid, TaskUpdate(title="Later only"), scope="all-future")
-
-        assert len(result.affected_uids) == 1
-        tasks = _by_index(facade, created.series.uid)
-        assert tasks[1].title == "Pay rent"
-        assert tasks[2].title == "Pay rent"
-        assert tasks[3].title == "Later only"
-
-    def test_all_future_scope_rejects_a_status_change(self) -> None:
-        facade = _facade()
-        created = _create(facade, count=1)
-        with pytest.raises(ValueError, match="status"):
-            facade.update_task_scoped(
-                created.task.uid,
-                TaskUpdate(status=TaskStatus.COMPLETED),
-                scope="all-future",
-            )
-
-    def test_all_future_scope_rejects_a_plain_task(self) -> None:
-        facade = _facade()
-        task = facade.create_task(TaskCreate(title="Plain"))
-        with pytest.raises(ValueError, match="recurrence series"):
-            facade.update_task_scoped(task.uid, TaskUpdate(title="Nope"), scope="all-future")
-
-    def test_all_future_scope_shifts_the_dates(self) -> None:
+    def test_the_priority_change_stays_on_the_occurrence(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
-        facade.update_task_scoped(
-            created.task.uid,
-            TaskUpdate(assigned_date=date(2026, 2, 5)),
-            scope="all-future",
-        )
+        facade.update_task(created.task.uid, TaskUpdate(priority=9))
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[0].priority == 9
+        assert tasks[1].priority is None
+
+    def test_the_status_change_stays_on_the_occurrence(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[0].status == TaskStatus.COMPLETED
+        assert tasks[1].status == TaskStatus.NEEDS_ACTION
+
+
+# -----------------------------------------------------------------------------
+# Series edit
+# -----------------------------------------------------------------------------
+
+
+class TestSeriesEdit:
+    """The series edit is the only way to change a schedule."""
+
+    def test_the_rule_change_re_derives_the_open_occurrences(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=3)
+        facade.update_series(created.series.uid, SeriesUpdate(interval=2))
+
         tasks = _by_index(facade, created.series.uid)
         assert tasks[0].assigned_date == date(2026, 1, 31)
+        assert tasks[1].assigned_date == date(2026, 3, 31)
+        assert tasks[2].assigned_date == date(2026, 5, 31)
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.rule.interval == 2
+
+    def test_the_start_date_change_moves_the_open_occurrences(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        facade.update_series(created.series.uid, SeriesUpdate(start_date=date(2026, 2, 5)))
+
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[0].assigned_date == date(2026, 2, 5)
         assert tasks[1].assigned_date == date(2026, 3, 5)
         assert tasks[2].assigned_date == date(2026, 4, 5)
+
+    def test_the_anchor_change_re_anchors_on_the_current_occurrence(self) -> None:
+        facade = _facade()
+        created = _create(
+            facade,
+            count=2,
+            hard_deadline=datetime(2026, 2, 5, 12, 0, tzinfo=UTC),
+        )
+        facade.update_series(created.series.uid, SeriesUpdate(anchor=RecurrenceAnchor.HARD_DEADLINE))
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.rule.anchor == RecurrenceAnchor.HARD_DEADLINE
+        assert series.start_date == date(2026, 2, 5)
+        assert series.template.deadline_offset_days == 0
+        assert series.template.assigned_offset_days == (date(2026, 1, 31) - date(2026, 2, 5)).days
+
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[1].assigned_date == date(2026, 3, 5) + timedelta(days=-5)
+        assert tasks[2].assigned_date == date(2026, 4, 5) + timedelta(days=-5)
+
+    def test_the_anchor_change_is_refused_without_the_field(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        with pytest.raises(ValueError, match="hard_deadline"):
+            facade.update_series(created.series.uid, SeriesUpdate(anchor=RecurrenceAnchor.HARD_DEADLINE))
+
+    def test_the_template_change_rewrites_the_open_occurrences(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=3)
+        result = facade.update_series(created.series.uid, SeriesUpdate(title="Pay the rent"))
+
+        assert len(result.updated_task_uids) == 4
+        tasks = _by_index(facade, created.series.uid)
+        assert all(t.title == "Pay the rent" for t in tasks.values())
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.template.title == "Pay the rent"
+
+    def test_the_history_is_never_rewritten(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=3)
+        facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+        facade.update_series(created.series.uid, SeriesUpdate(title="Pay the rent"))
+
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[0].title == "Pay rent"
+        assert tasks[0].status == TaskStatus.COMPLETED
+        assert tasks[1].title == "Pay the rent"
+
+    def test_the_project_change_rewrites_the_open_occurrences(self) -> None:
+        from genesis.entities import ProjectCreate
+
+        facade = _facade()
+        project = facade.create_project(ProjectCreate(name="Rent"))
+        created = _create(facade, count=2)
+        facade.update_series(created.series.uid, SeriesUpdate(project_id=project.uid))
+
+        tasks = _by_index(facade, created.series.uid)
+        assert all(t.project_id == project.uid for t in tasks.values())
+
+    def test_a_cancelled_series_cannot_be_edited(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        facade.cancel_series(created.series.uid)
+        with pytest.raises(ValueError, match="cancelled"):
+            facade.update_series(created.series.uid, SeriesUpdate(title="Nope"))
+
+    def test_an_unknown_series_is_rejected(self) -> None:
+        facade = _facade()
+        with pytest.raises(ValueError, match="not found"):
+            facade.update_series("r-missing", SeriesUpdate(title="Nope"))
+
+    def test_the_horizon_change_grows_and_shrinks_the_window(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        grown = facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=4))
+        assert len(grown.created_task_uids) == 2
+        assert len(facade.list_series_tasks(created.series.uid)) == 5
+
+        shrunk = facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=1))
+        assert len(shrunk.canceled_task_uids) == 3
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[2].status == TaskStatus.CANCELED
+
+    def test_the_cancelled_indexes_are_not_resurrected(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4)
+        facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=1))
+        facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=3))
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[2].status == TaskStatus.CANCELED
+        assert tasks[3].status == TaskStatus.CANCELED
+        assert tasks[4].status == TaskStatus.CANCELED
+        assert tasks[5].status == TaskStatus.NEEDS_ACTION
+
+
+# -----------------------------------------------------------------------------
+# End date
+# -----------------------------------------------------------------------------
+
+
+class TestEndDate:
+    """The optional end date caps the window."""
+
+    def test_no_occurrence_is_materialized_past_the_end_date(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4, end_date=date(2026, 3, 31))
+        tasks = _by_index(facade, created.series.uid)
+        assert sorted(tasks) == [0, 1, 2]
+        assert tasks[2].assigned_date == date(2026, 3, 31)
+
+    def test_a_series_that_cannot_renew_finishes(self) -> None:
+        """The series finishes when its last occurrence is done."""
+        facade = _facade()
+        created = _create(facade, count=4, end_date=date(2026, 3, 31))
+        for task in list(facade.list_series_tasks(created.series.uid)):
+            facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.stop_reason == "finished"
+        assert series.active is False
+
+    def test_extending_the_end_date_reactivates_the_series(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4, end_date=date(2026, 3, 31))
+        for task in list(facade.list_series_tasks(created.series.uid)):
+            facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+
+        result = facade.update_series(created.series.uid, SeriesUpdate(end_date=date(2026, 5, 31)))
+
+        assert result.active is True
+        # The next occurrence becomes the new current one, and the
+        # window is filled again.
+        assert len(result.created_task_uids) == 2
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[3].assigned_date == date(2026, 4, 30)
+        assert tasks[4].assigned_date == date(2026, 5, 31)
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.end_date == date(2026, 5, 31)
+        assert series.stop_reason is None
+
+    def test_clearing_the_end_date_reactivates_the_series(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4, end_date=date(2026, 3, 31))
+        for task in list(facade.list_series_tasks(created.series.uid)):
+            facade.update_task(task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+
+        result = facade.update_series(created.series.uid, SeriesUpdate(clear_end_date=True))
+
+        assert result.active is True
+        assert result.end_date is None
+        # The next occurrence plus the tail of the window.
+        assert len(result.created_task_uids) == 5
+
+    def test_an_end_date_before_the_start_date_is_refused(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        with pytest.raises(ValueError, match="end date"):
+            facade.update_series(created.series.uid, SeriesUpdate(end_date=date(2025, 12, 31)))
+
+    def test_a_shortened_end_date_cancels_the_occurrences_after_it(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4)
+        result = facade.update_series(created.series.uid, SeriesUpdate(end_date=date(2026, 2, 28)))
+
+        assert len(result.canceled_task_uids) == 3
+        tasks = _by_index(facade, created.series.uid)
+        # The end date is inclusive: the occurrence of the 28th stays.
+        assert tasks[1].status == TaskStatus.NEEDS_ACTION
+        assert tasks[2].status == TaskStatus.CANCELED
+        assert tasks[3].status == TaskStatus.CANCELED
+        assert tasks[4].status == TaskStatus.CANCELED
+
+
+# -----------------------------------------------------------------------------
+# Deleting an occurrence
+# -----------------------------------------------------------------------------
+
+
+class TestDeleteOccurrence:
+    """A deleted occurrence does not come back."""
+
+    def test_a_deleted_future_occurrence_is_not_refilled(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4)
+        future = _by_index(facade, created.series.uid)[2]
+        facade.delete_task(future.uid)
+
+        tasks = _by_index(facade, created.series.uid)
+        assert 2 not in tasks
+        # The window is one smaller: the delete does not refill it.
+        state = facade.get_series_state(created.series.uid)
+        assert state is not None
+        assert len(state.future_occurrences) == 3
+
+    def test_the_deleted_index_is_not_reused(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4)
+        future = _by_index(facade, created.series.uid)[2]
+        facade.delete_task(future.uid)
+
+        # The natural renewal materializes the next index, never the
+        # deleted one.
+        facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+        tasks = _by_index(facade, created.series.uid)
+        assert 2 not in tasks
+        assert 5 in tasks
+
+    def test_deleting_the_current_occurrence_promotes_the_next(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4)
+        facade.delete_task(created.task.uid)
+
+        state = facade.get_series_state(created.series.uid)
+        assert state is not None
+        assert state.current_task_uid is not None
+        assert state.current_task_uid != created.task.uid
+        tasks = _by_index(facade, created.series.uid)
+        assert tasks[1].recurrence_index == 1
+
+    def test_the_series_keeps_running_after_a_delete(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4)
+        future = _by_index(facade, created.series.uid)[2]
+        facade.delete_task(future.uid)
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.active is True
+        assert series.stop_reason is None
 
 
 # -----------------------------------------------------------------------------
@@ -413,7 +723,7 @@ class TestHorizonResizing:
     def test_resizing_an_inactive_series_is_rejected(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
-        facade.cancel_future(created.task.uid)
+        facade.cancel_series(created.series.uid)
         with pytest.raises(ValueError, match="not active"):
             facade.resize_series(created.series.uid, 4)
 
@@ -437,13 +747,13 @@ class TestHorizonResizing:
 # -----------------------------------------------------------------------------
 
 
-class TestCancelFuture:
-    """Cancelling the future window."""
+class TestCancelSeries:
+    """Cancelling a series."""
 
-    def test_cancel_future_cancels_every_future(self) -> None:
+    def test_cancelling_cancels_every_future(self) -> None:
         facade = _facade()
         created = _create(facade, count=3)
-        result = facade.cancel_future(created.task.uid)
+        result = facade.cancel_series(created.series.uid)
 
         assert len(result.canceled_uids) == 3
         assert result.active is False
@@ -452,36 +762,91 @@ class TestCancelFuture:
         for index in (1, 2, 3):
             assert tasks[index].status == TaskStatus.CANCELED
 
-    def test_cancel_future_keeps_the_history(self) -> None:
+    def test_cancelling_keeps_the_history(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
         facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
-        facade.cancel_future(created.task.uid)
+        facade.cancel_series(created.series.uid)
         tasks = _by_index(facade, created.series.uid)
         assert tasks[0].status == TaskStatus.COMPLETED
         assert tasks[0].completed_at is not None
 
-    def test_cancel_future_is_idempotent(self) -> None:
+    def test_cancelling_is_idempotent(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
-        first = facade.cancel_future(created.task.uid)
-        second = facade.cancel_future(created.task.uid)
+        first = facade.cancel_series(created.series.uid)
+        second = facade.cancel_series(created.series.uid)
         assert len(first.canceled_uids) == 2
         assert second.canceled_uids == []
         assert second.active is False
 
-    def test_cancel_future_on_a_plain_task_is_rejected(self) -> None:
+    def test_cancelling_an_unknown_series_is_rejected(self) -> None:
         facade = _facade()
-        task = facade.create_task(TaskCreate(title="Plain"))
-        with pytest.raises(ValueError, match="recurrence series"):
-            facade.cancel_future(task.uid)
+        with pytest.raises(ValueError, match="not found"):
+            facade.cancel_series("r-missing")
 
-    def test_cancelled_series_does_not_renew(self) -> None:
+    def test_a_cancelled_series_does_not_renew(self) -> None:
         facade = _facade()
         created = _create(facade, count=2)
-        facade.cancel_future(created.task.uid)
+        facade.cancel_series(created.series.uid)
         facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
         assert sorted(_by_index(facade, created.series.uid)) == [0, 1, 2]
+
+    def test_a_cancelled_series_keeps_its_stop_reason(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        facade.cancel_series(created.series.uid)
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.stop_reason == "cancelled"
+        assert series.active is False
+
+
+# -----------------------------------------------------------------------------
+# Series summary
+# -----------------------------------------------------------------------------
+
+
+class TestSeriesSummary:
+    """The row model of the series table."""
+
+    def test_the_summary_reports_the_rule_and_the_next_occurrence(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=4)
+        summaries = facade.list_series_summaries()
+        assert len(summaries) == 1
+        summary = summaries[0]
+        assert summary.uid == created.series.uid
+        assert summary.title == "Pay rent"
+        assert summary.frequency == RecurrenceFrequency.MONTHLY
+        assert summary.interval == 1
+        assert summary.anchor == RecurrenceAnchor.ASSIGNED_DATE
+        assert summary.start_date == date(2026, 1, 31)
+        assert summary.end_date is None
+        assert summary.materialized_future_count == 4
+        assert summary.current_task_uid == created.task.uid
+        assert summary.current_occurrence_date == date(2026, 1, 31)
+        assert summary.next_occurrence_date == date(2026, 2, 28)
+        assert summary.open_occurrence_count == 5
+        assert summary.history_count == 0
+        assert summary.active is True
+        assert summary.stop_reason is None
+
+    def test_the_summary_counts_the_history(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+        summary = facade.list_series_summaries()[0]
+        assert summary.history_count == 1
+        assert summary.open_occurrence_count == 3
+
+    def test_the_summary_reports_a_cancelled_series(self) -> None:
+        facade = _facade()
+        created = _create(facade, count=2)
+        facade.cancel_series(created.series.uid)
+        summary = facade.list_series_summaries()[0]
+        assert summary.active is False
+        assert summary.stop_reason == "cancelled"
 
 
 # -----------------------------------------------------------------------------
@@ -538,14 +903,14 @@ class TestShadows:
         for task in facade.list_series_tasks(created.series.uid):
             assert task.uid in events
 
-    def test_cancelling_a_future_removes_its_shadow(self) -> None:
+    def test_cancelling_the_series_removes_the_future_shadows(self) -> None:
         facade = _facade()
         created = _create(
             facade,
             count=2,
             scheduled_start=datetime(2026, 1, 31, 9, 0, tzinfo=UTC),
         )
-        facade.cancel_future(created.task.uid)
+        facade.cancel_series(created.series.uid)
         events = {event.uid for event in facade.list_events()}
         assert created.task.uid in events
         assert len(events) == 1
@@ -561,10 +926,10 @@ class TestScheduledTime:
         July (CEST, UTC+2). The scheduled time stays 09:00 local, so
         the stored UTC instant moves by an hour.
         """
-        import time
+        import time as _time
 
         monkeypatch.setenv("TZ", "Europe/Berlin")
-        time.tzset()
+        _time.tzset()
         try:
             facade = _facade()
             created = _create(
@@ -590,7 +955,7 @@ class TestScheduledTime:
             assert july == datetime(2026, 7, 15, 8, 0, tzinfo=UTC)
         finally:
             monkeypatch.undo()
-            time.tzset()
+            _time.tzset()
 
 
 class TestSeriesListing:
@@ -746,104 +1111,6 @@ class TestUidCollision:
             facade.resize_series(created.series.uid, 3)
 
 
-class TestAnchorFieldChange:
-    """Changing the anchored field re-anchors the chain."""
-
-    def _series_with_deadline(self, facade: MockCalDAVFacade, count: int = 2):
-        """Create a series anchored on the assigned date with a deadline."""
-        return facade.create_recurrent_task(
-            TaskCreate(
-                title="Pay rent",
-                assigned_date=date(2026, 1, 31),
-                hard_deadline=datetime(2026, 2, 5, 12, 0, tzinfo=UTC),
-            ),
-            rule=_rule(RecurrenceFrequency.MONTHLY, 1, RecurrenceAnchor.ASSIGNED_DATE),
-            materialized_future_count=count,
-        )
-
-    def test_anchor_field_change_on_the_chain_anchor_reanchors(self) -> None:
-        """The offsets follow the new anchor field.
-
-        The selected occurrence sits at the chain anchor, so the
-        re-anchor does not move the chain index. The template offsets
-        must still be recomputed: they are relative to the anchored
-        field, and the anchored field changed.
-        """
-        from genesis.entities import RecurrenceRuleUpdate
-
-        facade = _facade()
-        created = self._series_with_deadline(facade, count=2)
-        tasks = _by_index(facade, created.series.uid)
-        selected = tasks[0]
-        assert selected.recurrence_index == 0
-
-        facade.update_task_scoped(
-            selected.uid,
-            TaskUpdate(title="Pay rent"),
-            scope="all-future",
-            rule_change=RecurrenceRuleUpdate(anchor=RecurrenceAnchor.HARD_DEADLINE),
-        )
-
-        series = facade.get_series(created.series.uid)
-        assert series is not None
-        assert series.rule.anchor == RecurrenceAnchor.HARD_DEADLINE
-        # The chain is re-anchored on the deadline of the selected
-        # occurrence, which is 2026-02-05.
-        assert series.start_date == date(2026, 2, 5)
-        assert series.start_index == 0
-        # The offsets are now relative to the deadline.
-        assert series.template.deadline_offset_days == 0
-        assert series.template.assigned_offset_days == (date(2026, 1, 31) - date(2026, 2, 5)).days
-        assert series.template.deadline_local_time is not None
-
-    def test_anchor_field_change_keeps_the_future_occurrences_consistent(self) -> None:
-        """The affected futures are rebuilt against the new anchor."""
-        from genesis.entities import RecurrenceRuleUpdate
-
-        facade = _facade()
-        created = self._series_with_deadline(facade, count=2)
-        tasks = _by_index(facade, created.series.uid)
-        selected = tasks[0]
-
-        facade.update_task_scoped(
-            selected.uid,
-            TaskUpdate(title="Pay rent"),
-            scope="all-future",
-            rule_change=RecurrenceRuleUpdate(anchor=RecurrenceAnchor.HARD_DEADLINE),
-        )
-
-        tasks = _by_index(facade, created.series.uid)
-        # The chain is anchored on 2026-02-05: the future occurrences
-        # are one and two months later, and their assigned dates keep
-        # the offset to the anchor (-5 days).
-        assert tasks[1].assigned_date == date(2026, 3, 5) + timedelta(days=-5)
-        assert tasks[1].hard_deadline is not None
-        assert tasks[1].hard_deadline.date() == date(2026, 3, 5)
-        assert tasks[2].assigned_date == date(2026, 4, 5) + timedelta(days=-5)
-
-    def test_anchor_field_change_from_a_later_occurrence_reanchors(self) -> None:
-        """The same change from a later occurrence re-anchors there."""
-        from genesis.entities import RecurrenceRuleUpdate
-
-        facade = _facade()
-        created = self._series_with_deadline(facade, count=3)
-        tasks = _by_index(facade, created.series.uid)
-        later = tasks[2]
-
-        facade.update_task_scoped(
-            later.uid,
-            TaskUpdate(title="Pay rent"),
-            scope="all-future",
-            rule_change=RecurrenceRuleUpdate(anchor=RecurrenceAnchor.HARD_DEADLINE),
-        )
-
-        series = facade.get_series(created.series.uid)
-        assert series is not None
-        assert series.rule.anchor == RecurrenceAnchor.HARD_DEADLINE
-        assert series.start_index == 2
-        assert series.template.deadline_offset_days == 0
-
-
 class TestLocalTimeAfterEdit:
     """The local clock time of a touched datetime field follows the edit."""
 
@@ -860,95 +1127,25 @@ class TestLocalTimeAfterEdit:
             materialized_future_count=count,
         )
 
-    def test_changing_the_anchored_scheduled_start_moves_the_local_time(self) -> None:
-        """An edit of the anchored datetime field refreshes its time.
-
-        The template keeps the local wall-clock time of the anchored
-        field. Moving the scheduled start from 12:00 to 18:00 must
-        move the future occurrences with it.
-        """
+    def test_the_local_time_of_the_series_template_is_kept(self) -> None:
+        """The template keeps the local wall-clock time of the series."""
         facade = _facade()
         created = self._scheduled_series(facade, hour=12, count=2)
         series = facade.get_series(created.series.uid)
         assert series is not None
         assert series.template.scheduled_local_time == time(12, 0)
 
-        facade.update_task_scoped(
-            created.task.uid,
-            TaskUpdate(scheduled_start=datetime(2026, 1, 15, 18, 0, tzinfo=UTC)),
-            scope="all-future",
-        )
+    def test_a_re_anchor_moves_the_local_time(self) -> None:
+        """Re-anchoring on another field recomputes the local times."""
+        facade = _facade()
+        created = self._scheduled_series(facade, hour=12, count=2)
+        facade.update_series(created.series.uid, SeriesUpdate(anchor=RecurrenceAnchor.ASSIGNED_DATE))
 
         series = facade.get_series(created.series.uid)
         assert series is not None
-        assert series.template.scheduled_local_time == time(18, 0)
-
+        assert series.template.scheduled_local_time == time(12, 0)
         tasks = _by_index(facade, created.series.uid)
         for index in (1, 2):
             start = tasks[index].scheduled_start
             assert start is not None
-            assert start.astimezone().timetz().replace(tzinfo=None) == time(18, 0)
-
-    def test_changing_the_anchored_hard_deadline_moves_the_local_time(self) -> None:
-        """The same holds for a hard-deadline anchored series."""
-        facade = _facade()
-        created = facade.create_recurrent_task(
-            TaskCreate(
-                title="Pay rent",
-                assigned_date=date(2026, 1, 15),
-                hard_deadline=datetime(2026, 1, 15, 12, 0, tzinfo=UTC),
-            ),
-            rule=_rule(RecurrenceFrequency.MONTHLY, 1, RecurrenceAnchor.HARD_DEADLINE),
-            materialized_future_count=2,
-        )
-        series = facade.get_series(created.series.uid)
-        assert series is not None
-        assert series.template.deadline_local_time == time(12, 0)
-
-        facade.update_task_scoped(
-            created.task.uid,
-            TaskUpdate(hard_deadline=datetime(2026, 1, 15, 18, 0, tzinfo=UTC)),
-            scope="all-future",
-        )
-
-        series = facade.get_series(created.series.uid)
-        assert series is not None
-        assert series.template.deadline_local_time == time(18, 0)
-
-        tasks = _by_index(facade, created.series.uid)
-        for index in (1, 2):
-            deadline = tasks[index].hard_deadline
-            assert deadline is not None
-            assert deadline.astimezone().timetz().replace(tzinfo=None) == time(18, 0)
-
-    def test_clearing_a_datetime_field_clears_its_local_time(self) -> None:
-        """A cleared field drops its local time from the template."""
-        facade = _facade()
-        created = facade.create_recurrent_task(
-            TaskCreate(
-                title="Pay rent",
-                assigned_date=date(2026, 1, 15),
-                scheduled_start=datetime(2026, 1, 15, 12, 0, tzinfo=UTC),
-                scheduled_duration=30,
-            ),
-            rule=_rule(RecurrenceFrequency.MONTHLY, 1, RecurrenceAnchor.ASSIGNED_DATE),
-            materialized_future_count=2,
-        )
-        series = facade.get_series(created.series.uid)
-        assert series is not None
-        assert series.template.scheduled_local_time == time(12, 0)
-
-        facade.update_task_scoped(
-            created.task.uid,
-            TaskUpdate(clear_scheduled_start=True),
-            scope="all-future",
-        )
-
-        series = facade.get_series(created.series.uid)
-        assert series is not None
-        assert series.template.scheduled_local_time is None
-        assert series.template.scheduled_offset_days is None
-
-        tasks = _by_index(facade, created.series.uid)
-        for index in (1, 2):
-            assert tasks[index].scheduled_start is None
+            assert start.astimezone().timetz().replace(tzinfo=None) == time(12, 0)

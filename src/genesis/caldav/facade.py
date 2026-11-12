@@ -152,6 +152,20 @@ class CalDAVFacade:
         )
 
     def update_task(self, uid: str, data):
+        # The series owns the schedule of its occurrences. A write
+        # that changes one of the series-owned fields of an occurrence
+        # is refused here, before anything is written (ADR-033).
+        existing = self.get_task(uid)
+        if existing is not None:
+            changed = recurrence.series_owned_changes(existing, data)
+            if changed:
+                series_uid = existing.recurrence_series_uid
+                verb = "is" if len(changed) == 1 else "are"
+                raise ValueError(
+                    f"task {uid} is an occurrence of recurrence series {series_uid}; "
+                    f"its {', '.join(changed)} {verb} owned by the series. "
+                    f"Edit the series with PATCH /productivity/recurrences/{series_uid} instead.",
+                )
         task = tasks.update_task(self, uid, data)
         self._reconcile_series_of(task)
         return task
@@ -160,9 +174,14 @@ class CalDAVFacade:
         existing = self.get_task(uid)
         deleted = tasks.delete_task(self, uid)
         if deleted and existing is not None and existing.recurrence_series_uid:
-            # A deleted current occurrence is a skipped occurrence: the
-            # next open occurrence is promoted and the window restored.
-            recurrence.reconcile_series(self._recurrence_store(), existing.recurrence_series_uid)
+            # A deleted occurrence is skipped for good: the next open
+            # occurrence is promoted, but the window is not refilled by
+            # the delete (ADR-033).
+            recurrence.reconcile_series(
+                self._recurrence_store(),
+                existing.recurrence_series_uid,
+                refill=False,
+            )
         return deleted
 
     # -------------------------------------------------------------------------
@@ -184,32 +203,31 @@ class CalDAVFacade:
             return
         recurrence.reconcile_series(self._recurrence_store(), task.recurrence_series_uid)
 
-    def create_recurrent_task(self, data, *, rule, materialized_future_count: int):
+    def create_recurrent_task(self, data, *, rule, materialized_future_count: int, end_date=None):
         """Create a recurrent task with its series and future occurrences."""
         return recurrence.create_recurrent_task(
             self._recurrence_store(),
             data,
             rule=rule,
             materialized_future_count=materialized_future_count,
+            end_date=end_date,
         )
 
-    def update_task_scoped(self, uid: str, data, *, scope: str = recurrence.SCOPE_CURRENT, rule_change=None):
-        """Update a task with an explicit edit scope."""
-        return recurrence.update_task_scoped(
-            self._recurrence_store(),
-            uid,
-            data,
-            scope=scope,
-            rule_change=rule_change,
-        )
+    def update_series(self, series_uid: str, changes):
+        """Apply a series edit and re-derive the open occurrences."""
+        return recurrence.update_series(self._recurrence_store(), series_uid, changes)
 
-    def cancel_future(self, uid: str):
-        """Cancel the future occurrences of the task's series."""
-        return recurrence.cancel_future(self._recurrence_store(), uid)
+    def cancel_series(self, series_uid: str):
+        """Cancel the future window of a series and stop its renewal."""
+        return recurrence.cancel_series(self._recurrence_store(), series_uid)
 
     def resize_series(self, series_uid: str, materialized_future_count: int):
         """Change the materialized horizon of a running series."""
         return recurrence.resize_series(self._recurrence_store(), series_uid, materialized_future_count)
+
+    def list_series_summaries(self):
+        """Return the summary row of every recurrence series."""
+        return recurrence.series_summaries(self._recurrence_store())
 
     def get_series(self, series_uid: str):
         """Return one recurrence series, or None."""

@@ -340,6 +340,7 @@ class Facade:
         interval: int = 1,
         anchor: str,
         materialized_future_count: int | None = None,
+        end_date=None,
     ):
         """Create a recurrent task and its series (ADR-033).
 
@@ -349,6 +350,9 @@ class Facade:
         (``configs.recurrence.default_materialized_future_count``) is
         used. The resolved value is persisted on the series, so a later
         change of the global default does not resize this series.
+
+        ``end_date`` is optional: it is the last date an occurrence of
+        the series may start on. The series stops renewing after it.
         """
         from ..entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
 
@@ -364,7 +368,25 @@ class Facade:
             data,
             rule=rule,
             materialized_future_count=count,
+            end_date=end_date,
         )
+
+    def update_series(self, series_uid: str, changes):
+        """Apply a series edit (ADR-033).
+
+        The series edit is the only way to change the schedule of a
+        recurrent task: it re-derives the open occurrences of the
+        series and never touches the completed history.
+        """
+        return self.caldav.update_series(series_uid, changes)
+
+    def cancel_series(self, series_uid: str):
+        """Cancel a series: the future window stops renewing."""
+        return self.caldav.cancel_series(series_uid)
+
+    def list_series_summaries(self):
+        """Return the summary row of every recurrence series."""
+        return self.caldav.list_series_summaries()
 
     def complete_task(self, uid: str):
         """Mark a task COMPLETED and fire the XP event.

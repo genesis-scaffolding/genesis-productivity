@@ -235,6 +235,19 @@ class MockCalDAVFacade:
         if not task:
             return None
 
+        # The series owns the schedule of its occurrences (ADR-033):
+        # a write that changes a series-owned field of an occurrence
+        # is refused before anything is written.
+        changed = recurrence.series_owned_changes(task, data)
+        if changed:
+            series_uid = task.recurrence_series_uid
+            verb = "is" if len(changed) == 1 else "are"
+            raise ValueError(
+                f"task {uid} is an occurrence of recurrence series {series_uid}; "
+                f"its {', '.join(changed)} {verb} owned by the series. "
+                f"Edit the series with PATCH /productivity/recurrences/{series_uid} instead.",
+            )
+
         update_data = data.model_dump(exclude_unset=True)
         clear_scheduled = update_data.pop("clear_scheduled_start", False)
         clear_project = update_data.pop("clear_project_id", False)
@@ -267,7 +280,13 @@ class MockCalDAVFacade:
         # Remove shadow event if present
         self._events.pop(uid, None)
         if task.recurrence_series_uid:
-            recurrence.reconcile_series(self._recurrence_store(), task.recurrence_series_uid)
+            # A deleted occurrence is skipped for good: the window is
+            # not refilled by the delete (ADR-033).
+            recurrence.reconcile_series(
+                self._recurrence_store(),
+                task.recurrence_series_uid,
+                refill=False,
+            )
         return True
 
     # -------------------------------------------------------------------------
@@ -278,32 +297,31 @@ class MockCalDAVFacade:
         """Return the in-memory recurrence store."""
         return _MockRecurrenceStore(self)
 
-    def create_recurrent_task(self, data: TaskCreate, *, rule, materialized_future_count: int):
+    def create_recurrent_task(self, data: TaskCreate, *, rule, materialized_future_count: int, end_date=None):
         """Create a recurrent task with its series and future occurrences."""
         return recurrence.create_recurrent_task(
             self._recurrence_store(),
             data,
             rule=rule,
             materialized_future_count=materialized_future_count,
+            end_date=end_date,
         )
 
-    def update_task_scoped(self, uid: str, data: TaskUpdate, *, scope: str = "current", rule_change=None):
-        """Update a task with an explicit edit scope."""
-        return recurrence.update_task_scoped(
-            self._recurrence_store(),
-            uid,
-            data,
-            scope=scope,
-            rule_change=rule_change,
-        )
+    def update_series(self, series_uid: str, changes):
+        """Apply a series edit and re-derive the open occurrences."""
+        return recurrence.update_series(self._recurrence_store(), series_uid, changes)
 
-    def cancel_future(self, uid: str):
-        """Cancel the future occurrences of the task's series."""
-        return recurrence.cancel_future(self._recurrence_store(), uid)
+    def cancel_series(self, series_uid: str):
+        """Cancel the future window of a series and stop its renewal."""
+        return recurrence.cancel_series(self._recurrence_store(), series_uid)
 
     def resize_series(self, series_uid: str, materialized_future_count: int):
         """Change the materialized horizon of a running series."""
         return recurrence.resize_series(self._recurrence_store(), series_uid, materialized_future_count)
+
+    def list_series_summaries(self):
+        """Return the summary row of every recurrence series."""
+        return recurrence.series_summaries(self._recurrence_store())
 
     def get_series(self, series_uid: str) -> RecurrenceSeries | None:
         """Return one recurrence series, or None."""

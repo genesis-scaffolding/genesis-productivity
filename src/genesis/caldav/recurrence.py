@@ -1,10 +1,10 @@
-"""Recurrent task series: rule arithmetic, materialization, scoped edits (ADR-033).
+"""Recurrent task series: rule arithmetic, materialization, series edits (ADR-033).
 
 A recurrent task is a series of ordinary task records. This module
 holds the *engine*: the pure logic that decides which occurrences
-exist, which of them an edit touches, and what a horizon change does.
-The engine talks to a :class:`RecurrenceStore`, so the same code drives
-the real CalDAV backend and the in-memory test backend.
+exist, what a series owns, and what a horizon change does. The engine
+talks to a :class:`RecurrenceStore`, so the same code drives the real
+CalDAV backend and the in-memory test backend.
 
 Vocabulary used throughout:
 
@@ -16,6 +16,12 @@ Vocabulary used throughout:
 - *history*: completed or cancelled occurrences. They keep their own
   UID and ``completed_at`` and are never edited or removed by the
   recurrence operations.
+
+Ownership rule (ADR-033, round 3): the series owns the *schedule* of
+its occurrences (the three dates, the appointment duration, and the
+project assignment); an occurrence owns its own content and its own
+lifecycle. There is no edit scope: an occurrence edit touches one
+occurrence, and the series edit is the only way to change a schedule.
 """
 
 from __future__ import annotations
@@ -27,21 +33,26 @@ from typing import Any
 from ..entities import (
     MAX_MATERIALIZED_FUTURE_COUNT,
     MIN_MATERIALIZED_FUTURE_COUNT,
-    CancelFutureResult,
+    SERIES_OWNED_FIELDS,
+    STOP_REASON_CANCELLED,
+    STOP_REASON_FINISHED,
+    CancelSeriesResult,
     RecurrenceAnchor,
     RecurrenceCreateResult,
     RecurrenceRule,
-    RecurrenceRuleUpdate,
     RecurrenceSeries,
     RecurrenceTemplate,
-    ScopedTaskUpdateResult,
     SeriesFutureOccurrence,
     SeriesResizeResult,
     SeriesState,
+    SeriesSummary,
+    SeriesUpdate,
+    SeriesUpdateResult,
     Task,
     TaskCreate,
     TaskStatus,
     TaskUpdate,
+    occurrence_role,
 )
 from ..entities import occurrence_date as _occurrence_date
 from ..tz import to_local, to_utc_walltime
@@ -55,24 +66,9 @@ from .ical import (
     task_from_ical,
     task_to_ical,
 )
-from .tasks import apply_task_update, delete_shadow, populate_task, reconcile_shadow
-
-SCOPE_CURRENT = "current"
-"""Edit scope: only the occurrence named in the request path."""
-
-SCOPE_ALL_FUTURE = "all-future"
-"""Edit scope: every open occurrence after the selected one, plus the template."""
+from .tasks import delete_shadow, populate_task, reconcile_shadow
 
 _TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.CANCELED)
-
-_CONTENT_FIELDS = (
-    "title",
-    "description",
-    "priority",
-    "project_id",
-    "clear_project_id",
-    "scheduled_duration",
-)
 
 _DATE_FIELDS = ("assigned_date", "hard_deadline", "scheduled_start")
 
@@ -85,6 +81,12 @@ _DATE_FIELD_OFFSETS = {
 _DATE_FIELD_LOCAL_TIME = {
     "hard_deadline": "deadline_local_time",
     "scheduled_start": "scheduled_local_time",
+}
+
+_CLEAR_FLAGS = {
+    "assigned_date": "clear_assigned_date",
+    "scheduled_start": "clear_scheduled_start",
+    "project_id": "clear_project_id",
 }
 
 
@@ -318,6 +320,38 @@ def resolve_series_occurrences(
     return current, futures, history
 
 
+def occurrence_roles(series: RecurrenceSeries, tasks: list[Task]) -> dict[str, str]:
+    """Map every occurrence UID of a series to its role."""
+    return {task.uid: occurrence_role(series, task) for task in tasks}
+
+
+def series_owned_changes(task: Task, data: TaskUpdate) -> list[str]:
+    """Return the series-owned fields whose effective value changes.
+
+    The comparison uses the *effective* new value (after the
+    ``clear_*`` flags are applied), so a client that sends a full
+    object unchanged is not reported as changing anything. An ordinary
+    task owns all of its fields: the result is empty for it. The
+    caller decides what to do with the result; the engine raises the
+    refusal.
+    """
+    if task.recurrence_series_uid is None:
+        return []
+    dump = data.model_dump(exclude_unset=True)
+    changed: list[str] = []
+    for field in SERIES_OWNED_FIELDS:
+        clear_flag = _CLEAR_FLAGS.get(field)
+        if clear_flag is not None and dump.get(clear_flag, False):
+            new_value: Any = None
+        elif field in dump:
+            new_value = dump[field]
+        else:
+            continue
+        if new_value != getattr(task, field):
+            changed.append(field)
+    return changed
+
+
 # -----------------------------------------------------------------------------
 # Engine
 # -----------------------------------------------------------------------------
@@ -336,7 +370,8 @@ def _materialize(
     Existing logical occurrences are never rewritten: the missing
     indexes are derived from ``highest_materialized_index`` and each
     one is written with a deterministic UID. A retry after a partial
-    write therefore resumes at the first missing index.
+    write therefore resumes at the first missing index. The end date
+    caps the window: no occurrence is materialized past it.
     """
     current, futures, _history = resolve_series_occurrences(series, tasks)
     if current is None:
@@ -348,11 +383,13 @@ def _materialize(
         index = series.highest_materialized_index + 1
         while index in existing_indexes:
             index += 1
+        base = occurrence_date(series.start_date, series.rule, index - series.start_index)
+        if series.end_date is not None and base > series.end_date:
+            # The end date caps the window.
+            break
         uid = recurrence_occurrence_uid(series.uid, index)
         clash = store.get_task(uid)
-        if clash is not None and (
-            clash.recurrence_series_uid != series.uid or clash.recurrence_index != index
-        ):
+        if clash is not None and (clash.recurrence_series_uid != series.uid or clash.recurrence_index != index):
             # The deterministic UID of this logical occurrence is
             # already used by a different task. Overwriting it would
             # destroy an unrelated record.
@@ -365,15 +402,41 @@ def _materialize(
     return created
 
 
-def reconcile_series(store: RecurrenceStore, series_uid: str) -> None:
+def _next_occurrence_date(series: RecurrenceSeries) -> date:
+    """Return the date of the occurrence after the last materialized one."""
+    return occurrence_date(
+        series.start_date,
+        series.rule,
+        series.highest_materialized_index + 1 - series.start_index,
+    )
+
+
+def _allows_another_occurrence(series: RecurrenceSeries) -> bool:
+    """Return True when the series may still materialize an occurrence.
+
+    The end date caps the window: a series whose next occurrence
+    would fall after it cannot renew any more.
+    """
+    if series.end_date is None:
+        return True
+    return _next_occurrence_date(series) <= series.end_date
+
+
+def reconcile_series(store: RecurrenceStore, series_uid: str, *, refill: bool = True) -> None:
     """Restore the series window after an occurrence changed state.
 
     Promotes the next open occurrence when the current one became
     terminal, then materializes enough tail occurrences to restore the
     configured number of open futures.
+
+    ``refill=False`` is the delete path: a deleted occurrence is
+    skipped for good, so the window is not refilled by the delete. The
+    horizon stays one smaller until the current occurrence completes
+    and the natural renewal restores it.
     """
     series = store.get_series(series_uid)
     if series is None or not series.active:
+        # A cancelled or deactivated series does not renew.
         return
     tasks = store.list_series_tasks(series_uid)
     current, _futures, _history = resolve_series_occurrences(series, tasks)
@@ -382,6 +445,7 @@ def reconcile_series(store: RecurrenceStore, series_uid: str) -> None:
         # Every materialized occurrence is terminal: the series has
         # nothing left to renew.
         series.active = False
+        series.stop_reason = STOP_REASON_FINISHED
         series.modified = now
         store.save_series(series)
         return
@@ -389,8 +453,11 @@ def reconcile_series(store: RecurrenceStore, series_uid: str) -> None:
     if current.recurrence_index is not None and current.recurrence_index != series.current_index:
         series.current_index = current.recurrence_index
         changed = True
-    created = _materialize(store, series, tasks, target_count=series.materialized_future_count, now=now)
-    if created or changed:
+    if refill and series.stop_reason != STOP_REASON_FINISHED:
+        created = _materialize(store, series, tasks, target_count=series.materialized_future_count, now=now)
+        if created:
+            changed = True
+    if changed:
         series.modified = now
         store.save_series(series)
 
@@ -401,12 +468,14 @@ def create_recurrent_task(
     *,
     rule: RecurrenceRule,
     materialized_future_count: int,
+    end_date: date | None = None,
 ) -> RecurrenceCreateResult:
     """Create a recurrent task: the series, the current occurrence, and N futures.
 
     Raises:
-        ValueError: When the horizon is out of range or the anchor
-            field is missing from the task.
+        ValueError: When the horizon is out of range, the anchor
+            field is missing from the task, or the end date is before
+            the start date.
     """
     if not (MIN_MATERIALIZED_FUTURE_COUNT <= materialized_future_count <= MAX_MATERIALIZED_FUTURE_COUNT):
         raise ValueError(
@@ -415,6 +484,8 @@ def create_recurrent_task(
         )
     now = now_utc()
     anchor_date = anchor_value_date(data, rule.anchor)
+    if end_date is not None and end_date < anchor_date:
+        raise ValueError("the end date must not be before the start date of the series")
     template = build_template(data, rule.anchor)
     series = RecurrenceSeries(
         uid=new_uid("r"),
@@ -425,6 +496,7 @@ def create_recurrent_task(
         materialized_future_count=materialized_future_count,
         highest_materialized_index=0,
         current_index=0,
+        end_date=end_date,
         active=True,
         created=now,
         modified=now,
@@ -438,10 +510,14 @@ def create_recurrent_task(
         store.put_task(current)
         created_uids.append(current.uid)
         for index in range(1, materialized_future_count + 1):
+            base = occurrence_date(series.start_date, series.rule, index)
+            if end_date is not None and base > end_date:
+                # The end date caps the window.
+                break
             task = build_occurrence(series, index, now)
             store.put_task(task)
             created_uids.append(task.uid)
-        series.highest_materialized_index = materialized_future_count
+            series.highest_materialized_index = index
         series.modified = now
         store.save_series(series)
     except Exception:
@@ -467,34 +543,6 @@ def create_recurrent_task(
     )
 
 
-def _content_only_update(data: TaskUpdate) -> TaskUpdate:
-    """Return the content part of an update (no dates, no status)."""
-    dump = data.model_dump(exclude_unset=True)
-    fields = {key: dump[key] for key in _CONTENT_FIELDS if key in dump}
-    return TaskUpdate(**fields)
-
-
-def _touched_date_fields(data: TaskUpdate) -> dict[str, str]:
-    """Map every date field the update touches to ``set`` or ``clear``.
-
-    A field the update does not mention is absent from the result: its
-    template offset and the dates of the materialized occurrences stay
-    as they are.
-    """
-    dump = data.model_dump(exclude_unset=True)
-    actions: dict[str, str] = {}
-    for field, clear_flag in (
-        ("assigned_date", "clear_assigned_date"),
-        ("hard_deadline", None),
-        ("scheduled_start", "clear_scheduled_start"),
-    ):
-        if field in dump:
-            actions[field] = "clear" if dump[field] is None else "set"
-        elif clear_flag is not None and dump.get(clear_flag, False):
-            actions[field] = "clear"
-    return actions
-
-
 def _field_date(task: Task, field: str) -> date | None:
     """Return the local calendar date of one of the task's date fields."""
     if field == "assigned_date":
@@ -504,8 +552,17 @@ def _field_date(task: Task, field: str) -> date | None:
     return _local_date(task.scheduled_start)
 
 
+def _local_time_for(field: str, task: Task) -> time | None:
+    """Return the local wall-clock time of one of the datetime fields."""
+    if field == "hard_deadline":
+        return to_local(task.hard_deadline).time() if task.hard_deadline is not None else None
+    if field == "scheduled_start":
+        return to_local(task.scheduled_start).time() if task.scheduled_start is not None else None
+    return None
+
+
 def _rebuild_dates(task: Task, series: RecurrenceSeries, index: int) -> None:
-    """Recompute a future occurrence's dates from the series template."""
+    """Recompute an open occurrence's dates from the series template."""
     template = series.template
     base = occurrence_date(series.start_date, series.rule, index - series.start_index)
     if template.assigned_offset_days is not None:
@@ -527,220 +584,252 @@ def _rebuild_dates(task: Task, series: RecurrenceSeries, index: int) -> None:
     task.recurrence_occurrence = base
 
 
-def update_task_scoped(
-    store: RecurrenceStore,
-    uid: str,
-    data: TaskUpdate,
-    *,
-    scope: str = SCOPE_CURRENT,
-    rule_change: RecurrenceRuleUpdate | None = None,
-) -> ScopedTaskUpdateResult:
-    """Update a task with an explicit edit scope.
+def _reanchor_offsets(template: RecurrenceTemplate, current: Task, new_start_date: date) -> None:
+    """Recompute every date offset of the template from the current occurrence.
 
-    ``current`` touches only the selected occurrence. ``all-future``
-    touches every open occurrence after the selected one and updates
-    the series template so later occurrences inherit the change.
+    A re-anchor changes the field the offsets are relative to, so all
+    of them are recomputed from the occurrence the chain is anchored
+    on. The local wall-clock times follow.
+    """
+    for field in _DATE_FIELDS:
+        value = _field_date(current, field)
+        setattr(
+            template,
+            _DATE_FIELD_OFFSETS[field],
+            None if value is None else (value - new_start_date).days,
+        )
+        local_time_attr = _DATE_FIELD_LOCAL_TIME.get(field)
+        if local_time_attr is not None:
+            setattr(template, local_time_attr, _local_time_for(field, current))
+
+
+def update_series(store: RecurrenceStore, series_uid: str, changes: SeriesUpdate) -> SeriesUpdateResult:
+    """Apply a series edit and re-derive the open occurrences.
+
+    The series edit is the only way to change the schedule of a
+    recurrent task. It rewrites the open occurrences (the current one
+    and the materialized futures) and never touches a terminal
+    occurrence: completed history is immutable.
 
     Raises:
-        ValueError: When the scope is unknown, the task is not part of
-            a series (for ``all-future``), or the request tries to
-            change the status in future scope.
+        ValueError: When the series is unknown, the series is
+            cancelled, the anchor cannot be re-anchored, or the end
+            date is before the start date.
     """
-    task = store.get_task(uid)
-    if task is None:
-        raise ValueError(f"task {uid} not found")
-    if scope not in (SCOPE_CURRENT, SCOPE_ALL_FUTURE):
-        raise ValueError(f"unknown edit scope: {scope}")
-
-    if scope == SCOPE_CURRENT:
-        updated = apply_task_update(task.model_copy(deep=True), data)
-        store.put_task(updated)
-        if updated.recurrence_series_uid is not None:
-            reconcile_series(store, updated.recurrence_series_uid)
-        return ScopedTaskUpdateResult(task=updated, scope=scope, affected_uids=[updated.uid])
-
-    if task.recurrence_series_uid is None:
-        raise ValueError("task is not part of a recurrence series")
-    if data.status is not None:
-        raise ValueError("status changes are per-occurrence and cannot use the all-future scope")
-    series = store.get_series(task.recurrence_series_uid)
+    series = store.get_series(series_uid)
     if series is None:
         raise ValueError("recurrence series not found")
+    if series.stop_reason == STOP_REASON_CANCELLED:
+        raise ValueError("recurrence series is cancelled and cannot be changed")
 
-    selected_after = apply_task_update(task.model_copy(deep=True), data)
-    dump = data.model_dump(exclude_unset=True)
-    actions = _touched_date_fields(data)
-    tasks = store.list_series_tasks(series.uid)
-    selected_index = _index_of(task)
-    affected = [t for t in tasks if not is_terminal(t) and _index_of(t) > selected_index]
-    affected.sort(key=lambda t: (_index_of(t), t.uid))
+    dump = changes.model_dump(exclude_unset=True)
+    now = now_utc()
+    tasks = store.list_series_tasks(series_uid)
+    current, futures, _history = resolve_series_occurrences(series, tasks)
 
+    # -- the rule ------------------------------------------------------------
     new_rule = series.rule.model_copy()
-    if rule_change is not None:
-        if rule_change.frequency is not None:
-            new_rule.frequency = rule_change.frequency
-        if rule_change.interval is not None:
-            new_rule.interval = rule_change.interval
-        if rule_change.anchor is not None:
-            new_rule.anchor = rule_change.anchor
+    if dump.get("frequency") is not None:
+        new_rule.frequency = dump["frequency"]
+    if dump.get("interval") is not None:
+        new_rule.interval = dump["interval"]
+    anchor_changed = False
+    if dump.get("anchor") is not None and dump["anchor"] != series.rule.anchor:
+        new_rule.anchor = dump["anchor"]
+        anchor_changed = True
 
-    new_start_date, new_start_index = _reanchor(series, task, selected_after, new_rule, actions)
+    # -- the dates -----------------------------------------------------------
+    new_start_date = series.start_date
+    if dump.get("start_date") is not None:
+        new_start_date = dump["start_date"]
 
-    # A re-anchor happens when the chain moves to another occurrence
-    # (the selected one is not the chain anchor) or when the anchored
-    # FIELD changed. The second case matters even when the selected
-    # occurrence sits at the chain anchor: the template offsets are
-    # relative to the anchored field, so they must be recomputed from
-    # the new anchor instead of staying relative to the old one.
-    anchor_field_changed = new_rule.anchor.value != series.rule.anchor.value
-    reanchored = anchor_field_changed or new_start_index != series.start_index
+    new_end_date = series.end_date
+    if dump.get("clear_end_date"):
+        new_end_date = None
+    elif "end_date" in dump:
+        new_end_date = dump["end_date"]
 
+    # -- the content template ------------------------------------------------
     template = series.template.model_copy(deep=True)
+    content_changed = False
     if "title" in dump:
-        template.title = selected_after.title
+        if not (dump["title"] or "").strip():
+            raise ValueError("the series title must not be empty")
+        template.title = dump["title"]
+        content_changed = True
     if "description" in dump:
-        template.description = selected_after.description
+        template.description = dump["description"]
+        content_changed = True
+    if "project_id" in dump:
+        template.project_id = dump["project_id"]
+        content_changed = True
     if "priority" in dump:
-        template.priority = selected_after.priority
-    if "project_id" in dump or "clear_project_id" in dump:
-        template.project_id = selected_after.project_id
+        template.priority = dump["priority"]
+        content_changed = True
     if "scheduled_duration" in dump:
-        template.scheduled_duration = selected_after.scheduled_duration
-    _apply_date_offsets(
-        template,
-        series=series,
-        selected=task,
-        selected_after=selected_after,
-        actions=actions,
-        new_start_date=new_start_date,
-        new_anchor=new_rule.anchor.value,
-        reanchored=reanchored,
-    )
+        template.scheduled_duration = dump["scheduled_duration"]
+        content_changed = True
+
+    # -- the horizon ---------------------------------------------------------
+    old_horizon = series.materialized_future_count
+    new_horizon = old_horizon
+    if dump.get("materialized_future_count") is not None:
+        new_horizon = dump["materialized_future_count"]
+
+    # -- the re-anchor -------------------------------------------------------
+    if anchor_changed:
+        if current is None:
+            raise ValueError("cannot re-anchor: the series has no current occurrence")
+        base = _field_date(current, new_rule.anchor.value)
+        if base is None:
+            raise ValueError(
+                f"cannot re-anchor on '{new_rule.anchor.value}': the current occurrence has no such date",
+            )
+        new_start_date = base
+        _reanchor_offsets(template, current, new_start_date)
+
+    if new_end_date is not None and new_end_date < new_start_date:
+        raise ValueError("the end date must not be before the start date")
 
     series.rule = new_rule
     series.start_date = new_start_date
-    series.start_index = new_start_index
     series.template = template
+    series.end_date = new_end_date
+    series.materialized_future_count = new_horizon
 
-    content_update = _content_only_update(data)
-    now = now_utc()
-    affected_uids: list[str] = []
-    for occurrence in affected:
-        updated = apply_task_update(occurrence.model_copy(deep=True), content_update)
-        _rebuild_dates(updated, series, _index_of(occurrence))
-        updated.modified = now
-        store.put_task(updated)
-        affected_uids.append(updated.uid)
+    # -- a finished series comes back when the schedule allows another occurrence
+    schedule_changed = (
+        "frequency" in dump
+        or "interval" in dump
+        or "anchor" in dump
+        or "start_date" in dump
+        or "end_date" in dump
+        or bool(dump.get("clear_end_date"))
+    )
+    created_uids: list[str] = []
+    if series.stop_reason == STOP_REASON_FINISHED and schedule_changed and _allows_another_occurrence(series):
+        series.active = True
+        series.stop_reason = None
+        if current is None:
+            # The series had no open occurrence left: the next one
+            # becomes the new current occurrence.
+            index = series.highest_materialized_index + 1
+            task = build_occurrence(series, index, now)
+            store.put_task(task)
+            series.highest_materialized_index = index
+            series.current_index = index
+            current = task
+            created_uids.append(task.uid)
+
+    # -- rewrite the open occurrences ----------------------------------------
+    open_occurrences = list(futures)
+    if current is not None:
+        open_occurrences.insert(0, current)
+    updated_uids: list[str] = []
+    canceled_uids: list[str] = []
+    for occurrence in open_occurrences:
+        if content_changed:
+            occurrence.title = template.title
+            occurrence.description = template.description
+            occurrence.project_id = template.project_id
+            occurrence.priority = template.priority
+            occurrence.scheduled_duration = template.scheduled_duration
+        _rebuild_dates(occurrence, series, _index_of(occurrence))
+        occurrence.modified = now
+        store.put_task(occurrence)
+        updated_uids.append(occurrence.uid)
+
+    # -- the end date cancels the occurrences after it -------------------------
+    if new_end_date is not None:
+        for occurrence in open_occurrences:
+            if occurrence.recurrence_occurrence is None:
+                continue
+            if occurrence.recurrence_occurrence <= new_end_date:
+                continue
+            occurrence.status = TaskStatus.CANCELED
+            occurrence.completed_at = None
+            occurrence.modified = now
+            store.put_task(occurrence)
+            store.delete_task_shadow(occurrence.uid)
+            canceled_uids.append(occurrence.uid)
+
+    # -- the horizon ----------------------------------------------------------
+    tasks = store.list_series_tasks(series_uid)
+    _current, open_futures, _history = resolve_series_occurrences(series, tasks)
+    if new_horizon < old_horizon:
+        for occurrence in open_futures[new_horizon:]:
+            occurrence.status = TaskStatus.CANCELED
+            occurrence.completed_at = None
+            occurrence.modified = now
+            store.put_task(occurrence)
+            store.delete_task_shadow(occurrence.uid)
+            canceled_uids.append(occurrence.uid)
+
+    # -- refill the window ----------------------------------------------------
+    if series.active and series.stop_reason != STOP_REASON_FINISHED:
+        created = _materialize(store, series, tasks, target_count=new_horizon, now=now)
+        created_uids.extend(t.uid for t in created)
+
+    # -- a series without an open occurrence is finished ----------------------
+    final_tasks = store.list_series_tasks(series_uid)
+    final_current, _futures, _history = resolve_series_occurrences(series, final_tasks)
+    if final_current is None:
+        series.active = False
+        series.stop_reason = STOP_REASON_FINISHED
+    elif final_current.recurrence_index is not None and final_current.recurrence_index != series.current_index:
+        series.current_index = final_current.recurrence_index
 
     series.modified = now
     store.save_series(series)
-    return ScopedTaskUpdateResult(task=task, scope=scope, affected_uids=affected_uids)
+
+    summary = series_summary(store, series.uid)
+    return SeriesUpdateResult(
+        series_uid=series.uid,
+        active=series.active,
+        end_date=series.end_date,
+        materialized_future_count=series.materialized_future_count,
+        current_task_uid=summary.current_task_uid if summary is not None else None,
+        next_occurrence_date=summary.next_occurrence_date if summary is not None else None,
+        updated_task_uids=updated_uids,
+        created_task_uids=created_uids,
+        canceled_task_uids=canceled_uids,
+    )
 
 
-def _reanchor(
-    series: RecurrenceSeries,
-    selected: Task,
-    selected_after: Task,
-    new_rule: RecurrenceRule,
-    actions: dict[str, str],
-) -> tuple[date, int]:
-    """Return the new (anchor date, anchor index) of the future chain.
+def cancel_series(store: RecurrenceStore, series_uid: str) -> CancelSeriesResult:
+    """Cancel the future window of a series and stop its renewal.
 
-    The chain keeps its anchor date and only shifts by the day delta
-    the edit applied to the anchored field, so the monthly clamping day
-    of the series is preserved. Changing the anchored *field* re-anchors
-    the chain at the selected occurrence.
+    Every open occurrence after the current one is cancelled. The
+    current occurrence and the completed history stay. The action is
+    idempotent: cancelling an already cancelled series returns an
+    empty list of cancelled UIDs.
+
+    Raises:
+        ValueError: When the series does not exist.
     """
-    old_anchor = series.rule.anchor.value
-    new_anchor = new_rule.anchor.value
-    selected_index = _index_of(selected)
+    series = store.get_series(series_uid)
+    if series is None:
+        raise ValueError("recurrence series not found")
+    if series.stop_reason == STOP_REASON_CANCELLED:
+        return CancelSeriesResult(series_uid=series.uid, canceled_uids=[], active=False)
 
-    if new_anchor != old_anchor:
-        base = _field_date(selected_after, new_anchor)
-        if base is None:
-            raise ValueError(f"cannot re-anchor on '{new_anchor}': the selected occurrence has no such date")
-        return base, selected_index
+    now = now_utc()
+    tasks = store.list_series_tasks(series_uid)
+    _current, futures, _history = resolve_series_occurrences(series, tasks)
+    canceled: list[str] = []
+    for occurrence in futures:
+        occurrence.status = TaskStatus.CANCELED
+        occurrence.completed_at = None
+        occurrence.modified = now
+        store.put_task(occurrence)
+        store.delete_task_shadow(occurrence.uid)
+        canceled.append(occurrence.uid)
 
-    anchor_delta = 0
-    if old_anchor in actions:
-        if actions[old_anchor] == "clear":
-            raise ValueError(f"the anchor field '{old_anchor}' of a recurrence series cannot be cleared")
-        old_value = _field_date(selected, old_anchor)
-        new_value = _field_date(selected_after, old_anchor)
-        if old_value is not None and new_value is not None:
-            anchor_delta = (new_value - old_value).days
-    return series.start_date + timedelta(days=anchor_delta), series.start_index
-
-
-def _local_time_for(field: str, task: Task) -> time | None:
-    """Return the local wall-clock time of one of the datetime fields."""
-    if field == "hard_deadline":
-        return to_local(task.hard_deadline).time() if task.hard_deadline is not None else None
-    if field == "scheduled_start":
-        return to_local(task.scheduled_start).time() if task.scheduled_start is not None else None
-    return None
-
-
-def _apply_date_offsets(
-    template: RecurrenceTemplate,
-    *,
-    series: RecurrenceSeries,
-    selected: Task,
-    selected_after: Task,
-    actions: dict[str, str],
-    new_start_date: date,
-    new_anchor: str,
-    reanchored: bool,
-) -> None:
-    """Update the template's date offsets after an all-future edit.
-
-    A field the edit did not touch keeps its offset: the offsets are
-    relative to the chain anchor, so a field shift is expressed as a
-    day delta applied to the offset, not as an absolute date.
-
-    Every touched datetime field also refreshes its local wall-clock
-    time, including the anchored one: an edit that moves the scheduled
-    start from 12:00 to 18:00 must move the future occurrences to
-    18:00 as well. A cleared field clears its local time.
-
-    A re-anchor recomputes every offset (and every local time) from
-    the selected occurrence, because the anchor the offsets are
-    relative to has changed.
-    """
-    old_anchor = series.rule.anchor.value
-    for field in _DATE_FIELDS:
-        offset_attr = _DATE_FIELD_OFFSETS[field]
-        local_time_attr = _DATE_FIELD_LOCAL_TIME.get(field)
-        if reanchored:
-            value = _field_date(selected_after, field)
-            setattr(template, offset_attr, None if value is None else (value - new_start_date).days)
-            if local_time_attr is not None:
-                setattr(template, local_time_attr, _local_time_for(field, selected_after))
-            continue
-        if field not in actions:
-            continue
-        # The field was touched. Its local time follows the edit, be
-        # it the anchored field, a plain field, or a field that was
-        # cleared (which clears the local time with it).
-        if local_time_attr is not None:
-            setattr(template, local_time_attr, _local_time_for(field, selected_after))
-        if field == old_anchor:
-            value = _field_date(selected_after, field)
-            setattr(template, offset_attr, None if value is None else 0)
-            continue
-        if actions[field] == "clear":
-            setattr(template, offset_attr, None)
-            continue
-        old_value = _field_date(selected, field)
-        new_value = _field_date(selected_after, field)
-        if new_value is None:
-            setattr(template, offset_attr, None)
-        elif old_value is None:
-            setattr(template, offset_attr, (new_value - new_start_date).days)
-        else:
-            current = getattr(template, offset_attr)
-            base = current if current is not None else 0
-            setattr(template, offset_attr, base + (new_value - old_value).days)
+    series.active = False
+    series.stop_reason = STOP_REASON_CANCELLED
+    series.modified = now
+    store.save_series(series)
+    return CancelSeriesResult(series_uid=series.uid, canceled_uids=canceled, active=False)
 
 
 def deactivate_series(store: RecurrenceStore, series_uid: str) -> None:
@@ -773,46 +862,6 @@ def clear_series_project(store: RecurrenceStore, project_uid: str) -> None:
         series.template.project_id = None
         series.modified = now_utc()
         store.save_series(series)
-
-
-def cancel_future(store: RecurrenceStore, uid: str) -> CancelFutureResult:
-    """Cancel every future occurrence of the selected task's series.
-
-    The selected occurrence and all history stay untouched. The series
-    is deactivated so no replacement future is materialized. The action
-    is idempotent.
-
-    Raises:
-        ValueError: When the task does not exist or is not part of a
-            recurrence series.
-    """
-    task = store.get_task(uid)
-    if task is None:
-        raise ValueError(f"task {uid} not found")
-    if task.recurrence_series_uid is None:
-        raise ValueError("task is not part of a recurrence series")
-    series = store.get_series(task.recurrence_series_uid)
-    if series is None:
-        raise ValueError("recurrence series not found")
-
-    now = now_utc()
-    selected_index = _index_of(task)
-    tasks = store.list_series_tasks(series.uid)
-    canceled: list[str] = []
-    for occurrence in tasks:
-        if _index_of(occurrence) <= selected_index or is_terminal(occurrence):
-            continue
-        occurrence.status = TaskStatus.CANCELED
-        occurrence.completed_at = None
-        occurrence.modified = now
-        store.put_task(occurrence)
-        store.delete_task_shadow(occurrence.uid)
-        canceled.append(occurrence.uid)
-
-    series.active = False
-    series.modified = now
-    store.save_series(series)
-    return CancelFutureResult(series_uid=series.uid, canceled_uids=canceled, active=False)
 
 
 def resize_series(store: RecurrenceStore, series_uid: str, materialized_future_count: int) -> SeriesResizeResult:
@@ -879,6 +928,50 @@ def resize_series(store: RecurrenceStore, series_uid: str, materialized_future_c
     )
 
 
+def series_summary(store: RecurrenceStore, series_uid: str) -> SeriesSummary | None:
+    """Return the summary row of one series, or None when unknown."""
+    series = store.get_series(series_uid)
+    if series is None:
+        return None
+    tasks = store.list_series_tasks(series_uid)
+    current, futures, history = resolve_series_occurrences(series, tasks)
+    next_date: date | None = None
+    if futures:
+        next_date = futures[0].recurrence_occurrence
+    elif series.active and series.stop_reason != STOP_REASON_FINISHED:
+        next_date = _next_occurrence_date(series)
+    return SeriesSummary(
+        uid=series.uid,
+        title=series.template.title,
+        project_id=series.template.project_id,
+        frequency=series.rule.frequency,
+        interval=series.rule.interval,
+        anchor=series.rule.anchor,
+        start_date=series.start_date,
+        end_date=series.end_date,
+        materialized_future_count=series.materialized_future_count,
+        active=series.active,
+        stop_reason=series.stop_reason,
+        current_task_uid=current.uid if current is not None else None,
+        current_occurrence_date=current.recurrence_occurrence if current is not None else None,
+        next_occurrence_date=next_date,
+        open_occurrence_count=(1 if current is not None else 0) + len(futures),
+        history_count=len(history),
+        created=series.created,
+        modified=series.modified,
+    )
+
+
+def series_summaries(store: RecurrenceStore) -> list[SeriesSummary]:
+    """Return the summary row of every series."""
+    summaries: list[SeriesSummary] = []
+    for series in store.list_series():
+        summary = series_summary(store, series.uid)
+        if summary is not None:
+            summaries.append(summary)
+    return summaries
+
+
 def series_state(store: RecurrenceStore, series_uid: str) -> SeriesState | None:
     """Return the inspection state of a series, or None when unknown."""
     series = store.get_series(series_uid)
@@ -886,6 +979,9 @@ def series_state(store: RecurrenceStore, series_uid: str) -> SeriesState | None:
         return None
     tasks = store.list_series_tasks(series_uid)
     current, futures, _history = resolve_series_occurrences(series, tasks)
+    next_date: date | None = futures[0].recurrence_occurrence if futures else None
+    if next_date is None and series.active and series.stop_reason != STOP_REASON_FINISHED:
+        next_date = _next_occurrence_date(series)
     return SeriesState(
         uid=series.uid,
         frequency=series.rule.frequency,
@@ -893,9 +989,12 @@ def series_state(store: RecurrenceStore, series_uid: str) -> SeriesState | None:
         anchor=series.rule.anchor,
         start_date=series.start_date,
         start_index=series.start_index,
+        end_date=series.end_date,
         materialized_future_count=series.materialized_future_count,
         active=series.active,
+        stop_reason=series.stop_reason,
         current_task_uid=current.uid if current is not None else None,
+        next_occurrence_date=next_date,
         future_occurrences=[
             SeriesFutureOccurrence(
                 uid=t.uid,

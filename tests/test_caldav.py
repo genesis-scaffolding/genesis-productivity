@@ -888,13 +888,13 @@ class TestRecurrenceSeriesIntegration:
         for task in facade.list_series_tasks(created.series.uid):
             assert task.uid in uids
 
-    def test_cancel_future_keeps_the_occurrences(self, facade: CalDAVFacade) -> None:
+    def test_cancel_series_keeps_the_occurrences(self, facade: CalDAVFacade) -> None:
         created = facade.create_recurrent_task(
             TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
             rule=_monthly_rule(),
             materialized_future_count=2,
         )
-        result = facade.cancel_future(created.task.uid)
+        result = facade.cancel_series(created.series.uid)
         assert len(result.canceled_uids) == 2
 
         tasks = facade.list_series_tasks(created.series.uid)
@@ -904,6 +904,51 @@ class TestRecurrenceSeriesIntegration:
         series = facade.get_series(created.series.uid)
         assert series is not None
         assert series.active is False
+        assert series.stop_reason == "cancelled"
+
+    def test_the_end_date_and_the_stop_reason_round_trip(self, facade: CalDAVFacade) -> None:
+        """The two new series properties survive the storage round trip."""
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=4,
+            end_date=date(2026, 3, 31),
+        )
+        # The end date caps the window.
+        assert len(facade.list_series_tasks(created.series.uid)) == 3
+
+        reconnected = CalDAVFacade(
+            server_url=facade._server_url,
+            username=facade._username,
+            password=facade._password,
+        )
+        series = reconnected.get_series(created.series.uid)
+        assert series is not None
+        assert series.end_date == date(2026, 3, 31)
+
+    def test_the_series_edit_persists(self, facade: CalDAVFacade) -> None:
+        """A series edit is written to the series record."""
+        from genesis.entities import SeriesUpdate
+
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=2,
+        )
+        result = facade.update_series(created.series.uid, SeriesUpdate(interval=2, title="Pay the rent"))
+        assert result.series_uid == created.series.uid
+
+        reconnected = CalDAVFacade(
+            server_url=facade._server_url,
+            username=facade._username,
+            password=facade._password,
+        )
+        series = reconnected.get_series(created.series.uid)
+        assert series is not None
+        assert series.rule.interval == 2
+        assert series.template.title == "Pay the rent"
+        tasks = reconnected.list_series_tasks(created.series.uid)
+        assert all(t.title == "Pay the rent" for t in tasks)
 
     def test_tasks_of_a_series_are_not_ordinary_tasks(self, facade: CalDAVFacade) -> None:
         """The series record lives in its own collection."""

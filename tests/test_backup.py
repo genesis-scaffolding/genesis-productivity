@@ -342,7 +342,7 @@ def test_recurrence_series_survives_a_backup_round_trip(backup_facade: SimpleNam
     # series is cancelled first: a live series keeps its window
     # materialized, so deleting the occurrences one by one would
     # simply create new ones.
-    caldav.cancel_future(created.task.uid)
+    caldav.cancel_series(created.series.uid)
     for t in caldav.list_tasks():
         caldav.delete_task(t.uid)
     assert caldav.list_tasks() == []

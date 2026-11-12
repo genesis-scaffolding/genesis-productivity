@@ -1,6 +1,7 @@
 """Headless UI checks for recurrent tasks (ADR-033).
 
-Drives the shared task create and edit dialogs with Streamlit's
+Drives the shared task create and edit dialogs, the series form, the
+series table, and the delete confirmation with Streamlit's
 ``AppTest``: the real dialog code runs against the in-memory CalDAV
 backend and the assertions read the rendered widget tree.
 
@@ -10,14 +11,19 @@ Covered:
 - the horizon defaults to the per-user global default and can be
   overridden;
 - the create dialog rejects a missing anchor;
-- the edit dialog shows the scope choice only for recurrent tasks and
-  dispatches to the matching scoped operation;
-- the series inspection shows the effective horizon and the future
-  occurrences;
-- the horizon can be grown and shrunk from the edit dialog;
-- cancelling the future asks for a confirmation first;
-- the task table labels the recurrence, the horizon, and the role of
-  every row.
+- the inline scope control is gone, and the edit dialog of an
+  occurrence has no scope choice;
+- the series-owned fields of an occurrence are disabled, and the
+  caption names the series that owns them;
+- the occurrence edit changes that occurrence only;
+- the series table renders one row per series with its rule, its
+  dates, its horizon, its next occurrence, and its status;
+- the series form shows the fields and the effect statement, and the
+  save applies the change;
+- the series cancellation asks for a confirmation and then cancels;
+- an inline edit of a series-owned field is refused;
+- the delete dialog states the consequence and offers the series
+  cancellation.
 """
 
 from __future__ import annotations
@@ -46,6 +52,7 @@ from .mock_caldav import MockCalDAVFacade
 
 APP = Path(__file__).parent / "_task_recurrence_app.py"
 TABLE_APP = Path(__file__).parent / "_task_table_app.py"
+TASKS_APP = Path(__file__).parent / "_tasks_page_app.py"
 
 
 class _FakeConfigs:
@@ -55,12 +62,20 @@ class _FakeConfigs:
         self.recurrence = RecurrenceConfig(default_materialized_future_count=count)
 
 
+class _FakeJournal:
+    """Journal stand-in: the Tasks page asks for the linked entries."""
+
+    def list_entries(self, task_id: str | None = None) -> list:
+        return []
+
+
 class _FakeFacade:
     """Facade stand-in: a mock CalDAV plus a config block."""
 
     def __init__(self, caldav: MockCalDAVFacade, count: int = 1) -> None:
         self.caldav = caldav
         self.configs = _FakeConfigs(count)
+        self.journal = _FakeJournal()
 
     def create_recurrent_task(
         self,
@@ -89,6 +104,18 @@ class _FakeFacade:
             materialized_future_count=count,
         )
 
+    def update_series(self, series_uid, changes):
+        """Apply a series edit (ADR-033)."""
+        return self.caldav.update_series(series_uid, changes)
+
+    def cancel_series(self, series_uid):
+        """Cancel a series (ADR-033)."""
+        return self.caldav.cancel_series(series_uid)
+
+    def list_series_summaries(self):
+        """Return the summary row of every recurrence series."""
+        return self.caldav.list_series_summaries()
+
 
 @pytest.fixture
 def facade(monkeypatch: pytest.MonkeyPatch) -> _FakeFacade:
@@ -113,12 +140,20 @@ def _series(facade: _FakeFacade, count: int = 4, title: str = "Pay rent"):
     )
 
 
-def _run(monkeypatch: pytest.MonkeyPatch, task_uid: str | None = None) -> AppTest:
+def _run(
+    monkeypatch: pytest.MonkeyPatch,
+    task_uid: str | None = None,
+    series_uid: str | None = None,
+) -> AppTest:
     """Render the dialog harness, optionally with the edit dialog."""
     if task_uid is None:
         monkeypatch.delenv("GENESIS_TEST_TASK_UID", raising=False)
     else:
         monkeypatch.setenv("GENESIS_TEST_TASK_UID", task_uid)
+    if series_uid is None:
+        monkeypatch.delenv("GENESIS_TEST_SERIES_UID", raising=False)
+    else:
+        monkeypatch.setenv("GENESIS_TEST_SERIES_UID", series_uid)
     at = AppTest.from_file(APP)
     at.run()
     assert not at.exception, f"app raised: {at.exception}"
@@ -137,6 +172,30 @@ def _open_edit(monkeypatch: pytest.MonkeyPatch, uid: str) -> AppTest:
     """Open the edit-task dialog for the given task and return the app."""
     at = _run(monkeypatch, uid)
     at.button(key="open_edit_dialog").click().run()
+    assert not at.exception, f"dialog raised: {at.exception}"
+    return at
+
+
+def _open_series(monkeypatch: pytest.MonkeyPatch, series_uid: str) -> AppTest:
+    """Open the series form and return the running app."""
+    at = _run(monkeypatch, series_uid=series_uid)
+    at.button(key="open_series_dialog").click().run()
+    assert not at.exception, f"dialog raised: {at.exception}"
+    return at
+
+
+def _open_series_cancel(monkeypatch: pytest.MonkeyPatch, series_uid: str) -> AppTest:
+    """Open the series cancellation confirmation and return the app."""
+    at = _run(monkeypatch, series_uid=series_uid)
+    at.button(key="open_series_cancel_dialog").click().run()
+    assert not at.exception, f"dialog raised: {at.exception}"
+    return at
+
+
+def _open_delete(monkeypatch: pytest.MonkeyPatch, task_uid: str) -> AppTest:
+    """Open the delete confirmation for the given task."""
+    at = _run(monkeypatch, task_uid)
+    at.button(key="open_delete_dialog").click().run()
     assert not at.exception, f"dialog raised: {at.exception}"
     return at
 
@@ -229,150 +288,253 @@ def test_create_dialog_rejects_a_missing_anchor(
 
 
 # ---------------------------------------------------------------------------
-# Edit dialog
+# Occurrence edit dialog
 # ---------------------------------------------------------------------------
 
 
-def test_edit_dialog_shows_the_scope_choice_for_recurrent_tasks(
+def test_the_edit_dialog_has_no_scope_choice(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The edit scope is gone: an occurrence edit is instance-only."""
     created = _series(facade)
     at = _open_edit(monkeypatch, created.task.uid)
-
-    scope = _widget_by_label(at.radio, "Applies to")
-    assert scope.options == ["This instance", "All future instances"]
-
-
-def test_edit_dialog_hides_the_scope_choice_for_plain_tasks(
-    facade: _FakeFacade,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    plain = facade.caldav.create_task(TaskCreate(title="Plain"))
-    at = _open_edit(monkeypatch, plain.uid)
 
     assert [radio.label for radio in at.radio] == []
 
 
-def test_series_inspection_shows_the_horizon_and_the_futures(
+def test_the_edit_dialog_disables_the_series_owned_fields(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created = _series(facade, count=4)
+    """The schedule and the project belong to the series."""
+    created = _series(facade)
     at = _open_edit(monkeypatch, created.task.uid)
 
-    assert "4 ahead" in _texts(at)
-    assert "Future occurrences (4)" in _texts(at)
-    horizon = _widget_by_label(at.number_input, "Future occurrences to keep ready")
-    assert horizon.value == 4
+    assert _widget_by_label(at.date_input, "assigned_date").disabled
+    assert _widget_by_label(at.date_input, "hard_deadline").disabled
+    assert _widget_by_label(at.date_input, "scheduled_start_date").disabled
+    assert _widget_by_label(at.number_input, "Duration (min)").disabled
+    assert _widget_by_label(at.selectbox, "Project").disabled
 
 
-def test_current_scope_save_uses_the_current_scope(
+def test_the_edit_dialog_keeps_the_content_editable(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created = _series(facade, count=2)
-    calls: list[tuple[str, str]] = []
-    original = facade.caldav.update_task_scoped
-
-    def spy(uid, data, *, scope="current", rule_change=None):
-        calls.append((uid, scope))
-        return original(uid, data, scope=scope, rule_change=rule_change)
-
-    facade.caldav.update_task_scoped = spy  # type: ignore[method-assign]
-
+    """Title, description, priority, and status stay editable."""
+    created = _series(facade)
     at = _open_edit(monkeypatch, created.task.uid)
-    at.text_input(key="etd_" + created.task.uid + "_title").set_value("Only me").run()
-    at.button(key="etd_" + created.task.uid + "_save").click().run()
 
-    assert not at.exception, f"dialog raised: {at.exception}"
-    assert calls == [(created.task.uid, "current")]
+    assert not _widget_by_label(at.text_input, "Title").disabled
+    assert not _widget_by_label(at.text_area, "Description").disabled
+    assert not _widget_by_label(at.number_input, "Priority").disabled
+    assert not _widget_by_label(at.selectbox, "Status").disabled
 
 
-def test_all_future_save_uses_the_future_scope(
+def test_the_edit_dialog_names_the_owning_series(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caption points at the series that owns the schedule."""
+    created = _series(facade)
+    at = _open_edit(monkeypatch, created.task.uid)
+
+    texts = _texts(at)
+    assert created.series.uid in texts
+    assert "Edit the series to change them" in texts
+    assert "Recurrence series table" in texts
+
+
+def test_the_edit_dialog_has_no_series_cancel_button(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cancellation lives in the series table, not in the dialog."""
+    created = _series(facade)
+    at = _open_edit(monkeypatch, created.task.uid)
+
+    labels = [button.label for button in at.button]
+    assert "Cancel future" not in labels
+    assert "Cancel series" not in labels
+
+
+def test_the_occurrence_edit_changes_that_occurrence_only(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created = _series(facade, count=3)
-    calls: list[tuple[str, str]] = []
-    original = facade.caldav.update_task_scoped
-
-    def spy(uid, data, *, scope="current", rule_change=None):
-        calls.append((uid, scope))
-        return original(uid, data, scope=scope, rule_change=rule_change)
-
-    facade.caldav.update_task_scoped = spy  # type: ignore[method-assign]
-
     at = _open_edit(monkeypatch, created.task.uid)
-    _widget_by_label(at.radio, "Applies to").set_value("All future instances").run()
-    at.text_input(key="etd_" + created.task.uid + "_title").set_value("All of them").run()
+    at.text_input(key="etd_" + created.task.uid + "_title").set_value("Pay rent (January)").run()
     at.button(key="etd_" + created.task.uid + "_save").click().run()
 
     assert not at.exception, f"dialog raised: {at.exception}"
-    assert calls == [(created.task.uid, "all-future")]
     tasks = facade.caldav.list_series_tasks(created.series.uid)
     titles = sorted(t.title for t in tasks)
-    assert titles == ["All of them", "All of them", "All of them", "Pay rent"]
+    assert titles == ["Pay rent", "Pay rent", "Pay rent", "Pay rent (January)"]
+    series = facade.caldav.get_series(created.series.uid)
+    assert series is not None
+    assert series.template.title == "Pay rent"
 
 
-def test_increasing_the_horizon_creates_the_missing_rows(
+def test_the_occurrence_edit_keeps_the_schedule_untouched(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created = _series(facade, count=1)
+    """The dates of an occurrence are not part of its edit."""
+    created = _series(facade, count=2)
     at = _open_edit(monkeypatch, created.task.uid)
-    _widget_by_label(at.number_input, "Future occurrences to keep ready").set_value(4).run()
-    at.button(key="etd_" + created.task.uid + "_horizon_apply").click().run()
+    at.text_input(key="etd_" + created.task.uid + "_title").set_value("Pay rent (January)").run()
+    at.button(key="etd_" + created.task.uid + "_save").click().run()
 
     assert not at.exception, f"dialog raised: {at.exception}"
-    tasks = facade.caldav.list_series_tasks(created.series.uid)
-    assert len(tasks) == 5
+    stored = facade.caldav.get_task(created.task.uid)
+    assert stored is not None
+    assert stored.assigned_date == date(2026, 1, 31)
 
 
-def test_decreasing_the_horizon_asks_for_confirmation(
+# ---------------------------------------------------------------------------
+# Series table
+# ---------------------------------------------------------------------------
+
+
+def test_the_series_table_renders_one_row_per_series(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The series table lists the rule, the dates, and the status."""
+    created = _series(facade, count=4)
+    at = AppTest.from_file(TASKS_APP)
+    at.run()
+    assert not at.exception, f"tasks page raised: {at.exception}"
+
+    table = next(frame for frame in at.dataframe if frame.key == "global_series")
+    row = table.value.iloc[0]
+    assert row["Title"] == "Pay rent"
+    assert row["Repeats"] == "Monthly, every 1"
+    assert row["Anchor"] == "assigned_date"
+    assert row["Start"] == "2026-01-31"
+    assert row["End"] == "no end"
+    assert row["Ready"] == 4
+    assert row["Next"] == "2026-02-28"
+    assert row["Current"] == created.task.uid
+    assert row["Status"] == "Active"
+
+
+def test_the_series_table_is_empty_without_a_series(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    at = AppTest.from_file(TASKS_APP)
+    at.run()
+    assert not at.exception, f"tasks page raised: {at.exception}"
+    assert "No recurrence series." in _texts(at)
+
+
+# ---------------------------------------------------------------------------
+# Series form
+# ---------------------------------------------------------------------------
+
+
+def test_the_series_form_exposes_the_fields(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created = _series(facade, count=4)
-    at = _open_edit(monkeypatch, created.task.uid)
-    _widget_by_label(at.number_input, "Future occurrences to keep ready").set_value(1).run()
+    at = _open_series(monkeypatch, created.series.uid)
+
+    labels = {box.label for box in at.selectbox}
+    assert "Repeats" in labels
+    assert "Anchor" in labels
+    assert "Project" in labels
+    assert _widget_by_label(at.number_input, "Every (units)") is not None
+    assert _widget_by_label(at.number_input, "Future occurrences to keep ready") is not None
+    assert _widget_by_label(at.date_input, "Start date") is not None
+    assert _widget_by_label(at.date_input, "End date") is not None
+    assert _widget_by_label(at.checkbox, "No end date") is not None
+
+
+def test_the_series_form_states_the_effect(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The form says what the change does before it is saved."""
+    created = _series(facade, count=4)
+    at = _open_series(monkeypatch, created.series.uid)
+
+    texts = _texts(at)
+    assert "open occurrences of this series" in texts
+    assert "Completed history is not changed." in texts
+
+
+def test_the_series_form_saves_the_series(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The save applies the change to the series."""
+    created = _series(facade, count=4)
+    at = _open_series(monkeypatch, created.series.uid)
+    _widget_by_label(at.number_input, "Every (units)").set_value(2).run()
+    _widget_by_label(at.button, "Save").click().run()
 
     assert not at.exception, f"dialog raised: {at.exception}"
-    confirm = _widget_by_label(at.checkbox, "Cancel the 3 farthest future occurrences")
-    assert confirm is not None
-    # The apply button stays disabled until the confirmation is ticked.
-    apply_button = at.button(key="etd_" + created.task.uid + "_horizon_apply")
-    assert apply_button.disabled
-
-    confirm.set_value(True).run()
-    at.button(key="etd_" + created.task.uid + "_horizon_apply").click().run()
-    assert not at.exception, f"dialog raised: {at.exception}"
-
+    series = facade.caldav.get_series(created.series.uid)
+    assert series is not None
+    assert series.rule.interval == 2
     tasks = facade.caldav.list_series_tasks(created.series.uid)
-    cancelled = [t for t in tasks if t.status == TaskStatus.CANCELED]
-    assert len(cancelled) == 3
+    assert tasks[1].assigned_date == date(2026, 3, 31)
 
 
-def test_cancel_future_asks_for_confirmation(
+def test_the_series_form_saves_the_content(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The content template is applied to the open occurrences."""
+    created = _series(facade, count=2)
+    at = _open_series(monkeypatch, created.series.uid)
+    at.text_input(key="sed_" + created.series.uid + "_title").set_value("Pay the rent").run()
+    _widget_by_label(at.button, "Save").click().run()
+
+    assert not at.exception, f"dialog raised: {at.exception}"
+    tasks = facade.caldav.list_series_tasks(created.series.uid)
+    assert {t.title for t in tasks} == {"Pay the rent"}
+
+
+# ---------------------------------------------------------------------------
+# Series cancellation
+# ---------------------------------------------------------------------------
+
+
+def test_the_series_cancellation_asks_for_a_confirmation(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created = _series(facade, count=3)
-    at = _open_edit(monkeypatch, created.task.uid)
+    at = _open_series_cancel(monkeypatch, created.series.uid)
 
-    cancel_button = at.button(key="etd_" + created.task.uid + "_cancel_future")
-    assert cancel_button.disabled
+    assert "Cancel the series" in _texts(at)
+    # Nothing is cancelled before the confirmation.
+    series = facade.caldav.get_series(created.series.uid)
+    assert series is not None
+    assert series.active is True
 
-    _widget_by_label(at.checkbox, "I understand that all future occurrences are cancelled").set_value(True).run()
-    at.button(key="etd_" + created.task.uid + "_cancel_future").click().run()
+
+def test_the_series_cancellation_cancels_the_series(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = _series(facade, count=3)
+    at = _open_series_cancel(monkeypatch, created.series.uid)
+    at.button(key="scd_confirm_" + created.series.uid).click().run()
 
     assert not at.exception, f"dialog raised: {at.exception}"
-    tasks = facade.caldav.list_series_tasks(created.series.uid)
-    cancelled = [t for t in tasks if t.status == TaskStatus.CANCELED]
-    assert len(cancelled) == 3
     series = facade.caldav.get_series(created.series.uid)
     assert series is not None
     assert series.active is False
+    assert series.stop_reason == "cancelled"
+    tasks = facade.caldav.list_series_tasks(created.series.uid)
+    assert tasks[0].status == TaskStatus.NEEDS_ACTION
+    assert all(t.status == TaskStatus.CANCELED for t in tasks[1:])
 
 
 # ---------------------------------------------------------------------------
@@ -394,9 +556,7 @@ def test_table_labels_the_recurrence_and_the_occurrence_role(
     assert current[1] == "Current"
     assert current[2] == created.series.uid
 
-    futures = [
-        t for t in facade.caldav.list_series_tasks(created.series.uid) if (t.recurrence_index or 0) > 0
-    ]
+    futures = [t for t in facade.caldav.list_series_tasks(created.series.uid) if (t.recurrence_index or 0) > 0]
     roles = [labels[t.uid][1] for t in sorted(futures, key=lambda t: t.recurrence_index or 0)]
     assert roles == ["Future 1 of 4", "Future 2 of 4", "Future 3 of 4", "Future 4 of 4"]
 
@@ -423,87 +583,122 @@ def test_table_leaves_plain_tasks_unlabelled(facade: _FakeFacade) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Inline edit scope
+# Inline edit
 # ---------------------------------------------------------------------------
 
 
-def test_inline_edit_scope_control_is_rendered_for_recurring_rows(
+def test_the_inline_scope_control_is_not_rendered(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A table with recurring rows exposes the explicit scope control."""
+    """The inline scope dropdown is gone."""
     _series(facade, count=2)
     at = AppTest.from_file(TABLE_APP)
     at.run()
     assert not at.exception, f"table app raised: {at.exception}"
-    scope = _widget_by_label(at.selectbox, "Inline edit scope")
-    assert scope.value == "current"
+    assert [box.label for box in at.selectbox] == []
 
 
-def test_inline_edit_uses_the_current_scope_by_default(
+def test_an_inline_edit_of_a_series_owned_field_is_refused(
     facade: _FakeFacade,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The schedule of an occurrence belongs to its series."""
     created = _series(facade, count=2)
-    task = created.task
-    scope, content, status = _table.plan_inline_edit(
-        "test_tasks",
-        task,
-        TaskUpdate(title="Only me"),
-    )
-    assert scope == "current"
-    assert content.title == "Only me"
-    assert status is None
-
-
-def test_inline_edit_uses_the_future_scope_when_selected(
-    facade: _FakeFacade,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    created = _series(facade, count=2)
-    st.session_state["test_tasks__edit_scope"] = "all-future"
-    scope, content, status = _table.plan_inline_edit(
-        "test_tasks",
+    error = _table.apply_inline_task_edit(
+        cast(CalDAVFacade, facade.caldav),
         created.task,
-        TaskUpdate(title="All of them"),
+        TaskUpdate(assigned_date=date(2026, 3, 5)),
     )
-    assert scope == "all-future"
-    assert content.title == "All of them"
-    assert status is None
+
+    assert error is not None
+    assert "assigned_date" in error
+    assert created.series.uid in error
+    # Nothing was written.
+    stored = facade.caldav.get_task(created.task.uid)
+    assert stored is not None
+    assert stored.assigned_date == date(2026, 1, 31)
 
 
-def test_inline_status_change_stays_on_the_occurrence(
+def test_an_inline_edit_of_the_content_is_applied(
+    facade: _FakeFacade,
+) -> None:
+    """A content edit of an occurrence is applied to that occurrence."""
+    created = _series(facade, count=3)
+    error = _table.apply_inline_task_edit(
+        cast(CalDAVFacade, facade.caldav),
+        created.task,
+        TaskUpdate(title="Pay rent (January)"),
+    )
+
+    assert error is None
+    tasks = facade.caldav.list_series_tasks(created.series.uid)
+    titles = sorted(t.title for t in tasks)
+    assert titles == ["Pay rent", "Pay rent", "Pay rent", "Pay rent (January)"]
+
+
+# ---------------------------------------------------------------------------
+# Delete confirmation
+# ---------------------------------------------------------------------------
+
+
+def test_the_delete_dialog_states_the_consequence(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The delete of an occurrence says what happens to the series."""
     created = _series(facade, count=2)
-    st.session_state["test_tasks__edit_scope"] = "all-future"
-    scope, content, status = _table.plan_inline_edit(
-        "test_tasks",
-        created.task,
-        TaskUpdate(title="All of them", status=TaskStatus.COMPLETED),
-    )
-    assert scope == "all-future"
-    assert content.title == "All of them"
-    assert content.status is None
-    assert status is not None
-    assert status.status == TaskStatus.COMPLETED
+    at = _open_delete(monkeypatch, created.task.uid)
+
+    texts = _texts(at)
+    assert "removed for good" in texts
+    assert "becomes the current one" in texts
+    assert _widget_by_label(at.checkbox, "Also cancel the recurrence series") is not None
 
 
-def test_inline_scope_does_not_apply_to_plain_tasks(
+def test_the_delete_of_a_future_occurrence_states_the_consequence(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A future occurrence is removed; the series keeps running."""
+    created = _series(facade, count=2)
+    future = next(t for t in facade.caldav.list_series_tasks(created.series.uid) if (t.recurrence_index or 0) == 1)
+    at = _open_delete(monkeypatch, future.uid)
+
+    texts = _texts(at)
+    assert "The series keeps running" in texts
+    assert "becomes the current one" not in texts
+
+
+def test_the_delete_dialog_can_cancel_the_series(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The series cancellation is offered in the delete dialog."""
+    created = _series(facade, count=2)
+    at = _open_delete(monkeypatch, created.task.uid)
+    _widget_by_label(at.checkbox, "Also cancel the recurrence series").set_value(True).run()
+    _widget_by_label(at.button, "Delete").click().run()
+
+    assert not at.exception, f"dialog raised: {at.exception}"
+    series = facade.caldav.get_series(created.series.uid)
+    assert series is not None
+    assert series.active is False
+    assert series.stop_reason == "cancelled"
+
+
+def test_the_delete_of_an_ordinary_task_has_no_series_option(
     facade: _FakeFacade,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plain = facade.caldav.create_task(TaskCreate(title="Plain"))
-    st.session_state["test_tasks__edit_scope"] = "all-future"
-    scope, content, status = _table.plan_inline_edit(
-        "test_tasks",
-        plain,
-        TaskUpdate(title="Renamed"),
-    )
-    assert scope == "current"
-    assert content.title == "Renamed"
-    assert status is None
+    at = _open_delete(monkeypatch, plain.uid)
+
+    assert [box.label for box in at.checkbox] == []
+
+
+# ---------------------------------------------------------------------------
+# Create dialog state
+# ---------------------------------------------------------------------------
 
 
 def test_create_dialog_state_is_cleared_on_close() -> None:
@@ -535,65 +730,3 @@ def test_create_horizon_follows_the_global_default(facade: _FakeFacade) -> None:
     facade.configs.recurrence = RecurrenceConfig(default_materialized_future_count=4)
     second = _render.default_materialized_future_count(facade)
     assert (first, second) == (1, 4)
-
-
-def test_inline_edit_does_not_fall_back_to_another_scope(
-    facade: _FakeFacade,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A rejected all-future edit is surfaced, not downgraded.
-
-    Clearing the anchor field of an anchored series is rejected by
-    the engine. The edit must not be applied to the selected
-    occurrence instead.
-    """
-    from genesis.entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
-
-    caldav = facade.caldav
-    created = caldav.create_recurrent_task(
-        TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
-        rule=RecurrenceRule(
-            frequency=RecurrenceFrequency.MONTHLY,
-            interval=1,
-            anchor=RecurrenceAnchor.ASSIGNED_DATE,
-        ),
-        materialized_future_count=2,
-    )
-    st.session_state["test_tasks__edit_scope"] = "all-future"
-
-    error = _table.apply_inline_edit(
-        cast(CalDAVFacade, caldav),
-        "test_tasks",
-        created.task,
-        TaskUpdate(clear_assigned_date=True),
-    )
-
-    assert error is not None
-    assert "assigned_date" in error
-    # Nothing was written: the selected occurrence keeps its date and
-    # its title.
-    stored = caldav.get_task(created.task.uid)
-    assert stored is not None
-    assert stored.assigned_date == date(2026, 1, 31)
-    assert stored.title == "Pay rent"
-
-
-def test_inline_edit_applies_the_all_future_scope(
-    facade: _FakeFacade,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The all-future scope reaches every later occurrence."""
-    created = _series(facade, count=3)
-    st.session_state["test_tasks__edit_scope"] = "all-future"
-
-    error = _table.apply_inline_edit(
-        cast(CalDAVFacade, facade.caldav),
-        "test_tasks",
-        created.task,
-        TaskUpdate(title="Renamed"),
-    )
-
-    assert error is None
-    tasks = facade.caldav.list_series_tasks(created.series.uid)
-    titles = sorted(t.title for t in tasks)
-    assert titles == ["Pay rent", "Renamed", "Renamed", "Renamed"]

@@ -20,15 +20,26 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 import streamlit as st
 
-from genesis.entities import Contact, ContactUpdate, Project, ProjectStatus, ProjectUpdate, Task, TaskStatus, TaskUpdate
+from genesis.entities import (
+    Contact,
+    ContactUpdate,
+    Project,
+    ProjectStatus,
+    ProjectUpdate,
+    SeriesSummary,
+    Task,
+    TaskStatus,
+    TaskUpdate,
+    series_status,
+)
 from genesis.journal.facade import Entry
 from genesis.tz import to_local, to_utc
 from genesis.ui._render import (
-    EDIT_SCOPE_ALL_FUTURE,
-    EDIT_SCOPE_CURRENT,
-    delete_confirm_dialog,
     focus_create_dialog,
+    series_cancel_dialog,
+    series_edit_dialog,
     session_log_dialog,
+    task_delete_dialog,
     task_edit_dialog,
 )
 from genesis.ui._state import get_facade
@@ -163,10 +174,7 @@ def handle_task_action(label: str, task: Task, *, caldav: CalDAVFacade) -> None:
     elif label == "Log Session":
         session_log_dialog(task=task)
     elif label == "Delete":
-        delete_confirm_dialog(
-            f"task '{task.title}'",
-            lambda: caldav.delete_task(task.uid),
-        )
+        task_delete_dialog(caldav, task)
 
 
 def _parse_sort_key_entry(entry: tuple) -> tuple[str, Any, bool]:
@@ -297,10 +305,6 @@ def render_filterable_tasks_table(
     the cache-based stable sort (ADR-023). When provided, the table
     freezes its display order on first render, does not re-sort on
     inline edits, and shows a Re-sort button to force a refresh.
-
-    An explicit edit-scope control is rendered above the table
-    (ADR-033). Inline edits of a recurring task follow the selected
-    scope; the default is "this instance".
     """
     statuses_all = [s.value for s in TaskStatus]
     default = [s.value for s in (default_statuses or TaskStatus)]
@@ -327,85 +331,22 @@ def render_filterable_tasks_table(
     )
 
 
-def _render_edit_scope_control(key: str) -> None:
-    """Render the inline edit-scope control for recurring tasks.
-
-    An inline edit is an edit path, so it must not silently pick a
-    scope. The control is stored under ``f"{key}__edit_scope"`` and
-    read by the inline-edit handler.
-    """
-    scope_key = f"{key}__edit_scope"
-    st.selectbox(
-        "Inline edit scope",
-        options=[EDIT_SCOPE_CURRENT, EDIT_SCOPE_ALL_FUTURE],
-        key=scope_key,
-        format_func=lambda v: "This instance" if v == EDIT_SCOPE_CURRENT else "All future instances",
-        help="Applies inline edits of recurring tasks to this occurrence only, or to every later occurrence.",
-    )
-
-
-def _edit_scope(key: str) -> str:
-    """Return the inline edit scope selected for the table."""
-    scope = st.session_state.get(f"{key}__edit_scope", EDIT_SCOPE_CURRENT)
-    return scope if scope in (EDIT_SCOPE_CURRENT, EDIT_SCOPE_ALL_FUTURE) else EDIT_SCOPE_CURRENT
-
-
-def _without_status(update: TaskUpdate) -> TaskUpdate:
-    """Return the update without its status field.
-
-    A status change is a per-occurrence operation, so it never rides
-    along with a future-scope edit.
-    """
-    dump = update.model_dump(exclude_unset=True)
-    dump.pop("status", None)
-    return TaskUpdate(**dump)
-
-
-def plan_inline_edit(key: str, task: Task, update: TaskUpdate) -> tuple[str, TaskUpdate, TaskUpdate | None]:
-    """Decide how an inline edit is applied.
-
-    Returns ``(scope, content_update, status_update)``. The scope
-    comes from the table's explicit scope control; it only applies to
-    a task that belongs to a recurrence series. A status change is
-    always a per-occurrence operation, so in the all-future scope the
-    content goes to the later occurrences and the status to the
-    selected one.
-    """
-    scope = _edit_scope(key)
-    if scope != EDIT_SCOPE_ALL_FUTURE:
-        return scope, update, None
-    if not task.recurrence_series_uid:
-        # Not a recurrent task: the scope does not apply.
-        return EDIT_SCOPE_CURRENT, update, None
-    if update.status is None:
-        return scope, update, None
-    return scope, _without_status(update), TaskUpdate(status=update.status)
-
-
-def apply_inline_edit(
+def apply_inline_task_edit(
     caldav: CalDAVFacade,
-    key: str,
     task: Task,
     update: TaskUpdate,
 ) -> str | None:
-    """Apply an inline table edit and return an error message, if any.
+    """Apply one inline table edit and return an error message, if any.
 
-    The scope comes from the table's explicit scope control. An edit
-    the chosen scope rejects is *not* applied under another scope: the
-    error is returned so the caller can surface it, because silently
-    routing the edit to a different scope would apply a change the
-    user did not ask for.
+    An inline edit touches one task. When the task is an occurrence
+    of a series and the edit changes a series-owned field, the write
+    is refused by the domain layer: the error is returned so the
+    caller can surface it, and the edit is not applied at all.
     """
-    scope, content_update, status_update = plan_inline_edit(key, task, update)
-    if scope != EDIT_SCOPE_ALL_FUTURE:
-        caldav.update_task(task.uid, update)
-        return None
     try:
-        caldav.update_task_scoped(task.uid, content_update, scope=EDIT_SCOPE_ALL_FUTURE)
+        caldav.update_task(task.uid, update)
     except ValueError as exc:
         return str(exc)
-    if status_update is not None:
-        caldav.update_task(task.uid, status_update)
     return None
 
 
@@ -493,12 +434,6 @@ def render_tasks_table(
     if not tasks:
         st.info("No tasks to show.")
         return
-
-    # An inline edit of a recurring task needs an explicit scope, so
-    # the control is rendered whenever the table holds at least one
-    # occurrence of a series.
-    if any(t.recurrence_series_uid for t in tasks):
-        _render_edit_scope_control(key)
 
     if sort_keys is not None:
         sort_cache_key = f"{key}__sort"
@@ -647,14 +582,16 @@ def render_tasks_table(
 
             if not touched:
                 continue
-            # A status change is always a per-occurrence operation; the
-            # inline scope only governs the content columns.
-            error = apply_inline_edit(caldav, key, original, update)
+            # An inline edit touches one task. When the task is an
+            # occurrence of a series and the edit changes a
+            # series-owned field, the write is refused by the domain
+            # layer and the error is reported under the table.
+            error = apply_inline_task_edit(caldav, original, update)
             if error is not None:
-                # The chosen scope rejected the edit. The callback
-                # cannot render on the page, so the message is handed
-                # to the script body through the session state. The
-                # edit was not applied, so there is nothing to reward.
+                # The callback cannot render on the page, so the
+                # message is handed to the script body through the
+                # session state. The edit was not applied, so there
+                # is nothing to reward.
                 st.session_state[_INLINE_EDIT_ERROR_KEY] = error
                 continue
             # ADR-026: if the user just transitioned this task to
@@ -725,6 +662,87 @@ def render_tasks_table(
     # here, in the script body: st.switch_page inside the row-action
     # callback is a no-op and Streamlit warns about it.
     run_pending_page_switch()
+
+
+# -----------------------------------------------------------------------------
+# Recurrence series table
+# -----------------------------------------------------------------------------
+
+
+def render_recurrence_series_table(
+    summaries: list[SeriesSummary],
+    *,
+    key: str,
+) -> None:
+    """Render the read-only recurrence series table.
+
+    The table is the discovery surface of a series (ADR-033): it
+    lists every series with its rule, its anchor, its dates, its
+    materialized horizon, its next occurrence, and its status. It is
+    not an inline editor. The two row actions open the series form
+    and the series cancellation, so the user never has to find the
+    original task to stop a recurrence.
+    """
+    if not summaries:
+        st.info("No recurrence series.")
+        return
+
+    rows: list[dict] = []
+    for summary in summaries:
+        rows.append(
+            {
+                "uid": summary.uid,
+                "Title": summary.title,
+                "Repeats": f"{summary.frequency.value.capitalize()}, every {summary.interval}",
+                "Anchor": summary.anchor.value,
+                "Start": summary.start_date.isoformat(),
+                "End": summary.end_date.isoformat() if summary.end_date else "no end",
+                "Ready": summary.materialized_future_count,
+                "Next": summary.next_occurrence_date.isoformat() if summary.next_occurrence_date else "-",
+                "Current": summary.current_task_uid or "-",
+                "Status": series_status(summary),
+                "actions": ["Edit", "Cancel series"],
+            },
+        )
+    df = pd.DataFrame(rows)
+
+    action_key = f"{key}_action"
+    table_series = summaries
+
+    def _handle_action() -> None:
+        click = st.session_state.get(action_key)
+        if not click:
+            return
+        row_idx = click["row"]
+        label = click["label"]
+        if row_idx >= len(table_series):
+            return
+        target = table_series[row_idx]
+        if label == "Edit":
+            series_edit_dialog(target.uid)
+        elif label == "Cancel series":
+            series_cancel_dialog(target.uid, target.title)
+
+    column_config: dict = {
+        "uid": None,  # hidden
+        "Title": st.column_config.TextColumn("Title", width="large", disabled=True),
+        "Repeats": st.column_config.TextColumn("Repeats", disabled=True, width="small"),
+        "Anchor": st.column_config.TextColumn("Anchor", disabled=True, width="small"),
+        "Start": st.column_config.TextColumn("Start", disabled=True, width="small"),
+        "End": st.column_config.TextColumn("End", disabled=True, width="small"),
+        "Ready": st.column_config.NumberColumn("Ready", disabled=True, width="small"),
+        "Next": st.column_config.TextColumn("Next", disabled=True, width="small"),
+        "Current": st.column_config.TextColumn("Current", disabled=True, width="small"),
+        "Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
+        "actions": st.column_config.ButtonColumn("Actions", on_click=_handle_action, key=action_key),
+    }
+
+    st.data_editor(
+        df,
+        column_config=column_config,
+        hide_index=True,
+        key=key,
+    )
 
 
 # -----------------------------------------------------------------------------

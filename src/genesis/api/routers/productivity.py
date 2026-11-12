@@ -12,10 +12,10 @@ The Streamlit frontend does not call this router; it uses
 ``Facade`` directly.
 
 Recurrent tasks (ADR-033) add the recurrence payload to task
-creation, the ``scope`` field to task updates, a ``series_uid`` filter
-to the task list, and three endpoints: ``GET /recurrences/{uid}``,
-``PATCH /recurrences/{uid}`` (the materialized horizon), and
-``POST /tasks/{uid}/cancel-future``.
+creation, a ``series_uid`` filter to the task list, and four series
+endpoints: ``GET /recurrences``, ``GET /recurrences/{uid}``,
+``PATCH /recurrences/{uid}`` (the series edit), and
+``POST /recurrences/{uid}/cancel``.
 """
 
 from __future__ import annotations
@@ -34,11 +34,14 @@ from ...entities import (
     ProjectUpdate,
     RecurrenceAnchor,
     RecurrenceFrequency,
-    RecurrenceRuleUpdate,
+    SeriesSummary,
+    SeriesUpdate,
     TaskCreate,
     TaskStatus,
     TaskUpdate,
     TimeLogStatus,
+    occurrence_role,
+    series_status,
 )
 from ...journal.facade import Entry, EntryType
 from ...stats import Period as StatsPeriod
@@ -49,7 +52,7 @@ from ..schemas import (
     TASK_STATUS_TO_WIRE,
     ByCategoryOut,
     ByTaskOut,
-    CancelFutureOut,
+    CancelSeriesOut,
     DailyPointOut,
     FocusSessionLodgeIn,
     FocusSessionStartIn,
@@ -66,11 +69,11 @@ from ..schemas import (
     RecentSessionOut,
     RecurrenceAnchorWire,
     RecurrenceFrequencyWire,
-    RecurrenceRuleUpdateIn,
-    RecurrenceScope,
+    RecurrenceSeriesListOut,
     RecurrenceSeriesOut,
-    RecurrenceSeriesResizeOut,
+    RecurrenceSeriesSummaryOut,
     RecurrenceSeriesUpdateIn,
+    RecurrenceSeriesUpdateOut,
     RecurrenceTemplateOut,
     SeriesFutureOccurrenceOut,
     StatisticsOut,
@@ -254,10 +257,37 @@ def _task_recurrence_to_wire(task, series) -> TaskRecurrenceOut | None:
         interval=series.rule.interval,
         anchor=RecurrenceAnchorWire(series.rule.anchor.value),
         start_date=series.start_date,
+        end_date=series.end_date,
         occurrence_date=task.recurrence_occurrence,
         recurrence_index=task.recurrence_index,
         materialized_future_count=series.materialized_future_count,
         active=series.active,
+        role=occurrence_role(series, task),
+    )
+
+
+def _series_summary_to_wire(summary: SeriesSummary) -> RecurrenceSeriesSummaryOut:
+    """Build the wire row of one series summary."""
+    return RecurrenceSeriesSummaryOut(
+        uid=summary.uid,
+        title=summary.title,
+        project_id=summary.project_id,
+        frequency=RecurrenceFrequencyWire(summary.frequency.value),
+        interval=summary.interval,
+        anchor=RecurrenceAnchorWire(summary.anchor.value),
+        start_date=summary.start_date,
+        end_date=summary.end_date,
+        materialized_future_count=summary.materialized_future_count,
+        active=summary.active,
+        stop_reason=summary.stop_reason,
+        status=series_status(summary),
+        current_task_uid=summary.current_task_uid,
+        current_occurrence_date=summary.current_occurrence_date,
+        next_occurrence_date=summary.next_occurrence_date,
+        open_occurrence_count=summary.open_occurrence_count,
+        history_count=summary.history_count,
+        created=summary.created,
+        modified=summary.modified,
     )
 
 
@@ -618,6 +648,7 @@ def _create_recurrent_task(facade: Facade, body: TaskCreateIn, data: TaskCreate)
             interval=recurrence.interval,
             anchor=recurrence.anchor.value,
             materialized_future_count=recurrence.materialized_future_count,
+            end_date=recurrence.end_date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -685,26 +716,11 @@ def update_task(
         if body.status is not None:
             kwargs["status"] = wire_to_task_status(body.status)
 
-        scope = body.scope.value if body.scope is not None else RecurrenceScope.CURRENT.value
-        rule_change = _rule_change(body.recurrence)
-
-        if scope == RecurrenceScope.ALL_FUTURE.value:
-            return _update_task_all_future(facade, uid, kwargs, rule_change)
-
-        if rule_change is not None:
-            # A rule change re-anchors the future chain; it has no
-            # meaning for a single occurrence. Silently ignoring it
-            # would answer 200 for a request that did nothing.
-            raise HTTPException(
-                status_code=400,
-                detail="a recurrence rule change requires scope=all-future",
-            )
-
         if not kwargs:
-            out = _task_to_wire(existing)
-            out.scope = RecurrenceScope.CURRENT
-            out.affected_uids = [existing.uid]
-            return out
+            existing_series = (
+                facade.caldav.get_series(existing.recurrence_series_uid) if existing.recurrence_series_uid else None
+            )
+            return _task_to_wire(existing, existing_series)
 
         # Capture the completion intent BEFORE the caldav write so
         # we know whether to fire XP afterwards (ADR-026). The body
@@ -712,7 +728,13 @@ def update_task(
         # changed.
         completing = body.status is not None and wire_to_task_status(body.status) == TaskStatus.COMPLETED
 
-        task = facade.caldav.update_task(uid, TaskUpdate(**kwargs))
+        try:
+            task = facade.caldav.update_task(uid, TaskUpdate(**kwargs))
+        except ValueError as exc:
+            # The series owns the schedule of its occurrences: a write
+            # that changes a series-owned field of an occurrence is
+            # refused with 409 and the message names the series.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         if completing and task is not None and task.status == TaskStatus.COMPLETED:
             facade._fire_xp_safely(
@@ -722,76 +744,7 @@ def update_task(
             )
 
         series = facade.caldav.get_series(task.recurrence_series_uid) if task and task.recurrence_series_uid else None
-        out = _task_to_wire(task, series)
-        out.scope = RecurrenceScope.CURRENT
-        out.affected_uids = [task.uid] if task is not None else []
-        return out
-    finally:
-        facade.shutdown()
-
-
-def _rule_change(body: RecurrenceRuleUpdateIn | None) -> RecurrenceRuleUpdate | None:
-    """Translate the wire rule-change payload into the domain model."""
-    if body is None:
-        return None
-    return RecurrenceRuleUpdate(
-        frequency=RecurrenceFrequency(body.frequency.value) if body.frequency is not None else None,
-        interval=body.interval,
-        anchor=RecurrenceAnchor(body.anchor.value) if body.anchor is not None else None,
-    )
-
-
-def _update_task_all_future(
-    facade: Facade,
-    uid: str,
-    kwargs: dict[str, Any],
-    rule_change: RecurrenceRuleUpdate | None,
-) -> TaskOut:
-    """Apply an update to every future occurrence of the task's series."""
-    if not kwargs and rule_change is None:
-        raise HTTPException(status_code=400, detail="all-future scope requires at least one change")
-    try:
-        result = facade.caldav.update_task_scoped(
-            uid,
-            TaskUpdate(**kwargs),
-            scope="all-future",
-            rule_change=rule_change,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    series = facade.caldav.get_series(result.task.recurrence_series_uid) if result.task.recurrence_series_uid else None
-    out = _task_to_wire(result.task, series)
-    out.scope = RecurrenceScope.ALL_FUTURE
-    out.affected_uids = result.affected_uids
-    return out
-
-
-@router.post("/tasks/{uid}/cancel-future", response_model=CancelFutureOut)
-def cancel_task_future(
-    uid: str,
-    subject: Annotated[str, Depends(current_subject)],
-) -> CancelFutureOut:
-    """Cancel the future occurrences of a recurrent task's series.
-
-    The selected occurrence and the completed history stay untouched.
-    The action is idempotent.
-    """
-    facade = _facade(subject)
-    try:
-        task = facade.caldav.get_task(uid)
-        if task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
-        if not task.recurrence_series_uid:
-            raise HTTPException(status_code=400, detail="Task is not part of a recurrence series")
-        try:
-            result = facade.caldav.cancel_future(uid)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return CancelFutureOut(
-            series_uid=result.series_uid,
-            canceled_uids=result.canceled_uids,
-            active=result.active,
-        )
+        return _task_to_wire(task, series)
     finally:
         facade.shutdown()
 
@@ -799,6 +752,60 @@ def cancel_task_future(
 # ---------------------------------------------------------------------------
 # Recurrence series (ADR-033)
 # ---------------------------------------------------------------------------
+
+
+def _series_update_from_wire(body: RecurrenceSeriesUpdateIn) -> SeriesUpdate:
+    """Translate the wire series-update payload into the domain model.
+
+    A field that was not sent keeps the series' current value; a
+    nullable field that was explicitly sent as ``null`` clears it.
+    """
+    dump = body.model_dump(exclude_unset=True)
+    kwargs: dict[str, Any] = {}
+    if dump.get("frequency") is not None:
+        kwargs["frequency"] = RecurrenceFrequency(dump["frequency"].value)
+    if dump.get("interval") is not None:
+        kwargs["interval"] = dump["interval"]
+    if dump.get("anchor") is not None:
+        kwargs["anchor"] = RecurrenceAnchor(dump["anchor"].value)
+    if dump.get("start_date") is not None:
+        kwargs["start_date"] = dump["start_date"]
+    if "end_date" in dump:
+        kwargs["end_date"] = dump["end_date"]
+    if dump.get("clear_end_date"):
+        kwargs["clear_end_date"] = True
+    if "title" in dump:
+        kwargs["title"] = dump["title"]
+    if "description" in dump:
+        kwargs["description"] = dump["description"]
+    if "project_id" in dump:
+        kwargs["project_id"] = dump["project_id"]
+    if "priority" in dump:
+        kwargs["priority"] = dump["priority"]
+    if "duration_minutes" in dump:
+        kwargs["scheduled_duration"] = dump["duration_minutes"]
+    if dump.get("materialized_future_count") is not None:
+        kwargs["materialized_future_count"] = dump["materialized_future_count"]
+    return SeriesUpdate(**kwargs)
+
+
+@router.get("/recurrences", response_model=RecurrenceSeriesListOut)
+def list_recurrence_series(
+    subject: Annotated[str, Depends(current_subject)],
+) -> RecurrenceSeriesListOut:
+    """List every recurrence series.
+
+    The discovery path: an agent that knows nothing about the series
+    finds them here, with their rule, their dates, their horizon,
+    their status, and their next occurrence.
+    """
+    facade = _facade(subject)
+    try:
+        summaries = facade.caldav.list_series_summaries()
+        items = [_series_summary_to_wire(summary) for summary in summaries]
+        return RecurrenceSeriesListOut(items=items, total=len(items))
+    finally:
+        facade.shutdown()
 
 
 @router.get("/recurrences/{series_uid}", response_model=RecurrenceSeriesOut)
@@ -818,9 +825,12 @@ def read_recurrence_series(
             interval=state.interval,
             anchor=RecurrenceAnchorWire(state.anchor.value),
             start_date=state.start_date,
+            end_date=state.end_date,
             materialized_future_count=state.materialized_future_count,
             active=state.active,
+            stop_reason=state.stop_reason,
             current_task_uid=state.current_task_uid,
+            next_occurrence_date=state.next_occurrence_date,
             future_occurrences=[
                 SeriesFutureOccurrenceOut(
                     uid=occurrence.uid,
@@ -850,33 +860,71 @@ def read_recurrence_series(
         facade.shutdown()
 
 
-@router.patch("/recurrences/{series_uid}", response_model=RecurrenceSeriesResizeOut)
+@router.patch("/recurrences/{series_uid}", response_model=RecurrenceSeriesUpdateOut)
 def update_recurrence_series(
     series_uid: str,
     body: RecurrenceSeriesUpdateIn,
     subject: Annotated[str, Depends(current_subject)],
-) -> RecurrenceSeriesResizeOut:
-    """Change the materialized horizon of a running series.
+) -> RecurrenceSeriesUpdateOut:
+    """Apply a series edit.
 
-    Growing the horizon materializes the missing tail occurrences;
-    shrinking it cancels the farthest extra future occurrences. An
-    inactive series cannot be resized (409).
+    The series edit is the only way to change the schedule of a
+    recurrent task: it re-derives the open occurrences of the series
+    and never touches the completed history. Every field of the body
+    is optional; an unset field keeps the current value.
+
+    A cancelled series is final (409). An invalid anchor or an end
+    date before the start date is a 422.
+    """
+    facade = _facade(subject)
+    try:
+        series = facade.caldav.get_series(series_uid)
+        if series is None:
+            raise HTTPException(status_code=404, detail="Recurrence series not found")
+        if series.stop_reason == "cancelled":
+            raise HTTPException(status_code=409, detail="Recurrence series is cancelled and cannot be changed")
+        try:
+            result = facade.caldav.update_series(series_uid, _series_update_from_wire(body))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RecurrenceSeriesUpdateOut(
+            series_uid=result.series_uid,
+            active=result.active,
+            end_date=result.end_date,
+            materialized_future_count=result.materialized_future_count,
+            current_task_uid=result.current_task_uid,
+            next_occurrence_date=result.next_occurrence_date,
+            updated_task_uids=result.updated_task_uids,
+            created_task_uids=result.created_task_uids,
+            canceled_task_uids=result.canceled_task_uids,
+        )
+    finally:
+        facade.shutdown()
+
+
+@router.post("/recurrences/{series_uid}/cancel", response_model=CancelSeriesOut)
+def cancel_recurrence_series(
+    series_uid: str,
+    subject: Annotated[str, Depends(current_subject)],
+) -> CancelSeriesOut:
+    """Cancel a recurrence series.
+
+    Every open occurrence after the current one is cancelled; the
+    current occurrence and the completed history stay. The action is
+    idempotent.
     """
     facade = _facade(subject)
     try:
         if facade.caldav.get_series(series_uid) is None:
             raise HTTPException(status_code=404, detail="Recurrence series not found")
         try:
-            result = facade.caldav.resize_series(series_uid, body.materialized_future_count)
+            result = facade.caldav.cancel_series(series_uid)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return RecurrenceSeriesResizeOut(
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return CancelSeriesOut(
             series_uid=result.series_uid,
-            materialized_future_count=result.materialized_future_count,
-            current_task_uid=result.current_task_uid,
-            future_task_uids=result.future_task_uids,
-            created_task_uids=result.created_task_uids,
-            canceled_task_uids=result.canceled_task_uids,
+            canceled_uids=result.canceled_uids,
+            active=result.active,
         )
     finally:
         facade.shutdown()
@@ -886,11 +934,21 @@ def update_recurrence_series(
 def delete_task(
     uid: str,
     subject: Annotated[str, Depends(current_subject)],
+    cancel_series: Annotated[bool, Query()] = False,
 ) -> None:
+    """Delete one occurrence.
+
+    The occurrence is removed for good: the series keeps running and
+    its next occurrence stays scheduled. With ``cancel_series=true``
+    the series is cancelled in the same call.
+    """
     facade = _facade(subject)
     try:
-        if not facade.caldav.delete_task(uid):
+        existing = facade.caldav.get_task(uid)
+        if existing is None or not facade.caldav.delete_task(uid):
             raise HTTPException(status_code=404, detail="Task not found")
+        if cancel_series and existing.recurrence_series_uid:
+            facade.caldav.cancel_series(existing.recurrence_series_uid)
     finally:
         facade.shutdown()
 

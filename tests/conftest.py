@@ -203,6 +203,7 @@ def _build_mock_facade() -> object:
             interval=1,
             anchor,
             materialized_future_count=None,
+            end_date=None,
         ):
             """Create a recurrent task, resolving the global default.
 
@@ -224,7 +225,20 @@ def _build_mock_facade() -> object:
                 data,
                 rule=rule,
                 materialized_future_count=count,
+                end_date=end_date,
             )
+
+        def update_series(self, series_uid, changes):
+            """Apply a series edit (ADR-033)."""
+            return self.caldav.update_series(series_uid, changes)
+
+        def cancel_series(self, series_uid):
+            """Cancel a series (ADR-033)."""
+            return self.caldav.cancel_series(series_uid)
+
+        def list_series_summaries(self):
+            """Return the summary row of every recurrence series."""
+            return self.caldav.list_series_summaries()
 
         def complete_task(self, uid):
             from genesis.entities import TaskStatus, TaskUpdate

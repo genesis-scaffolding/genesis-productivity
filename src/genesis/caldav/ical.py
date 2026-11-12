@@ -249,10 +249,12 @@ _X_INTERVAL = "x-recurrence-interval"
 _X_ANCHOR = "x-recurrence-anchor"
 _X_START_DATE = "x-recurrence-start-date"
 _X_START_INDEX = "x-recurrence-start-index"
+_X_END_DATE = "x-recurrence-end-date"
 _X_FUTURE_COUNT = "x-recurrence-future-count"
 _X_HIGHEST_INDEX = "x-recurrence-highest-index"
 _X_CURRENT_INDEX = "x-recurrence-current-index"
 _X_ACTIVE = "x-recurrence-active"
+_X_STOP_REASON = "x-recurrence-stop-reason"
 _X_TEMPLATE = "x-recurrence-template"
 
 
@@ -300,6 +302,8 @@ def recurrence_series_from_ical(component: icalendar.Component) -> RecurrenceSer
         materialized_future_count=to_int(component.get(_X_FUTURE_COUNT)) or 1,
         highest_materialized_index=to_int(component.get(_X_HIGHEST_INDEX)) or 0,
         current_index=to_int(component.get(_X_CURRENT_INDEX)) or 0,
+        end_date=to_date(component.get(_X_END_DATE)),
+        stop_reason=to_str(component.get(_X_STOP_REASON)) or None,
         active=(to_str(component.get(_X_ACTIVE)) or "true").lower() != "false",
         created=to_datetime(component.get("created")),
         modified=to_datetime(component.get("last-modified")),
@@ -319,10 +323,14 @@ def recurrence_series_to_ical(series: RecurrenceSeries) -> icalendar.Component:
     component.add(_X_ANCHOR, series.rule.anchor.value)
     component.add(_X_START_DATE, series.start_date)
     component.add(_X_START_INDEX, series.start_index)
+    if series.end_date is not None:
+        component.add(_X_END_DATE, series.end_date)
     component.add(_X_FUTURE_COUNT, series.materialized_future_count)
     component.add(_X_HIGHEST_INDEX, series.highest_materialized_index)
     component.add(_X_CURRENT_INDEX, series.current_index)
     component.add(_X_ACTIVE, "true" if series.active else "false")
+    if series.stop_reason is not None:
+        component.add(_X_STOP_REASON, series.stop_reason)
     component.add(_X_TEMPLATE, series.template.model_dump_json())
     if series.created:
         component.add("created", series.created)
@@ -355,10 +363,12 @@ def populate_series(component: icalendar.Component, series: RecurrenceSeries) ->
         _X_ANCHOR,
         _X_START_DATE,
         _X_START_INDEX,
+        _X_END_DATE,
         _X_FUTURE_COUNT,
         _X_HIGHEST_INDEX,
         _X_CURRENT_INDEX,
         _X_ACTIVE,
+        _X_STOP_REASON,
         _X_TEMPLATE,
     ):
         set_or_delete(key, replacement.get(key))

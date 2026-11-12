@@ -89,11 +89,16 @@ def render_sessions_kpi(*, count: int, caption: str) -> None:
 # Task dialogs
 # -----------------------------------------------------------------------------
 
-EDIT_SCOPE_CURRENT = "current"
-"""Edit scope: only the selected occurrence."""
 
-EDIT_SCOPE_ALL_FUTURE = "all-future"
-"""Edit scope: the selected occurrence and every later one."""
+def series_summary_line(state) -> str:
+    """Return the read-only one-line summary of a series.
+
+    Example: ``Monthly, every 1 | next 2026-12-21 | series r-a1b2c3``.
+    """
+    if state is None:
+        return ""
+    next_date = state.next_occurrence_date.isoformat() if state.next_occurrence_date else "no next occurrence"
+    return f"{state.frequency.value.capitalize()}, every {state.interval} | next {next_date} | series {state.uid}"
 
 
 def default_materialized_future_count(facade) -> int:
@@ -321,7 +326,14 @@ def task_create_dialog(*, project_id: str | None = None) -> None:
 
 @st.dialog("Edit task", width="large", on_dismiss="rerun")
 def task_edit_dialog(uid: str) -> None:
-    """Open the edit-task dialog for the given task UID."""
+    """Open the edit-task dialog for the given task UID.
+
+    The dialog edits one occurrence. For an occurrence of a series the
+    five series-owned fields (the three dates, the duration, and the
+    project) are disabled: the series owns the schedule of its
+    occurrences, and the series edit is the only way to change it
+    (ADR-033).
+    """
     facade = get_facade()
     task = facade.caldav.get_task(uid)
     if task is None:
@@ -353,26 +365,15 @@ def task_edit_dialog(uid: str) -> None:
         key=f"{kp}_desc",
         height=100,
     )
-    project_label = st.selectbox("Project", project_labels, key=f"{kp}_proj", index=cur_idx)
+    project_label = st.selectbox(
+        "Project",
+        project_labels,
+        key=f"{kp}_proj",
+        index=cur_idx,
+        disabled=is_recurrent,
+    )
     project_uid = project_uids[project_labels.index(project_label)]
     from genesis.entities import TaskStatus
-
-    edit_scope = EDIT_SCOPE_CURRENT
-    if is_recurrent:
-        scope_labels = ["This instance", "All future instances"]
-        # The radio keeps its own key, so Streamlit restores the
-        # scope the user picked the last time this dialog was open.
-        scope_choice = st.radio(
-            "Applies to",
-            scope_labels,
-            index=0,
-            key=f"{kp}_scope_choice",
-            horizontal=True,
-            help="Edit this occurrence only, or every later occurrence of the series.",
-        )
-        edit_scope = EDIT_SCOPE_ALL_FUTURE if scope_choice == scope_labels[1] else EDIT_SCOPE_CURRENT
-        if edit_scope == EDIT_SCOPE_ALL_FUTURE:
-            st.caption("Status changes always apply to this instance only.")
 
     status_label = st.selectbox(
         "Status",
@@ -388,6 +389,11 @@ def task_edit_dialog(uid: str) -> None:
         key=f"{kp}_prio",
     )
 
+    if is_recurrent:
+        st.caption(
+            f"Schedule and project are set by the recurrence series {task.recurrence_series_uid}. "
+            "Edit the series to change them.",
+        )
 
     sched_cols = st.columns(2)
     with sched_cols[0]:
@@ -398,11 +404,13 @@ def task_edit_dialog(uid: str) -> None:
             key=f"{kp}_sch_d",
             label_visibility="collapsed",
             format="YYYY-MM-DD",
+            disabled=is_recurrent,
         )
         schedule_time = st.time_input(
             "schedule_time",
             value=(task.scheduled_start.astimezone().time() if task.scheduled_start else None),
             key=f"{kp}_sch_t",
+            disabled=is_recurrent,
         )
         scheduled_duration = st.number_input(
             "Duration (min)",
@@ -410,6 +418,7 @@ def task_edit_dialog(uid: str) -> None:
             max_value=480,
             value=task.scheduled_duration or 30,
             key=f"{kp}_dur",
+            disabled=is_recurrent,
         )
     with sched_cols[1]:
         st.caption("Hard deadline")
@@ -419,6 +428,7 @@ def task_edit_dialog(uid: str) -> None:
             key=f"{kp}_dl",
             label_visibility="collapsed",
             format="YYYY-MM-DD",
+            disabled=is_recurrent,
         )
         st.caption("Assigned")
         assigned_date = st.date_input(
@@ -427,6 +437,7 @@ def task_edit_dialog(uid: str) -> None:
             key=f"{kp}_assigned",
             label_visibility="collapsed",
             format="YYYY-MM-DD",
+            disabled=is_recurrent,
         )
 
     combined_scheduled: datetime | None = None
@@ -434,141 +445,214 @@ def task_edit_dialog(uid: str) -> None:
         combined_scheduled = datetime.combine(scheduled_start_date, schedule_time)
 
     if is_recurrent and series_state is not None:
-        _render_series_section(facade, series_state, kp, uid)
+        st.caption(series_summary_line(series_state))
+        st.caption("Manage the series in the Recurrence series table below the task list.")
 
     st.divider()
-    action_cols = st.columns([1, 1, 1, 6])
+    action_cols = st.columns([1, 1, 6])
     if action_cols[0].button("Save", type="primary", key=f"{kp}_save"):
         from genesis.entities import TaskUpdate
 
         new_status = TaskStatus(status_label)
-        # Build UTC datetimes from local-naive streamlit widgets.
-        combined_scheduled_utc = to_utc(combined_scheduled) if combined_scheduled else None
-        # Deadline is a date-only field; snap to 23:59:59 so two tasks
-        # with the same calendar date share the same stored datetime
-        # and sort ties break on the next level (priority).
-        hard_deadline_dt = datetime.combine(hard_deadline_date, time(23, 59, 59)) if hard_deadline_date else None
-        hard_deadline_utc = to_utc(hard_deadline_dt) if hard_deadline_dt else None
-
         update_kwargs: dict = {
             "title": title,
             "description": description or None,
-            "hard_deadline": hard_deadline_utc,
-            "assigned_date": assigned_date,
             "priority": priority,
             "status": new_status,
-            "project_id": project_uid,
-            "clear_project_id": (project_uid is None),
         }
-        if combined_scheduled_utc is None and task.scheduled_start is not None:
-            update_kwargs["clear_scheduled_start"] = True
-        elif combined_scheduled_utc is not None:
-            update_kwargs["scheduled_start"] = combined_scheduled_utc
-            update_kwargs["scheduled_duration"] = scheduled_duration
+        if not is_recurrent:
+            # The schedule and the project belong to the series of an
+            # occurrence: they are not part of an occurrence edit.
+            # Build UTC datetimes from local-naive streamlit widgets.
+            combined_scheduled_utc = to_utc(combined_scheduled) if combined_scheduled else None
+            # Deadline is a date-only field; snap to 23:59:59 so two tasks
+            # with the same calendar date share the same stored datetime
+            # and sort ties break on the next level (priority).
+            hard_deadline_dt = datetime.combine(hard_deadline_date, time(23, 59, 59)) if hard_deadline_date else None
+            update_kwargs["hard_deadline"] = to_utc(hard_deadline_dt) if hard_deadline_dt else None
+            update_kwargs["assigned_date"] = assigned_date
+            update_kwargs["project_id"] = project_uid
+            update_kwargs["clear_project_id"] = project_uid is None
+            if combined_scheduled_utc is None and task.scheduled_start is not None:
+                update_kwargs["clear_scheduled_start"] = True
+            elif combined_scheduled_utc is not None:
+                update_kwargs["scheduled_start"] = combined_scheduled_utc
+                update_kwargs["scheduled_duration"] = scheduled_duration
 
-        if edit_scope == EDIT_SCOPE_ALL_FUTURE:
-            # The status is a per-occurrence operation: it never rides
-            # along with a future-scope edit.
-            status_value = update_kwargs.pop("status")
-            try:
-                result = facade.caldav.update_task_scoped(
-                    uid,
-                    TaskUpdate(**update_kwargs),
-                    scope=EDIT_SCOPE_ALL_FUTURE,
-                )
-            except ValueError as exc:
-                st.error(str(exc))
-                return
-            if status_value != task.status:
-                facade.caldav.update_task(uid, TaskUpdate(status=status_value))
-            st.toast(f"Updated {len(result.affected_uids)} future occurrences")
-        elif is_recurrent:
-            # The scope is explicit even when it is the current
-            # occurrence, so the same operation serves both scopes.
-            facade.caldav.update_task_scoped(uid, TaskUpdate(**update_kwargs), scope=EDIT_SCOPE_CURRENT)
-            st.toast("Task updated")
-        else:
+        try:
             facade.caldav.update_task(uid, TaskUpdate(**update_kwargs))
-            st.toast("Task updated")
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        st.toast("Task updated")
         st.rerun()
     if action_cols[1].button("Cancel", key=f"{kp}_cancel"):
         st.rerun()
-    if action_cols[2].button("Delete", key=f"{kp}_del"):
-        facade.caldav.delete_task(uid)
-        st.toast("Task deleted")
-        st.rerun()
 
 
-def _render_series_section(facade, series_state, kp: str, uid: str) -> None:
-    """Render the series inspection, horizon control, and cancel action.
+@st.dialog("Edit series", width="large", on_dismiss="rerun")
+def series_edit_dialog(series_uid: str) -> None:
+    """Open the series form for the given series UID.
 
-    The section shows the rule, the effective number of materialized
-    future occurrences, the current occurrence, and the ordered future
-    occurrences. The horizon can be changed on the running series;
-    shrinking it cancels the farthest extra future occurrences and asks
-    for a confirmation first.
+    The form is the only place where the schedule of a recurrent task
+    is changed (ADR-033). It edits the rule, the anchor, the start and
+    end dates, the content template, and the materialized horizon. The
+    change is applied to the open occurrences of the series; the
+    completed history is never rewritten.
     """
-    st.divider()
-    st.subheader("Series")
-    st.caption(
-        f"{series_state.frequency.value.capitalize()} every {series_state.interval} "
-        f"| {series_state.materialized_future_count} ahead "
-        f"| series {series_state.uid}"
-        f"{'' if series_state.active else ' | cancelled'}",
-    )
-    st.write(f"Current occurrence: {series_state.current_task_uid or '(none)'}")
-    with st.expander(f"Future occurrences ({len(series_state.future_occurrences)})"):
-        if series_state.future_occurrences:
-            for occurrence in series_state.future_occurrences:
-                st.write(f"{occurrence.occurrence_date} - {occurrence.uid}")
-        else:
-            st.write("(none)")
+    facade = get_facade()
+    state = facade.caldav.get_series_state(series_uid)
+    if state is None:
+        st.error("Recurrence series not found")
+        if st.button("Close", key=f"sed_close_{series_uid}"):
+            st.rerun()
+        return
 
-    horizon = int(
-        st.number_input(
-            "Future occurrences to keep ready",
+    kp = _form_key("sed", series_uid)
+    projects = facade.caldav.list_projects()
+    project_labels = ["(none)"] + [p.name for p in projects]
+    project_uids: list[str | None] = [None] + [p.uid for p in projects]
+    project_idx = project_uids.index(state.template.project_id) if state.template.project_id in project_uids else 0
+    st.session_state.pop(f"{kp}_proj", None)
+
+    with st.form(f"{kp}_form"):
+        ftitle = st.text_input("Title", value=state.template.title, key=f"{kp}_title")
+        fdescription = st.text_area(
+            "Description",
+            value=state.template.description or "",
+            key=f"{kp}_desc",
+            height=100,
+        )
+        fproject_label = st.selectbox("Project", project_labels, index=project_idx, key=f"{kp}_proj")
+        fpriority = st.number_input(
+            "Priority",
             min_value=1,
-            max_value=100,
-            value=series_state.materialized_future_count,
-            key=f"{kp}_horizon",
-            disabled=not series_state.active,
+            max_value=9,
+            value=state.template.priority or 5,
+            key=f"{kp}_prio",
         )
-    )
-    shrinking = horizon < series_state.materialized_future_count
-    confirmed = True
-    if shrinking:
-        confirmed = st.checkbox(
-            f"Cancel the {series_state.materialized_future_count - horizon} farthest future occurrences",
-            key=f"{kp}_horizon_confirm",
-        )
-        st.caption("The current occurrence and the completed history are kept.")
-    if st.button(
-        "Apply horizon",
-        key=f"{kp}_horizon_apply",
-        disabled=not confirmed or horizon == series_state.materialized_future_count,
-    ):
-        result = facade.caldav.resize_series(series_state.uid, horizon)
-        st.toast(
-            f"Horizon set to {result.materialized_future_count} "
-            f"({len(result.created_task_uids)} created, {len(result.canceled_task_uids)} cancelled)",
-        )
-        st.rerun()
 
-    st.caption(
-        "Cancel the future to stop the renewal: every occurrence after this one is "
-        "cancelled. The current occurrence and the completed history stay.",
+        rule_cols = st.columns(3)
+        with rule_cols[0]:
+            ffrequency = st.selectbox(
+                "Repeats",
+                [f.value for f in RecurrenceFrequency],
+                index=[f.value for f in RecurrenceFrequency].index(state.frequency.value),
+                key=f"{kp}_freq",
+            )
+        with rule_cols[1]:
+            finterval = int(
+                st.number_input(
+                    "Every (units)",
+                    min_value=1,
+                    max_value=52,
+                    value=state.interval,
+                    key=f"{kp}_interval",
+                    help="1 means every day / week / month / year.",
+                ),
+            )
+        with rule_cols[2]:
+            fanchor = st.selectbox(
+                "Anchor",
+                [a.value for a in RecurrenceAnchor],
+                index=[a.value for a in RecurrenceAnchor].index(state.anchor.value),
+                key=f"{kp}_anchor",
+                help="The date field the recurrence is measured from.",
+            )
+
+        date_cols = st.columns(2)
+        with date_cols[0]:
+            fstart = st.date_input(
+                "Start date",
+                value=state.start_date,
+                key=f"{kp}_start",
+                format="YYYY-MM-DD",
+            )
+        with date_cols[1]:
+            no_end = st.checkbox(
+                "No end date",
+                value=state.end_date is None,
+                key=f"{kp}_no_end",
+                help="The series renews forever when it has no end date.",
+            )
+            fend = st.date_input(
+                "End date",
+                value=state.end_date or state.start_date,
+                key=f"{kp}_end",
+                format="YYYY-MM-DD",
+                disabled=no_end,
+            )
+
+        fhorizon = int(
+            st.number_input(
+                "Future occurrences to keep ready",
+                min_value=1,
+                max_value=100,
+                value=state.materialized_future_count,
+                key=f"{kp}_horizon",
+                help="How many future occurrences stay materialized ahead of the current one.",
+            ),
+        )
+
+        st.caption(
+            f"Saving applies the schedule and the details to the {fhorizon + 1} open "
+            "occurrences of this series. Completed history is not changed.",
+        )
+
+        save_clicked = st.form_submit_button("Save", type="primary", icon=":material/save:")
+        cancel_clicked = st.form_submit_button("Cancel", type="tertiary")
+
+    if cancel_clicked:
+        st.rerun()
+    if not save_clicked:
+        return
+
+    from genesis.entities import SeriesUpdate
+
+    changes = SeriesUpdate(
+        frequency=RecurrenceFrequency(ffrequency),
+        interval=finterval,
+        anchor=RecurrenceAnchor(fanchor),
+        start_date=fstart,
+        end_date=None if no_end else fend,
+        clear_end_date=no_end,
+        title=ftitle,
+        description=fdescription or None,
+        project_id=project_uids[project_labels.index(fproject_label)],
+        priority=fpriority,
+        materialized_future_count=fhorizon,
     )
-    cancel_confirmed = st.checkbox(
-        "I understand that all future occurrences are cancelled",
-        key=f"{kp}_cancel_future_confirm",
+    try:
+        result = facade.update_series(series_uid, changes)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+    st.toast(
+        f"Series updated: {len(result.updated_task_uids)} occurrences rewritten, "
+        f"{len(result.created_task_uids)} created, {len(result.canceled_task_uids)} cancelled",
     )
-    if st.button(
-        "Cancel future",
-        key=f"{kp}_cancel_future",
-        disabled=not cancel_confirmed or not series_state.active,
-    ):
-        result = facade.caldav.cancel_future(uid)
+    st.rerun()
+
+
+@st.dialog("Cancel series", on_dismiss="rerun")
+def series_cancel_dialog(series_uid: str, series_title: str) -> None:
+    """Ask for a confirmation, then cancel the series.
+
+    The cancellation is reachable from the series table itself: the
+    user never has to find the original task to stop a recurrence
+    (ADR-033).
+    """
+    facade = get_facade()
+    st.write(
+        f"Cancel the series **{series_title}**? Every open occurrence after the current one is cancelled. "
+        "The current occurrence and the completed history stay.",
+    )
+    cols = st.columns(2)
+    if cols[0].button("Cancel series", type="primary", key=f"scd_confirm_{series_uid}"):
+        result = facade.cancel_series(series_uid)
         st.toast(f"Cancelled {len(result.canceled_uids)} future occurrences")
+        st.rerun()
+    if cols[1].button("Keep series", key=f"scd_keep_{series_uid}"):
         st.rerun()
 
 
@@ -944,19 +1028,73 @@ def _journal_create_dialog_body(*, default_type: str, default_task_id: str | Non
 
 
 @st.dialog("Confirm delete", on_dismiss="rerun")
-def delete_confirm_dialog(label: str, callback: Callable[[], Any]) -> None:
+def delete_confirm_dialog(
+    label: str,
+    callback: Callable[[], Any],
+    *,
+    consequence: str | None = None,
+    series_callback: Callable[[], Any] | None = None,
+    series_label: str = "Also cancel the recurrence series",
+    series_help: str | None = None,
+) -> None:
     """Open the delete-confirmation dialog. Call from a button body.
 
     ``label`` is the human-readable name of the thing being deleted.
     ``callback`` runs on confirmation.
+
+    ``consequence`` replaces the default warning: an occurrence of a
+    series states what the deletion does to the series. When
+    ``series_callback`` is given, the dialog offers the series
+    cancellation as an explicit option in the same dialog.
     """
-    st.write(f"Delete **{label}**? This cannot be undone.")
+    if consequence is None:
+        st.write(f"Delete **{label}**? This cannot be undone.")
+    else:
+        st.write(f"Delete **{label}**? {consequence}")
+    cancel_series = False
+    if series_callback is not None:
+        cancel_series = st.checkbox(series_label, help=series_help)
     cols = st.columns(2)
     if cols[0].button("Delete", type="primary", key=f"delcfm_{label}"):
         callback()
+        if cancel_series and series_callback is not None:
+            series_callback()
         st.rerun()
     if cols[1].button("Cancel", key=f"delcn_{label}"):
         st.rerun()
+
+
+def task_delete_dialog(caldav, task: Task) -> None:
+    """Open the delete confirmation for one task.
+
+    An occurrence of a series states the consequence: the occurrence
+    is removed for good, the series keeps running, and the series
+    cancellation is offered in the same dialog (ADR-033).
+    """
+    if task.recurrence_series_uid:
+        state = caldav.get_series_state(task.recurrence_series_uid)
+        is_current = state is not None and state.current_task_uid == task.uid
+        if is_current:
+            consequence = (
+                "This occurrence is removed for good. The next occurrence of the series becomes the current one."
+            )
+        else:
+            consequence = (
+                "This occurrence is removed for good. The series keeps running and its next occurrence stays scheduled."
+            )
+        delete_confirm_dialog(
+            f"task '{task.title}'",
+            lambda: caldav.delete_task(task.uid),
+            consequence=consequence,
+            series_callback=lambda: caldav.cancel_series(task.recurrence_series_uid or ""),
+            series_label="Also cancel the recurrence series",
+            series_help="No more occurrences; the current occurrence and the completed history stay.",
+        )
+        return
+    delete_confirm_dialog(
+        f"task '{task.title}'",
+        lambda: caldav.delete_task(task.uid),
+    )
 
 
 # -----------------------------------------------------------------------------

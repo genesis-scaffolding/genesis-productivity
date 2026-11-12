@@ -1,5 +1,12 @@
 # 033. Recurrent tasks as materialized series instances
 
+> Revised in plan round 3 (2026-11-11). The edit-scope mechanism of
+> the first revision (sections 4, 6, and 7 of the original text) is
+> replaced. A recurrent task now has two separate editing surfaces:
+> the individual occurrence and the series. The series lives in its own
+> table on the tasks page, is edited through a form, and is the only
+> place where the recurrence is cancelled.
+
 ## Context
 
 Genesis has no recurrence support today. A task is one VTODO with one
@@ -12,16 +19,37 @@ The feature needs four first-class behaviors:
 
 1. A recurrent task can be created from the Streamlit UI and from the
    FastAPI API.
-2. An edit can target only the selected occurrence or all later
-   occurrences in the series.
-3. The future can be cancelled without deleting completed history.
-4. Both the UI and the API expose the same scope and cancellation
-   operations.
+2. The schedule of a recurrent task is changed on the series, not on
+   the individual occurrences.
+3. The future can be cancelled without deleting completed history, and
+   the cancellation must be discoverable without hunting for the
+   original task.
+4. Both the UI and the API expose the same series operations, so a
+   human and an agent can make the same adjustment.
 
 The number of future occurrences kept ready must also be configurable.
 The initial default is one, but the same model must support keeping
 four or another practical number of future tasks visible without
 changing the recurrence architecture.
+
+The first implementation of this ADR put the choice between "this
+occurrence" and "all later occurrences" into the task edit dialog and
+into the task table as an inline scope dropdown. Using it as a user
+exposed four problems:
+
+- The inline scope dropdown was not understandable. It changed the
+  meaning of every inline edit in the table based on a control the
+  user had to notice and understand first.
+- Deleting a materialized occurrence made it disappear and then come
+  back on the next refresh, because the series immediately materialized
+  a replacement with the same title.
+- Editing the dates, the times, or the project of a future occurrence
+  stuck, even though the series rule said otherwise. The series and
+  the occurrence then disagreed with each other.
+- Cancelling the recurrence required finding the original task,
+  opening its edit dialog, and finding the cancel button inside it.
+  When the original task had scrolled out of the list, the series was
+  effectively uncancellable.
 
 The existing task model and query machinery make the design constraints
 specific:
@@ -71,10 +99,12 @@ stores:
 
 - the recurrence rule;
 - the anchor field and first occurrence date;
+- the optional end date of the series;
 - the template for future occurrences;
 - the number of future occurrences to keep materialized;
 - the highest occurrence index materialized so far;
-- whether the series is active;
+- the index of the current occurrence;
+- whether the series is active, and why it stopped;
 - created and modified timestamps.
 
 The series record is stored in a new isolated CalDAV collection named
@@ -93,9 +123,10 @@ metadata. The task instances use `X-RECURRENCE-SERIES-ID`,
 `X-RECURRENCE-OCCURRENCE`, and `X-RECURRENCE-INDEX`. The series
 record carries `X-RECURRENCE-FREQUENCY`, `X-RECURRENCE-INTERVAL`,
 `X-RECURRENCE-ANCHOR`, `X-RECURRENCE-START-DATE`,
-`X-RECURRENCE-FUTURE-COUNT`, `X-RECURRENCE-HIGHEST-INDEX`,
-`X-RECURRENCE-CURRENT-INDEX`, and `X-RECURRENCE-ACTIVE`, plus one
-JSON property holding the future template. We do not write an RFC 5545
+`X-RECURRENCE-END-DATE`, `X-RECURRENCE-FUTURE-COUNT`,
+`X-RECURRENCE-HIGHEST-INDEX`, `X-RECURRENCE-CURRENT-INDEX`,
+`X-RECURRENCE-ACTIVE`, `X-RECURRENCE-STOP-REASON`, plus one JSON
+property holding the future template. We do not write an RFC 5545
 `RRULE`. The series is an application construct with materialized
 occurrences, not a single iCalendar recurrence set.
 
@@ -119,10 +150,14 @@ time keeps its local wall-clock time and is converted back to UTC, so a
 daylight-saving transition does not move the task to a different local
 time.
 
-The rule has no count or end date in v1. The explicit "cancel future"
-operation ends a series. Weekday lists, month-position rules, and
-exception dates are deferred rather than implied by a partly understood
-RRULE string.
+The series has an optional end date. An occurrence is only materialized
+when its date is on or before the end date. When the next occurrence
+would fall after the end date, the series finishes: it stops renewing
+and no further occurrence is created. The end date is optional because
+an open-ended series is the common case.
+
+Weekday lists, month-position rules, and exception dates are deferred
+rather than implied by a partly understood RRULE string.
 
 ### 3. A configurable materialization horizon
 
@@ -149,7 +184,8 @@ window. Decreasing N keeps the current occurrence and the nearest
 future occurrences and marks the farthest extra future occurrences
 `CANCELED`; it does not delete them. Shrinking and later expanding the
 series does not resurrect cancelled occurrence indexes. It creates later
-occurrences instead.
+occurrences instead. The end date caps the window: a series whose end
+date leaves room for two more occurrences keeps two, not N.
 
 Creating a recurrent task creates the series, the current occurrence,
 and N future occurrences. Future occurrences are real tasks with real
@@ -161,8 +197,9 @@ When the current occurrence becomes terminal (`COMPLETED` or
 `CANCELED`), the earliest remaining open future occurrence becomes the
 current occurrence and the facade materializes enough new occurrences
 at the tail to restore N open futures. A deleted current occurrence is
-treated as a skipped occurrence. Reopening a completed occurrence does
-not rewind the already materialized chain.
+treated as a skipped occurrence: the next open occurrence is promoted.
+Reopening a completed occurrence does not rewind the already
+materialized chain.
 
 Renewal is driven by the Genesis create/update path, not by a background
 scheduler. Materialization uses the logical identity
@@ -189,103 +226,142 @@ implemented in this round and stays open. A direct third-party CalDAV
 client that edits a task's status without going through the Genesis
 facade is outside the supported recurrence contract.
 
-### 4. Edit scope
+### 4. Two editing surfaces: the occurrence and the series
 
-A task update has an explicit scope:
+A recurrent task is edited in two places, and the two places never mix.
 
-- `current`: update only the task UID in the request path. For a
-  recurrent task, this is a one-occurrence edit.
-- `all-future`: update every materialized open occurrence strictly
-  after the selected occurrence, plus the series template used for
-  later unmaterialized occurrences. When the selected occurrence is
-  current, this is the complete N-occurrence future window. The
-  selected occurrence is not changed. Completed and cancelled
-  occurrences are never changed.
+**The occurrence edit** changes one materialized instance. It may change
+the instance's own content (`title`, `description`, `priority`) and its
+lifecycle (`status`). It may not change the fields the series owns:
 
-`PATCH /productivity/tasks/{uid}` keeps its existing path and defaults
-to `current`, so existing clients remain compatible. The wire request
-gains an optional `scope` value. The response identifies the applied
-scope and the UIDs that were affected.
+- `assigned_date`
+- `hard_deadline`
+- `scheduled_start`
+- `scheduled_duration`
+- `project_id`
 
-A future-scope edit can change the content, schedule, priority, project,
-and recurrence rule. It applies the change to every affected
-materialized future task and to the template for later unmaterialized
-occurrences. Instance lifecycle status remains a per-occurrence
-operation. A future-scope request that tries to change status is
-rejected rather than silently completing or cancelling several
-occurrences. A rule change only has a meaning for the future chain,
-so a request that carries one with the `current` scope is rejected
-instead of being answered with a change that did nothing.
+Those five fields are *series-owned*: the series materializes them from
+its own anchor, its own rule, and its own template. An attempt to
+change one of them on an occurrence is refused with an error that names
+the series and points at the series surface. A write that leaves the
+value unchanged is not a change and is accepted, so a client may send
+a full object without being rejected.
 
-Changing the rule or anchor in future scope re-anchors the future
-chain and recomputes every affected future row. The chain keeps its
-anchor date and shifts it by the day delta the edit applied to the
-anchored field, so the monthly clamping day of the series is
-preserved: a January 31 series stays on the 31st. A field the edit
-did not touch keeps its offset. Changing the anchored *field* (rather
-than its value) re-anchors the chain at the selected occurrence and
-recomputes the offsets from it, whether or not the selected
-occurrence is the chain anchor. The current occurrence and any
-completed history are never moved or rewritten, and the occurrence
-indexes stay stable so the deterministic occurrence UIDs keep
-pointing at the same logical occurrences.
+**The series edit** changes the series itself. It is the only way to
+change a schedule. The series form edits the anchor, the start date,
+the optional end date, the frequency, the interval, the content
+template (title, description, project, priority, duration), and the
+materialized horizon. Saving a series edit:
 
-A current-only edit does not alter the future task or the series
-template. This is the key distinction from editing a recurring master
-in place.
+- re-derives the schedule of every *open* occurrence of the series from
+  the new rule and the new start date;
+- rewrites the content template of the series and applies it to every
+  open occurrence;
+- cancels the open occurrences that fall after a shortened end date;
+- grows or shrinks the materialized window;
+- never rewrites a completed or cancelled occurrence. History is
+  immutable.
 
-### 5. Cancelling the future
+Changing the anchored *field* re-anchors the chain on the current
+occurrence and recomputes the offsets from it. The occurrence indexes
+stay stable, so the deterministic occurrence UIDs keep pointing at the
+same logical occurrences.
 
-`POST /productivity/tasks/{uid}/cancel-future` is the explicit series
-cancellation action. It:
+The series edit does not carry a scope. There is no "this occurrence
+versus all later occurrences" choice anywhere in the product. The
+series edit applies to the open occurrences of the series, which is the
+set the user can see in the series table.
 
-1. finds the series containing the selected task;
-2. marks every materialized open occurrence strictly after the selected
-   occurrence `CANCELED` (all N futures when invoked on the current
-   occurrence);
-3. deactivates the series so no replacement future is created; and
-4. leaves the selected current occurrence and all completed history
-   unchanged.
+### 5. Deleting a materialized occurrence
+
+Deleting an occurrence of an active series removes that occurrence for
+good. The occurrence index is not reused, and the window is not
+immediately refilled, so the deleted row does not come back on the next
+refresh. The series keeps its rule and renews as usual: the horizon is
+one smaller until the current occurrence completes and the window is
+restored.
+
+When the deleted occurrence is the current one, the series treats it as
+a skipped occurrence and promotes the next open occurrence.
+
+Deleting an occurrence never cancels the series. The UI states this
+before the deletion and offers the series cancellation as an explicit
+option in the same dialog. The API exposes the same choice through an
+optional `cancel_series` parameter on the task delete.
+
+### 6. Cancelling a series
+
+The series is the unit of cancellation. The cancellation is addressed
+by the series UID, not by the UID of one of its occurrences, so it does
+not require finding a particular task first. It:
+
+1. marks every materialized open occurrence after the current one
+   `CANCELED` (all N futures of a healthy series);
+2. deactivates the series so no replacement future is created; and
+3. leaves the current occurrence and all completed history unchanged.
 
 The action is idempotent. It returns the series UID, all cancelled task
 UIDs, and the resulting inactive series state so a human or agent can
 confirm what happened.
 
+A cancelled series is final. Its rule, its schedule, and its horizon
+are frozen: a series update on a cancelled series is refused. The user
+who wants a different recurrence creates a new series.
+
+A series that reaches its end date, or whose occurrences are all
+terminal, *finishes* instead of being cancelled. A finished series can
+be updated again: extending or removing its end date, or changing its
+rule, reactivates it and materializes the missing occurrences.
+
 The existing `DELETE /productivity/tasks/{uid}` keeps its current
 meaning: it deletes the selected occurrence. It is not a substitute for
-"cancel future" and does not erase completed history.
+the series cancellation and does not erase completed history.
 
-### 6. API shape
+### 7. API shape
 
 The public API changes are additive:
 
 - `POST /productivity/tasks` accepts an optional `recurrence` object.
-  The recurrence object may include
-  `materialized_future_count`; when omitted, the server resolves the
+  The recurrence object may include `materialized_future_count` and
+  `end_date`; when the count is omitted, the server resolves the
   global default. A normal task request is unchanged. A recurrent
   request returns the current occurrence; the returned recurrence
-  metadata includes the series UID and effective count.
+  metadata includes the series UID and the effective count.
 - `GET /productivity/tasks` accepts an optional `series_uid` filter so
   an agent can read the current occurrence, N future occurrences, and
   history as one series.
+- `GET /productivity/recurrences` lists every series with its rule, its
+  dates, its horizon, its status, its current occurrence, and its next
+  occurrence date. This is the discovery path: an agent that knows
+  nothing about the series can find them here.
 - `GET /productivity/recurrences/{series_uid}` returns the series
-  inspection state: rule, effective N, current task UID, ordered future
-  task UIDs, template, and active state.
-- `PATCH /productivity/recurrences/{series_uid}` accepts a new
-  `materialized_future_count` for a running series. The response
-  reports the effective count and the task UIDs created or cancelled
-  while resizing the window. Resizing an inactive series returns 409.
-- `PATCH /productivity/tasks/{uid}` accepts `scope=current` (default)
-  or `scope=all-future`. The response reports the scope and every
-  affected future UID.
-- `POST /productivity/tasks/{uid}/cancel-future` cancels the complete
-  future window and stops renewal.
+  inspection state: rule, start and end date, effective N, current task
+  UID, ordered future task UIDs, template, and active state.
+- `PATCH /productivity/recurrences/{series_uid}` updates the series:
+  rule, anchor, start date, end date, content template, and
+  `materialized_future_count`. The response reports the effective
+  values and the task UIDs that were created, cancelled, or rewritten
+  while applying the change. An update on a cancelled series returns
+  409.
+- `POST /productivity/recurrences/{series_uid}/cancel` cancels the
+  series. It is idempotent.
+- `PATCH /productivity/tasks/{uid}` edits one occurrence. It refuses a
+  change to a series-owned field with 409 and names the series.
+- `DELETE /productivity/tasks/{uid}` deletes one occurrence. The
+  optional `cancel_series` parameter also cancels the series.
 - `TaskOut` gains an optional `recurrence` object, including the
-  effective count, occurrence date, and occurrence index. Existing task
-  responses and clients that ignore unknown optional fields remain
-  valid.
+  effective count, the occurrence date, the occurrence index, the
+  series end date, and the role of the occurrence in the series
+  (`current`, `future`, or `history`). Existing task responses and
+  clients that ignore unknown optional fields remain valid.
 
-### 7. UI behavior
+There is no `scope` parameter on a task update. The first revision of
+this ADR introduced one, together with a rule-change payload on the
+task update. Both are removed: they mixed the series edit into the
+occurrence edit, which is the confusion this revision removes. The
+recurrence API was never released, so no client depends on them.
+
+### 8. UI behavior
 
 The Streamlit UI mirrors the API contract:
 
@@ -294,36 +370,36 @@ The Streamlit UI mirrors the API contract:
   interval, anchor, and "future occurrences to keep ready". The count
   defaults to the global setting and can be overridden for this
   series. It rejects creation when the selected anchor date is absent.
-- The edit-task dialog shows an explicit "This instance" versus "All
-  future instances" choice for a recurrent task and dispatches to the
-  matching scoped operation. A status change is a per-occurrence
-  operation: in the all-future scope it is applied to the selected
-  occurrence on its own.
-- The recurrent edit dialog includes a series inspection section with
-  the rule, effective N, current occurrence, and ordered future
-  occurrences. A number input changes N on the running series.
-  Increasing N materializes more rows immediately. Decreasing N asks
-  for confirmation because the farthest extra futures are cancelled.
-- The recurrent edit dialog has a confirmed "Cancel future" action.
-  Its confirmation states that the current occurrence and completed
-  history remain. The action is relative to the selected occurrence:
-  it cancels every materialized open occurrence after it and stops
-  the renewal.
-- The shared task table has an edit-scope control for recurring tasks.
-  Inline content, date, priority, and project edits use that scope;
-  status changes remain current-occurrence operations. An inline edit
-  the chosen scope rejects is reported to the user; it is never
-  applied under a different scope.
-- The task table shows the recurrence rule, effective N, and series
-  UID. It also labels each row as current, a numbered future in the N-
-  occurrence window, or history. For N greater than 1, all N future
-  rows are visible as ordinary task rows.
+- The tasks page shows a *recurrence series table* underneath the task
+  table. It lists every series: title, rule, anchor, start date, end
+  date, materialized horizon, current occurrence, next occurrence
+  date, and status. The table is read-only. It is not an inline
+  editor.
+- The series table has two row actions. "Edit" opens the series form.
+  "Cancel series" opens a confirmation and then cancels the series.
+  The cancellation is reachable from the tasks page itself; the user
+  never has to find the original task.
+- The series form is a form: title, description, project, priority,
+  anchor, frequency, interval, start date, end date (with an explicit
+  "no end date" toggle), and the materialized horizon. It states, before
+  saving, that the change is applied to every open occurrence of the
+  series and that completed history is not touched.
+- The edit-task dialog of an occurrence edits that occurrence only.
+  There is no scope choice. The series-owned fields are disabled in the
+  dialog and carry a caption naming the series that owns them. The
+  dialog shows a read-only summary of the series and points at the
+  series table; it holds no series controls and no cancel button.
+- The shared task table labels each row with the recurrence rule, the
+  materialized horizon, the series UID, and the role of the row in the
+  series: current, a numbered future in the window, or history. An
+  inline edit that touches a series-owned field of an occurrence is
+  refused and reported under the table; the edit is never applied.
 - Settings shows the global default count and its YAML/environment
   override. It remains a read-only configuration surface, consistent
   with the existing ntfy setting. Per-series horizon changes are
-  runtime-adjustable in the task UI and API.
+  runtime-adjustable in the series form and the API.
 
-### 8. Shadows, projects, and backups
+### 9. Shadows, projects, and backups
 
 Each materialized occurrence follows the existing shadow VEVENT
 lifecycle. A scheduled future therefore appears on the Calendar page.
@@ -336,14 +412,19 @@ the series of its occurrences before the cascade cancels them, so no
 replacement occurrence is materialized over cancelled work. Deleting a
 project only unlinks its tasks; the series stays active, but the
 project link is cleared from the series templates too, so the next
-materialized occurrence is not created with a dangling project id.
+materialized occurrence is not created with a dangling project id. The
+project cascade writes the occurrences directly and is not blocked by
+the series-owned field rule: it keeps the occurrences and the template
+consistent with each other.
 The backup manifest gains an optional recurrence-series count; raw
 backup and restore continue to use the existing literal CalDAV
 archive format.
 
 ## Status
 
-Accepted.
+Accepted. Revised in round 3: the edit scope is replaced by a separate
+series surface, the series gains an optional end date, and the
+cancellation is addressed by series.
 
 ## Consequences
 
@@ -353,12 +434,18 @@ Positive:
   completion timestamp, and dates. Existing list, completion-history,
   dashboard, project, focus, and calendar code continues to operate on
   ordinary task records.
-- Editing one occurrence and editing the future are separate, explicit
-  operations. There is no hidden mutation of an RRULE master.
+- The schedule of a recurrent task has exactly one owner. The series
+  materializes the dates, the times, and the project; an occurrence
+  owns its content and its lifecycle. The two can no longer disagree.
+- The series is a visible object with its own table. Finding it, and
+  cancelling it, does not depend on the position of a task in a list.
+- The rule of a series, its dates, and its horizon are changed in one
+  place, through one form, with a stated effect on the open
+  occurrences.
 - Cancelling the future is a single action that leaves completed
   history intact.
-- The API and UI expose the same scope vocabulary and cancellation
-  semantics, so an agent and a human can make the same adjustment.
+- The API and UI expose the same series operations, so an agent and a
+  human can make the same adjustment.
 - The rolling N-occurrence horizon replaces unbounded manual cloning
   while letting a series keep four or another practical number of
   future obligations ready.
@@ -369,12 +456,12 @@ Negative:
   occurrences are not one atomic Radicale transaction. The recurrence
   operations must be idempotent and use compensating cleanup when
   creation fails part-way through.
-- Concurrent completion or future-update requests need locking or
+- Concurrent completion or series-update requests need locking or
   occurrence-level idempotency checks. Two writers must not
   materialize the same occurrence twice. This round implements the
   occurrence-level part (the deterministic UID and the logical-index
-  check); a per-series lock and an ETag-protected series update are
-  not implemented yet.
+  check); a per-series mutation lock and an ETag-protected series
+  update are not implemented yet.
 - Materialized occurrences consume more storage than one recurring
   VTODO. The rolling horizon limits this to current, N futures, and
   retained history. A larger N multiplies the number of CalDAV writes
@@ -382,15 +469,18 @@ Negative:
 - Other CalDAV clients see individual occurrences, not a native
   recurrence set. This is deliberate: they still get valid tasks and
   dates, but they do not expand the rule themselves.
+- A series edit rewrites the open occurrences. An individual content
+  edit of an open occurrence is lost when the series content is edited
+  afterwards. The series form states this before saving. Per-field
+  instance overrides are not implemented.
 - Existing manually cloned tasks are not inferred or migrated. A task
   becomes recurrent only when the user or agent creates it with a
   recurrence rule or explicitly converts it in a later feature.
 
 Neutral:
 
-- The API gains optional fields and scope-aware task and series
-  endpoints, but existing create, read, current-scope update, and delete
-  requests keep their meaning.
+- The API gains optional fields and series endpoints, but existing
+  create, read, update, and delete requests keep their meaning.
 - The separate `recurrences` collection increases the number of fixed
   CalDAV collections from five to six.
 - The recurrence model does not add a dependency. The supported rule
@@ -400,5 +490,6 @@ Neutral:
   exception to ADR-016's random UID generation and keeps the same
   `t-` plus six-character base36 public shape.
 - The standard `genesis` CLI lives in a different repository. It must
-  be extended separately to expose the new API fields, scope choice, and
-  cancellation action to agents that use the CLI rather than raw HTTP.
+  be extended separately to expose the new API fields, the series
+  endpoints, and the cancellation action to agents that use the CLI
+  rather than raw HTTP.

@@ -710,6 +710,30 @@ def render_tasks_table(
 # -----------------------------------------------------------------------------
 
 
+def _sort_series_summaries(summaries: list[SeriesSummary]) -> list[SeriesSummary]:
+    """Order the series summaries for the series table.
+
+    The active series come first: they are the ones that still
+    produce work, and they are what the user came to see. The
+    stopped ones (cancelled, finished, inactive) follow.
+
+    Inside a group the order is the next occurrence date, then the
+    title, then the UID. The next date puts the series that is due
+    first at the top; the title and the UID break the ties, so the
+    table is the same on every render.
+    """
+
+    def _sort_key(summary: SeriesSummary) -> tuple[int, date, str, str]:
+        return (
+            0 if summary.active else 1,
+            summary.next_occurrence_date or date.max,
+            summary.title.casefold(),
+            summary.uid,
+        )
+
+    return sorted(summaries, key=_sort_key)
+
+
 def render_recurrence_series_table(
     summaries: list[SeriesSummary],
     *,
@@ -723,13 +747,19 @@ def render_recurrence_series_table(
     not an inline editor. The two row actions open the series form
     and the series cancellation, so the user never has to find the
     original task to stop a recurrence.
+
+    The active series are listed first, then the stopped ones. Inside
+    a group the order is the next occurrence date, then the title,
+    then the UID.
     """
     if not summaries:
         st.info("No recurrence series.")
         return
 
+    ordered = _sort_series_summaries(summaries)
+
     rows: list[dict] = []
-    for summary in summaries:
+    for summary in ordered:
         rows.append(
             {
                 "uid": summary.uid,
@@ -748,7 +778,7 @@ def render_recurrence_series_table(
     df = pd.DataFrame(rows)
 
     action_key = f"{key}_action"
-    table_series = summaries
+    table_series = ordered
 
     def _handle_action() -> None:
         click = st.session_state.get(action_key)

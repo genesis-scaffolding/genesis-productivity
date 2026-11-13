@@ -127,10 +127,15 @@ def facade(monkeypatch: pytest.MonkeyPatch) -> _FakeFacade:
     return fake
 
 
-def _series(facade: _FakeFacade, count: int = 4, title: str = "Pay rent"):
+def _series(
+    facade: _FakeFacade,
+    count: int = 4,
+    title: str = "Pay rent",
+    assigned_date: date = date(2026, 1, 31),
+):
     """Create a recurrent task and return the creation result."""
     return facade.caldav.create_recurrent_task(
-        TaskCreate(title=title, assigned_date=date(2026, 1, 31)),
+        TaskCreate(title=title, assigned_date=assigned_date),
         rule=RecurrenceRule(
             frequency=RecurrenceFrequency.MONTHLY,
             interval=1,
@@ -429,6 +434,46 @@ def test_the_series_table_is_empty_without_a_series(
     at.run()
     assert not at.exception, f"tasks page raised: {at.exception}"
     assert "No recurrence series." in _texts(at)
+
+
+def test_the_series_table_lists_the_active_series_first(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The active series come first, the stopped ones follow.
+
+    The series that still produce work are what the user came to see.
+    """
+    stopped = _series(facade, count=2, title="Pay rent")
+    facade.caldav.cancel_series(stopped.series.uid)
+    _series(facade, count=2, title="Pay health insurance")
+    at = AppTest.from_file(TASKS_APP)
+    at.run()
+    assert not at.exception, f"tasks page raised: {at.exception}"
+
+    table = next(frame for frame in at.dataframe if frame.key == "global_series")
+    assert list(table.value["Title"]) == ["Pay health insurance", "Pay rent"]
+    assert list(table.value["Status"]) == ["Active", "Cancelled"]
+
+
+def test_the_series_table_orders_the_series_by_the_next_occurrence(
+    facade: _FakeFacade,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inside a group the series that is due first come first.
+
+    The order is the next occurrence date, then the title, then the
+    UID, so the table is the same on every render.
+    """
+    _series(facade, count=2, title="Later", assigned_date=date(2026, 6, 30))
+    _series(facade, count=2, title="Sooner", assigned_date=date(2026, 1, 31))
+    at = AppTest.from_file(TASKS_APP)
+    at.run()
+    assert not at.exception, f"tasks page raised: {at.exception}"
+
+    table = next(frame for frame in at.dataframe if frame.key == "global_series")
+    assert list(table.value["Title"]) == ["Sooner", "Later"]
+    assert list(table.value["Next"]) == ["2026-02-28", "2026-07-30"]
 
 
 # ---------------------------------------------------------------------------

@@ -53,6 +53,12 @@ class Task(BaseModel):
         completed_at: When the task was completed (UTC).
         created: When the task was created.
         modified: When the task was last modified.
+        recurrence_series_uid: UID of the recurrence series this task
+            belongs to, or None for an ordinary task (ADR-033).
+        recurrence_occurrence: The local calendar date of this
+            occurrence, or None for an ordinary task.
+        recurrence_index: The zero-based occurrence number within the
+            series, or None for an ordinary task.
     """
 
     uid: str
@@ -68,6 +74,9 @@ class Task(BaseModel):
     completed_at: datetime | None = None
     created: datetime | None = None
     modified: datetime | None = None
+    recurrence_series_uid: str | None = None
+    recurrence_occurrence: date | None = None
+    recurrence_index: int | None = None
 
     model_config = {"extra": "ignore"}
 
@@ -87,7 +96,14 @@ class Task(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    """Data for creating a new task."""
+    """Data for creating a new task.
+
+    The recurrence metadata (``recurrence_series_uid``,
+    ``recurrence_occurrence``, ``recurrence_index``) is not part of
+    this model: the recurrence layer builds the occurrences of a
+    series itself, with deterministic UIDs and their own occurrence
+    metadata.
+    """
 
     title: str
     description: str | None = None

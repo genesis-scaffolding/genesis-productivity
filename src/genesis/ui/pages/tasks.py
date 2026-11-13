@@ -20,8 +20,10 @@ from genesis.tz import format_local
 from genesis.ui._render import (
     delete_confirm_dialog,
     journal_create_dialog,
+    series_summary_line,
     status_badge,
     task_create_dialog,
+    task_delete_dialog,
     task_edit_dialog,
 )
 from genesis.ui._state import get_facade
@@ -29,6 +31,7 @@ from genesis.ui._table import (
     TASK_TABLE_DEFAULT_SORT_KEYS,
     render_filterable_tasks_table,
     render_journal_table,
+    render_recurrence_series_table,
     request_journal_entry,
 )
 
@@ -58,6 +61,15 @@ def _render_list() -> None:
         filter_key="tasks_filter_statuses",
         default_statuses=[TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS],
         sort_keys=TASK_TABLE_DEFAULT_SORT_KEYS,
+    )
+
+    # The recurrence series table sits directly under the task table:
+    # it is where a series is found, edited, and cancelled (ADR-033).
+    st.divider()
+    st.subheader("Recurrence series")
+    render_recurrence_series_table(
+        facade.list_series_summaries(),
+        key="global_series",
     )
 
 
@@ -90,6 +102,26 @@ def _render_metadata(task: Task) -> None:
         with cols[index % 4]:
             st.caption(label)
             st.write(value)
+
+
+def _render_recurrence(task: Task) -> None:
+    """Render the read-only recurrence summary of a task.
+
+    The series is managed in the Recurrence series table under the
+    task list; the detail view only reports where the series is
+    (ADR-033).
+    """
+    if not task.recurrence_series_uid:
+        return
+    state = caldav.get_series_state(task.recurrence_series_uid)
+    if state is None:
+        st.caption(f"Recurrence series {task.recurrence_series_uid} (no longer available)")
+        return
+    st.subheader("Recurrence")
+    st.caption(series_summary_line(state))
+    st.write(f"This occurrence: {task.recurrence_occurrence} (index {task.recurrence_index})")
+    st.write(f"Current occurrence: {state.current_task_uid or '(none)'}")
+    st.caption("Manage the series in the Recurrence series table below the task list.")
 
 
 def _render_journal_section(uid: str) -> None:
@@ -148,14 +180,15 @@ def _render_detail(uid: str) -> None:
         if st.button("Edit", key="td_edit"):
             task_edit_dialog(uid)
         if st.button("Delete", key="td_del"):
-            delete_confirm_dialog(
-                f"task '{task.title}'",
-                lambda: caldav.delete_task(uid),
-            )
+            task_delete_dialog(caldav, task)
 
     st.write("")
 
     _render_metadata(task)
+
+    st.write("")
+
+    _render_recurrence(task)
 
     st.write("")
 

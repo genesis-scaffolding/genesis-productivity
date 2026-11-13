@@ -14,6 +14,9 @@ holds without spinning up Streamlit. Covers:
   silently skipped (deleted task);
 - a combined add-and-remove scenario keeps cached positions stable
   and appends the new task.
+
+It also covers the row identity signature (ADR-034), the pure helper
+that binds the editor widget to the rows it was rendered with.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from genesis.entities import Task, TaskStatus
 from genesis.ui._table import (
     TASK_TABLE_DEFAULT_SORT_KEYS,
     _apply_cached_sort,
+    _row_identity_signature,
 )
 
 _DATETIME_MAX_UTC = datetime.max.replace(tzinfo=UTC)
@@ -336,3 +340,42 @@ def test_default_sort_keys_none_defaults(field: str, expected: object) -> None:
             assert entry[1] == expected
             return
     raise AssertionError(f"{field!r} not in TASK_TABLE_DEFAULT_SORT_KEYS")
+
+
+# ---------------------------------------------------------------------------
+# Row identity (ADR-034)
+# ---------------------------------------------------------------------------
+
+
+def test_the_row_identity_signature_is_deterministic() -> None:
+    """The same rows always give the same signature."""
+    uids = ["t-a", "t-b", "t-c"]
+
+    assert _row_identity_signature(uids) == _row_identity_signature(uids)
+
+
+def test_the_row_identity_signature_follows_the_order() -> None:
+    """A re-sort changes the signature, so the widget is replaced."""
+    assert _row_identity_signature(["t-a", "t-b"]) != _row_identity_signature(["t-b", "t-a"])
+
+
+def test_the_row_identity_signature_follows_the_rows() -> None:
+    """An added, a removed, and a replaced row change the signature.
+
+    The series case: the row count stays the same, but the row that
+    occupies a slot is another task.
+    """
+    base = _row_identity_signature(["t-a", "t-b", "t-c"])
+
+    assert _row_identity_signature(["t-a", "t-b", "t-c", "t-d"]) != base
+    assert _row_identity_signature(["t-a", "t-b"]) != base
+    assert _row_identity_signature(["t-a", "t-b", "t-d"]) != base
+
+
+def test_the_row_identity_signature_is_short_and_stable_in_length() -> None:
+    """The signature goes into a widget key, so it stays short."""
+    signature = _row_identity_signature(["t-a", "t-b", "t-c"])
+
+    assert len(signature) == 12
+    assert signature == signature.strip()
+    assert " " not in signature

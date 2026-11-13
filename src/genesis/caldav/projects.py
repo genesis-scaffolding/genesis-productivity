@@ -175,10 +175,17 @@ def update_project(facade: CalDAVFacade, uid: str, data: ProjectUpdate) -> Proje
     obj.save()
 
     if update_data.get("status") in (ProjectStatus.CANCELED, ProjectStatus.COMPLETED):
+        from . import recurrence as _recurrence
         from . import tasks as _tasks
 
         cascade_status = update_data["status"]
-        for task in _tasks.list_tasks(facade, project_id=uid):
+        project_tasks = _tasks.list_tasks(facade, project_id=uid)
+        # Deactivate the recurrence series of the project first: the
+        # cascade cancels the occurrences, and a live series would
+        # otherwise renew itself over cancelled work (ADR-033).
+        for series_uid in {t.recurrence_series_uid for t in project_tasks if t.recurrence_series_uid}:
+            _recurrence.deactivate_series(_recurrence.CalDAVRecurrenceStore(facade), series_uid)
+        for task in project_tasks:
             if task.status in (TaskStatus.NEEDS_ACTION, TaskStatus.IN_PROGRESS):
                 _tasks.update_task(facade, task.uid, TaskUpdate(status=cascade_status))
 
@@ -188,8 +195,11 @@ def update_project(facade: CalDAVFacade, uid: str, data: ProjectUpdate) -> Proje
 def delete_project(facade: CalDAVFacade, uid: str) -> bool:
     """Delete a project.
 
-    Clears project_id from any tasks that reference this project, then
-    removes the project itself.
+    Clears project_id from any tasks that reference this project and
+    from the template of every recurrence series that points at it,
+    then removes the project itself. Without the template cleanup the
+    next materialized occurrence of such a series would be created
+    with a dangling project id (ADR-033).
     """
     try:
         obj = _get_calendar(facade).object_by_uid(uid)
@@ -199,9 +209,11 @@ def delete_project(facade: CalDAVFacade, uid: str) -> bool:
         return False
 
     # Clear project_id on linked tasks before removing the project itself.
+    from . import recurrence as _recurrence
     from . import tasks as _tasks
 
     _tasks._clear_project_id_on_tasks(facade, uid)
+    _recurrence.clear_series_project(_recurrence.CalDAVRecurrenceStore(facade), uid)
 
     obj.delete()
     return True

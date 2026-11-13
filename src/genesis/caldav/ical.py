@@ -9,10 +9,16 @@ These functions are pure: they do not talk to the network. Callers fetch
 the icalendar component from a caldav object, call `*_from_ical` to get
 an entity, mutate, then call `*_to_ical` to write the mutation back to
 the component before calling save().
+
+The recurrence series of ADR-033 lives here too: the series record is a
+VTODO in the isolated ``recurrences`` collection, and the task
+occurrences carry their series UID, occurrence date, and occurrence
+index as ``X-`` properties.
 """
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import string
 from datetime import UTC, date, datetime
@@ -26,6 +32,11 @@ from ..entities import (
     EventStatus,
     Project,
     ProjectStatus,
+    RecurrenceAnchor,
+    RecurrenceFrequency,
+    RecurrenceRule,
+    RecurrenceSeries,
+    RecurrenceTemplate,
     Task,
     TaskStatus,
     TimeLogEntry,
@@ -180,6 +191,9 @@ def task_from_ical(component: icalendar.Component) -> Task:
         completed_at=to_datetime(component.get("completed")),
         created=to_datetime(component.get("created")),
         modified=to_datetime(component.get("last-modified")),
+        recurrence_series_uid=to_str(component.get("x-recurrence-series-id")) or None,
+        recurrence_occurrence=to_date(component.get("x-recurrence-occurrence")),
+        recurrence_index=to_int(component.get("x-recurrence-index")),
     )
 
 
@@ -210,7 +224,154 @@ def task_to_ical(task: Task) -> icalendar.Component:
         component.add("created", task.created)
     if task.modified:
         component.add("last-modified", task.modified)
+    if task.recurrence_series_uid:
+        component.add("x-recurrence-series-id", task.recurrence_series_uid)
+    if task.recurrence_occurrence:
+        component.add("x-recurrence-occurrence", task.recurrence_occurrence)
+    if task.recurrence_index is not None:
+        component.add("x-recurrence-index", task.recurrence_index)
     return component
+
+
+# -----------------------------------------------------------------------------
+# Recurrence series (ADR-033)
+# -----------------------------------------------------------------------------
+#
+# A series is stored as a VTODO in the isolated ``recurrences``
+# collection. It is never returned as a user task. The template is
+# carried as one JSON property: the template has a dozen fields and
+# flattening them into individual X- properties would double the
+# serialization surface for no gain.
+
+_X_SERIES_ID = "x-recurrence-series-id"
+_X_FREQUENCY = "x-recurrence-frequency"
+_X_INTERVAL = "x-recurrence-interval"
+_X_ANCHOR = "x-recurrence-anchor"
+_X_START_DATE = "x-recurrence-start-date"
+_X_START_INDEX = "x-recurrence-start-index"
+_X_END_DATE = "x-recurrence-end-date"
+_X_FUTURE_COUNT = "x-recurrence-future-count"
+_X_HIGHEST_INDEX = "x-recurrence-highest-index"
+_X_CURRENT_INDEX = "x-recurrence-current-index"
+_X_ACTIVE = "x-recurrence-active"
+_X_STOP_REASON = "x-recurrence-stop-reason"
+_X_TEMPLATE = "x-recurrence-template"
+
+
+def recurrence_series_from_ical(component: icalendar.Component) -> RecurrenceSeries:
+    """Build a RecurrenceSeries entity from a VTODO ical component.
+
+    Raises:
+        ValueError: When a required recurrence property is missing or
+            malformed.
+    """
+    uid = to_str(component.get("uid"))
+    if uid is None:
+        raise ValueError("recurrence series VTODO is missing UID")
+    frequency_raw = to_str(component.get(_X_FREQUENCY))
+    anchor_raw = to_str(component.get(_X_ANCHOR))
+    start_date = to_date(component.get(_X_START_DATE))
+    if frequency_raw is None:
+        raise ValueError(f"recurrence series {uid} is missing {_X_FREQUENCY.upper()}")
+    if anchor_raw is None:
+        raise ValueError(f"recurrence series {uid} is missing {_X_ANCHOR.upper()}")
+    if start_date is None:
+        raise ValueError(f"recurrence series {uid} is missing {_X_START_DATE.upper()}")
+    template_raw = to_str(component.get(_X_TEMPLATE))
+    if template_raw is None:
+        raise ValueError(f"recurrence series {uid} is missing {_X_TEMPLATE.upper()}")
+    try:
+        template = RecurrenceTemplate.model_validate_json(template_raw)
+    except Exception as exc:
+        raise ValueError(f"recurrence series {uid} has an invalid template: {exc}") from exc
+    try:
+        frequency = RecurrenceFrequency(frequency_raw)
+        anchor = RecurrenceAnchor(anchor_raw)
+    except ValueError as exc:
+        raise ValueError(f"recurrence series {uid} has an invalid rule: {exc}") from exc
+    return RecurrenceSeries(
+        uid=uid,
+        rule=RecurrenceRule(
+            frequency=frequency,
+            interval=to_int(component.get(_X_INTERVAL)) or 1,
+            anchor=anchor,
+        ),
+        start_date=start_date,
+        start_index=to_int(component.get(_X_START_INDEX)) or 0,
+        template=template,
+        materialized_future_count=to_int(component.get(_X_FUTURE_COUNT)) or 1,
+        highest_materialized_index=to_int(component.get(_X_HIGHEST_INDEX)) or 0,
+        current_index=to_int(component.get(_X_CURRENT_INDEX)) or 0,
+        end_date=to_date(component.get(_X_END_DATE)),
+        stop_reason=to_str(component.get(_X_STOP_REASON)) or None,
+        active=(to_str(component.get(_X_ACTIVE)) or "true").lower() != "false",
+        created=to_datetime(component.get("created")),
+        modified=to_datetime(component.get("last-modified")),
+    )
+
+
+def recurrence_series_to_ical(series: RecurrenceSeries) -> icalendar.Component:
+    """Build a VTODO ical component from a RecurrenceSeries entity."""
+    component = icalendar.Todo()
+    component.add("uid", series.uid)
+    component.add("summary", series.template.title)
+    component.add("dtstamp", series.modified or now_utc())
+    component.add("status", TaskStatus.NEEDS_ACTION.value)
+    component.add(_X_SERIES_ID, series.uid)
+    component.add(_X_FREQUENCY, series.rule.frequency.value)
+    component.add(_X_INTERVAL, series.rule.interval)
+    component.add(_X_ANCHOR, series.rule.anchor.value)
+    component.add(_X_START_DATE, series.start_date)
+    component.add(_X_START_INDEX, series.start_index)
+    if series.end_date is not None:
+        component.add(_X_END_DATE, series.end_date)
+    component.add(_X_FUTURE_COUNT, series.materialized_future_count)
+    component.add(_X_HIGHEST_INDEX, series.highest_materialized_index)
+    component.add(_X_CURRENT_INDEX, series.current_index)
+    component.add(_X_ACTIVE, "true" if series.active else "false")
+    if series.stop_reason is not None:
+        component.add(_X_STOP_REASON, series.stop_reason)
+    component.add(_X_TEMPLATE, series.template.model_dump_json())
+    if series.created:
+        component.add("created", series.created)
+    if series.modified:
+        component.add("last-modified", series.modified)
+    return component
+
+
+def populate_series(component: icalendar.Component, series: RecurrenceSeries) -> None:
+    """Apply series fields to an existing icalendar Component in place.
+
+    DTSTAMP, CREATED, and LAST-MODIFIED are intentionally not managed
+    here; the CalDAV server is responsible for setting them on PUT.
+    """
+    replacement = recurrence_series_to_ical(series)
+
+    def set_or_delete(key: str, value: object) -> None:
+        if key in component:
+            del component[key]
+        if value is not None:
+            component.add(key, value)
+
+    for key in (
+        "uid",
+        "summary",
+        "status",
+        _X_SERIES_ID,
+        _X_FREQUENCY,
+        _X_INTERVAL,
+        _X_ANCHOR,
+        _X_START_DATE,
+        _X_START_INDEX,
+        _X_END_DATE,
+        _X_FUTURE_COUNT,
+        _X_HIGHEST_INDEX,
+        _X_CURRENT_INDEX,
+        _X_ACTIVE,
+        _X_STOP_REASON,
+        _X_TEMPLATE,
+    ):
+        set_or_delete(key, replacement.get(key))
 
 
 # -----------------------------------------------------------------------------
@@ -429,3 +590,22 @@ def new_uid(prefix: str) -> str:
     """
     tail = "".join(secrets.choice(_ALPHABET) for _ in range(_TAIL_LENGTH))
     return f"{prefix}-{tail}"
+
+
+def recurrence_occurrence_uid(series_uid: str, index: int) -> str:
+    """Return the deterministic UID of one recurrence occurrence.
+
+    The logical identity of an occurrence is ``(series_uid,
+    recurrence_index)`` (ADR-033). Deriving the public UID from that
+    identity keeps ADR-016's ``t-`` plus six-character base36 shape
+    while turning the UID into a get-or-create key: a retried or
+    concurrent writer addresses the same CalDAV resource instead of
+    creating a second object for one logical occurrence.
+    """
+    digest = hashlib.sha256(f"{series_uid}:{index}".encode()).digest()
+    value = int.from_bytes(digest[:8], "big")
+    tail = ""
+    for _ in range(_TAIL_LENGTH):
+        tail = _ALPHABET[value % len(_ALPHABET)] + tail
+        value //= len(_ALPHABET)
+    return f"t-{tail}"

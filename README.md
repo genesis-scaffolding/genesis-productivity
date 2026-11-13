@@ -75,6 +75,62 @@ the freshly-written rights file.
 
 See ADR-019 for the full story.
 
+## Recurrent tasks
+
+A recurrent task is a series of ordinary tasks. The current
+occurrence renews itself: the next occurrence appears by itself, so
+"Pay rent" no longer needs four manually cloned tasks. See ADR-033.
+
+- **Create**: the task dialog has a "Recurring task" switch with the
+  frequency, the interval, the anchor date field, and "Future
+  occurrences to keep ready" (the materialized horizon, default 1).
+- **Series table**: the tasks page shows a "Recurrence series" table
+  under the task list. It is read-only and lists every series with
+  its rule, its anchor, its start and end date, its horizon, its
+  current occurrence, its next occurrence, and its status. The two
+  row actions are "Edit" (the series form) and "Cancel series".
+- **Series form**: the form edits the rule, the anchor, the start
+  date, the optional end date, the content template, and the
+  materialized horizon. Saving applies the change to the open
+  occurrences of the series; the completed history is never
+  rewritten.
+- **Ownership**: the series owns the schedule of its occurrences
+  (the assigned date, the deadline, the scheduled start and its
+  duration, and the project). Those fields are read-only on an
+  occurrence: a write that changes one is refused with a message
+  that names the series. An occurrence owns its own title,
+  description, priority, and status.
+- **Cancel series**: the series table cancels a series without
+  finding the original task. Every open occurrence after the current
+  one is cancelled; the current occurrence and the completed history
+  stay.
+- **Delete**: deleting an occurrence removes it for good. The series
+  keeps running and its next occurrence stays scheduled. The delete
+  confirmation offers the series cancellation as an option.
+- **Horizon**: the number of future occurrences kept ready can be
+  changed per series. The global default for new series lives in
+  `configs.yaml`:
+
+```yaml
+recurrence:
+  default_materialized_future_count: 1
+```
+
+  or in the environment as
+  `GENESIS__RECURRENCE__DEFAULT_MATERIALIZED_FUTURE_COUNT`. Changing
+  the global default affects new series only; existing series keep
+  their own count and can be resized from the series form or the API.
+
+The API mirrors the same operations:
+`POST /productivity/tasks` with a `recurrence` object (with an
+optional `end_date`),
+`GET /productivity/tasks?series_uid=...`,
+`GET /productivity/recurrences`,
+`GET /productivity/recurrences/{series_uid}`,
+`PATCH /productivity/recurrences/{series_uid}` (the series edit),
+`POST /productivity/recurrences/{series_uid}/cancel`, and
+`DELETE /productivity/tasks/{uid}?cancel_series=true`.
+
 ## Focus session notifications
 
 Focus session timing (countdown auto-stop and 30-minute milestone

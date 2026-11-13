@@ -44,6 +44,10 @@ DEFAULT_CACHE_HOME = Path.home() / ".cache"
 DEFAULT_NTFY_URL = "http://p3:8092"
 DEFAULT_NTFY_TOPIC_HOST = "localhost"
 
+# Recurrent-task defaults. ADR-033.
+DEFAULT_MATERIALIZED_FUTURE_COUNT = 1
+"""Default number of future occurrences kept materialized per series."""
+
 
 # -----------------------------------------------------------------------------
 # Pydantic models
@@ -141,6 +145,28 @@ class GameConfig(BaseModel):
     stats: list[StatConfig] = Field(default_factory=lambda: list(DEFAULT_GAME_STATS))
 
 
+class RecurrenceConfig(BaseModel):
+    """Recurrent-task settings. ADR-033.
+
+    ``default_materialized_future_count`` is the per-user default for
+    how many future occurrences a new series keeps materialized ahead
+    of its current occurrence. It applies only to series created
+    *after* the value changes; an existing series keeps its own
+    persisted count.
+
+    The valid range is 1 through 100. The upper bound keeps a
+    malformed request from asking the server for an unbounded number
+    of CalDAV writes.
+    """
+
+    default_materialized_future_count: int = Field(
+        default=DEFAULT_MATERIALIZED_FUTURE_COUNT,
+        ge=1,
+        le=100,
+        description="Future occurrences kept materialized per new series.",
+    )
+
+
 class NtfyConfig(BaseModel):
     """ntfy notification server settings. ADR-027.
 
@@ -211,6 +237,7 @@ class Configs(BaseSettings):
     dav: DAV = Field(description="CalDAV and CardDAV settings.")
     game: GameConfig = Field(default_factory=GameConfig)
     ntfy: NtfyConfig = Field(default_factory=NtfyConfig)
+    recurrence: RecurrenceConfig = Field(default_factory=RecurrenceConfig)
 
     model_config = {
         "extra": "ignore",
@@ -245,6 +272,9 @@ class Configs(BaseSettings):
 
         # Build ntfy config
         yaml_data["ntfy"] = _build_ntfy(yaml_data)
+
+        # Build recurrence config
+        yaml_data["recurrence"] = _build_recurrence(yaml_data)
 
         # Merge: yaml_data < env_vars < explicit kwargs
         merged = {**yaml_data, **kwargs}
@@ -389,3 +419,29 @@ def _build_ntfy(raw: dict) -> dict:
     url = url.rstrip("/") or DEFAULT_NTFY_URL
     topic = os.environ.get("GENESIS__NTFY__TOPIC") or yaml_ntfy.get("topic") or ""
     return {"url": url, "topic": topic}
+
+
+def _build_recurrence(raw: dict) -> dict:
+    """Build the recurrence config dict from YAML or defaults. ADR-033.
+
+    ``default_materialized_future_count`` resolves env var -> YAML ->
+    ``DEFAULT_MATERIALIZED_FUTURE_COUNT``. The env var is read
+    explicitly because this loader merges plain dicts; a nested
+    settings field is not populated from the environment on its own.
+
+    The raw value is passed through to the model, so a malformed
+    value (a non-numeric environment variable, a count outside the
+    accepted range) fails the pydantic validation of
+    :class:`RecurrenceConfig` instead of raising a bare ``ValueError``
+    from this function.
+    """
+    yaml_recurrence = raw.get("recurrence") or {}
+    env_count = os.environ.get("GENESIS__RECURRENCE__DEFAULT_MATERIALIZED_FUTURE_COUNT")
+    if env_count is not None and env_count != "":
+        return {"default_materialized_future_count": env_count}
+    return {
+        "default_materialized_future_count": yaml_recurrence.get(
+            "default_materialized_future_count",
+            DEFAULT_MATERIALIZED_FUTURE_COUNT,
+        )
+    }

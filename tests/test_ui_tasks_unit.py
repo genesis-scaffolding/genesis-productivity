@@ -60,6 +60,12 @@ class _FakeFacade:
         self.caldav = caldav
         self.journal = JournalFacade(journal_path)
 
+    def list_series_summaries(self):
+        """Return the summary row of every recurrence series."""
+        from genesis.caldav import recurrence
+
+        return recurrence.series_summaries(self.caldav._recurrence_store())
+
 
 @pytest.fixture
 def fake_facade(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _FakeFacade:

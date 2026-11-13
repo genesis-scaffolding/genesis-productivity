@@ -44,6 +44,21 @@ def to_utc_optional(dt: datetime | None) -> datetime | None:
     return to_utc(dt)
 
 
+def to_utc_walltime(dt: datetime) -> datetime:
+    """Convert a naive local wall-clock datetime to UTC, DST-aware.
+
+    Unlike :func:`to_utc`, which attaches the *current* UTC offset to
+    a naive datetime, this resolves the offset that the system
+    timezone actually used on the datetime's own date. A naive local
+    time therefore keeps its wall-clock meaning across a daylight
+    saving transition: 09:00 local stays 09:00 local.
+
+    Used by the recurrence layer (ADR-033) to rebuild scheduled times
+    for future occurrences.
+    """
+    return dt.astimezone(UTC)
+
+
 def to_local(dt: datetime) -> datetime:
     """Convert a tz-aware UTC datetime to the system's local timezone.
 

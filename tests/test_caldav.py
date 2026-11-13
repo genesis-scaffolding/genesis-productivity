@@ -762,3 +762,240 @@ class TestFourCollectionsIntegration:
         # Active time-log entry; default list filters to COMPLETED.
         assert len(facade.list_time_log(active_only=True)) == 1
         assert len(facade.list_time_log()) == 0
+
+
+# =============================================================================
+# Recurrence series (integration, ADR-033)
+# =============================================================================
+
+
+def _monthly_rule():
+    """Return the monthly rule used by the recurrence integration tests."""
+    from genesis.entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
+
+    return RecurrenceRule(
+        frequency=RecurrenceFrequency.MONTHLY,
+        interval=1,
+        anchor=RecurrenceAnchor.ASSIGNED_DATE,
+    )
+
+
+@pytest.mark.integration
+class TestRecurrenceSeriesIntegration:
+    """Real-Radicale persistence of the materialized recurrence series."""
+
+    def test_series_and_occurrences_round_trip(self, facade: CalDAVFacade) -> None:
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=4,
+        )
+
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.uid == created.series.uid
+        assert series.materialized_future_count == 4
+        assert series.highest_materialized_index == 4
+        assert series.rule.frequency.value == "monthly"
+        assert series.start_date == date(2026, 1, 31)
+        assert series.active is True
+
+        tasks = facade.list_series_tasks(created.series.uid)
+        assert len(tasks) == 5
+        assert sorted(t.recurrence_index or 0 for t in tasks) == [0, 1, 2, 3, 4]
+        assert all(t.recurrence_series_uid == created.series.uid for t in tasks)
+
+    def test_series_survives_a_facade_restart(self, facade: CalDAVFacade) -> None:
+        """A new facade sees the same series and occurrences."""
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=2,
+        )
+
+        reconnected = CalDAVFacade(
+            server_url=facade._server_url,
+            username=facade._username,
+            password=facade._password,
+        )
+        series = reconnected.get_series(created.series.uid)
+        assert series is not None
+        assert series.materialized_future_count == 2
+        assert len(reconnected.list_series_tasks(created.series.uid)) == 3
+
+    def test_occurrence_metadata_is_persisted(self, facade: CalDAVFacade) -> None:
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=2,
+        )
+        tasks = sorted(facade.list_series_tasks(created.series.uid), key=lambda t: t.recurrence_index or 0)
+        assert tasks[0].recurrence_occurrence == date(2026, 1, 31)
+        assert tasks[1].recurrence_occurrence == date(2026, 2, 28)
+        assert tasks[2].recurrence_occurrence == date(2026, 3, 31)
+
+    def test_completion_promotes_the_next_occurrence(self, facade: CalDAVFacade) -> None:
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=1,
+        )
+        facade.update_task(created.task.uid, TaskUpdate(status=TaskStatus.COMPLETED))
+
+        state = facade.get_series_state(created.series.uid)
+        assert state is not None
+        assert state.current_task_uid != created.task.uid
+        assert len(state.future_occurrences) == 1
+
+        tasks = facade.list_series_tasks(created.series.uid)
+        completed = [t for t in tasks if t.status == TaskStatus.COMPLETED]
+        assert len(completed) == 1
+        assert completed[0].completed_at is not None
+
+    def test_resizing_persists_the_new_occurrences(self, facade: CalDAVFacade) -> None:
+        from genesis.entities import SeriesUpdate
+
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=1,
+        )
+        result = facade.update_series(created.series.uid, SeriesUpdate(materialized_future_count=4))
+        assert len(result.created_task_uids) == 3
+
+        reconnected = CalDAVFacade(
+            server_url=facade._server_url,
+            username=facade._username,
+            password=facade._password,
+        )
+        assert len(reconnected.list_series_tasks(created.series.uid)) == 5
+        series = reconnected.get_series(created.series.uid)
+        assert series is not None
+        assert series.materialized_future_count == 4
+
+    def test_scheduled_occurrence_creates_a_shadow_event(self, facade: CalDAVFacade) -> None:
+        created = facade.create_recurrent_task(
+            TaskCreate(
+                title="Pay rent",
+                assigned_date=date(2026, 1, 31),
+                scheduled_start=datetime(2026, 1, 31, 9, 0, tzinfo=UTC),
+                scheduled_duration=45,
+            ),
+            rule=_monthly_rule(),
+            materialized_future_count=1,
+        )
+        events = facade.list_events()
+        assert len(events) == 2
+        uids = {event.uid for event in events}
+        for task in facade.list_series_tasks(created.series.uid):
+            assert task.uid in uids
+
+    def test_cancel_series_keeps_the_occurrences(self, facade: CalDAVFacade) -> None:
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=2,
+        )
+        result = facade.cancel_series(created.series.uid)
+        assert len(result.canceled_uids) == 2
+
+        tasks = facade.list_series_tasks(created.series.uid)
+        assert len(tasks) == 3
+        cancelled = [t for t in tasks if t.status == TaskStatus.CANCELED]
+        assert len(cancelled) == 2
+        series = facade.get_series(created.series.uid)
+        assert series is not None
+        assert series.active is False
+        assert series.stop_reason == "cancelled"
+
+    def test_the_end_date_and_the_stop_reason_round_trip(self, facade: CalDAVFacade) -> None:
+        """The two new series properties survive the storage round trip."""
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=4,
+            end_date=date(2026, 3, 31),
+        )
+        # The end date caps the window.
+        assert len(facade.list_series_tasks(created.series.uid)) == 3
+
+        reconnected = CalDAVFacade(
+            server_url=facade._server_url,
+            username=facade._username,
+            password=facade._password,
+        )
+        series = reconnected.get_series(created.series.uid)
+        assert series is not None
+        assert series.end_date == date(2026, 3, 31)
+
+    def test_the_series_edit_persists(self, facade: CalDAVFacade) -> None:
+        """A series edit is written to the series record."""
+        from genesis.entities import SeriesUpdate
+
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=2,
+        )
+        result = facade.update_series(created.series.uid, SeriesUpdate(interval=2, title="Pay the rent"))
+        assert result.series_uid == created.series.uid
+
+        reconnected = CalDAVFacade(
+            server_url=facade._server_url,
+            username=facade._username,
+            password=facade._password,
+        )
+        series = reconnected.get_series(created.series.uid)
+        assert series is not None
+        assert series.rule.interval == 2
+        assert series.template.title == "Pay the rent"
+        tasks = reconnected.list_series_tasks(created.series.uid)
+        assert all(t.title == "Pay the rent" for t in tasks)
+
+    def test_tasks_of_a_series_are_not_ordinary_tasks(self, facade: CalDAVFacade) -> None:
+        """The series record lives in its own collection."""
+        created = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=_monthly_rule(),
+            materialized_future_count=1,
+        )
+        series_uid = created.series.uid
+        for task in facade.list_tasks():
+            assert task.uid != series_uid
+        assert len(facade.list_series()) == 1
+
+
+@pytest.mark.integration
+class TestRecurrenceSeriesFilter:
+    """The series filter is pushed down to the CalDAV query."""
+
+    def test_tasks_filter_by_series_uid(self, facade: CalDAVFacade) -> None:
+        """list_tasks(series_uid=...) returns only that series' tasks."""
+        from genesis.entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
+
+        rule = RecurrenceRule(
+            frequency=RecurrenceFrequency.MONTHLY,
+            interval=1,
+            anchor=RecurrenceAnchor.ASSIGNED_DATE,
+        )
+        first = facade.create_recurrent_task(
+            TaskCreate(title="Pay rent", assigned_date=date(2026, 1, 31)),
+            rule=rule,
+            materialized_future_count=2,
+        )
+        second = facade.create_recurrent_task(
+            TaskCreate(title="Health insurance", assigned_date=date(2026, 1, 31)),
+            rule=rule,
+            materialized_future_count=1,
+        )
+        facade.create_task(TaskCreate(title="Plain task"))
+
+        listed = facade.list_tasks(series_uid=first.series.uid)
+        assert len(listed) == 3
+        assert all(t.recurrence_series_uid == first.series.uid for t in listed)
+
+        other = facade.list_tasks(series_uid=second.series.uid)
+        assert len(other) == 2
+        assert all(t.recurrence_series_uid == second.series.uid for t in other)
+
+        assert len(facade.list_tasks()) == 6

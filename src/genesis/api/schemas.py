@@ -13,6 +13,14 @@ field ``date`` (see :class:`genesis.journal.facade.Entry`). The wire
 model also uses ``date`` for clarity. Because the field name
 collides with the ``datetime.date`` class, we annotate with the
 fully-qualified ``datetime.date`` everywhere.
+
+Note on the recurrence wire model (ADR-033): a task may carry a
+``recurrence`` block. Its fields are the series UID, the rule, the
+occurrence date and index of the task, the effective materialized
+horizon of the series, whether the series is still active, and the
+role of the occurrence in the series. There is no edit scope on a task
+update: an occurrence edit touches one occurrence, and the series is
+edited through the series endpoints.
 """
 
 import datetime
@@ -138,6 +146,178 @@ class ProjectListOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class RecurrenceFrequencyWire(StrEnum):
+    """Wire-side mirror of the recurrence frequency."""
+
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
+class RecurrenceAnchorWire(StrEnum):
+    """Wire-side mirror of the recurrence anchor."""
+
+    ASSIGNED_DATE = "assigned_date"
+    HARD_DEADLINE = "hard_deadline"
+    SCHEDULED_START = "scheduled_start"
+
+
+class RecurrenceIn(BaseModel):
+    """Recurrence payload of ``POST /productivity/tasks``.
+
+    ``materialized_future_count`` is optional: when omitted the server
+    resolves the per-user global default
+    (``recurrence.default_materialized_future_count``).
+
+    ``end_date`` is optional: it is the last date an occurrence of the
+    series may start on. The series stops renewing after it.
+    """
+
+    frequency: RecurrenceFrequencyWire
+    interval: int = Field(default=1, ge=1)
+    anchor: RecurrenceAnchorWire
+    materialized_future_count: int | None = Field(default=None, ge=1, le=100)
+    end_date: datetime.date | None = None
+
+
+class TaskRecurrenceOut(BaseModel):
+    """Recurrence metadata of one task occurrence."""
+
+    series_uid: str
+    frequency: RecurrenceFrequencyWire
+    interval: int
+    anchor: RecurrenceAnchorWire
+    start_date: datetime.date
+    end_date: datetime.date | None
+    occurrence_date: datetime.date | None
+    recurrence_index: int | None
+    materialized_future_count: int
+    active: bool
+    role: str
+
+
+class SeriesFutureOccurrenceOut(BaseModel):
+    """One materialized future occurrence of a series."""
+
+    uid: str
+    index: int
+    occurrence_date: datetime.date | None
+
+
+class RecurrenceTemplateOut(BaseModel):
+    """The future-occurrence template of a series.
+
+    The dates are expressed as day offsets from the series anchor, so
+    a client can reason about the shape of the future occurrences
+    without recomputing them.
+    """
+
+    title: str
+    description: str | None
+    project_id: str | None
+    priority: int | None
+    scheduled_duration: int | None
+    deadline_local_time: str | None
+    scheduled_local_time: str | None
+    assigned_offset_days: int | None
+    deadline_offset_days: int | None
+    scheduled_offset_days: int | None
+
+
+class RecurrenceSeriesOut(BaseModel):
+    """Inspection state of a recurrence series."""
+
+    uid: str
+    frequency: RecurrenceFrequencyWire
+    interval: int
+    anchor: RecurrenceAnchorWire
+    start_date: datetime.date
+    end_date: datetime.date | None
+    materialized_future_count: int
+    active: bool
+    stop_reason: str | None
+    current_task_uid: str | None
+    next_occurrence_date: datetime.date | None
+    future_occurrences: list[SeriesFutureOccurrenceOut]
+    template: RecurrenceTemplateOut
+
+
+class RecurrenceSeriesSummaryOut(BaseModel):
+    """One row of the recurrence series table."""
+
+    uid: str
+    title: str
+    project_id: str | None
+    frequency: RecurrenceFrequencyWire
+    interval: int
+    anchor: RecurrenceAnchorWire
+    start_date: datetime.date
+    end_date: datetime.date | None
+    materialized_future_count: int
+    active: bool
+    stop_reason: str | None
+    status: str
+    current_task_uid: str | None
+    current_occurrence_date: datetime.date | None
+    next_occurrence_date: datetime.date | None
+    open_occurrence_count: int
+    history_count: int
+    created: UtcDateTime | None
+    modified: UtcDateTime | None
+
+
+class RecurrenceSeriesListOut(BaseModel):
+    """The list of every recurrence series."""
+
+    items: list[RecurrenceSeriesSummaryOut]
+    total: int
+
+
+class RecurrenceSeriesUpdateIn(BaseModel):
+    """Body of ``PATCH /productivity/recurrences/{series_uid}``.
+
+    Every field is optional. A field that is not sent keeps the
+    series' current value; a nullable field that is explicitly sent
+    as ``null`` clears it.
+    """
+
+    frequency: RecurrenceFrequencyWire | None = None
+    interval: int | None = Field(default=None, ge=1)
+    anchor: RecurrenceAnchorWire | None = None
+    start_date: datetime.date | None = None
+    end_date: datetime.date | None = None
+    clear_end_date: bool = False
+    title: str | None = None
+    description: str | None = None
+    project_id: str | None = None
+    priority: int | None = None
+    duration_minutes: int | None = None
+    materialized_future_count: int | None = Field(default=None, ge=1, le=100)
+
+
+class RecurrenceSeriesUpdateOut(BaseModel):
+    """Result of a series edit."""
+
+    series_uid: str
+    active: bool
+    end_date: datetime.date | None
+    materialized_future_count: int
+    current_task_uid: str | None
+    next_occurrence_date: datetime.date | None
+    updated_task_uids: list[str]
+    created_task_uids: list[str]
+    canceled_task_uids: list[str]
+
+
+class CancelSeriesOut(BaseModel):
+    """Result of cancelling a series."""
+
+    series_uid: str
+    canceled_uids: list[str]
+    active: bool
+
+
 class TaskCreateIn(BaseModel):
     title: str
     description: str | None = None
@@ -148,6 +328,7 @@ class TaskCreateIn(BaseModel):
     duration_minutes: int | None = None
     priority: int | None = None
     project_id: str | None = None
+    recurrence: RecurrenceIn | None = None
 
 
 class TaskUpdateIn(BaseModel):
@@ -181,6 +362,7 @@ class TaskOut(BaseModel):
     completed_at: UtcDateTime | None
     created: UtcDateTime | None
     modified: UtcDateTime | None
+    recurrence: TaskRecurrenceOut | None = None
 
 
 class TaskListOut(BaseModel):

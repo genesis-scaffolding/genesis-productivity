@@ -1,9 +1,9 @@
 """CalDAV facade for tasks, projects, events, and time log.
 
 The facade manages a CalDAV connection to a Radicale server, lazily
-loads the four fixed top-level collections, and exposes 20 one-line
-delegations to module-level CRUD functions. See ADR-012 for the four-
-collection layout and the shadow VEVENT pattern.
+loads the fixed top-level collections, and exposes one-line delegations
+to module-level CRUD functions. See ADR-012 for the collection layout
+and the shadow VEVENT pattern, ADR-033 for the recurrence series.
 """
 
 from __future__ import annotations
@@ -12,10 +12,11 @@ from datetime import datetime
 from typing import Any, Literal
 
 from ..category.enums import TimeLogCategory
-from . import events, projects, tasks, time_log, xp_events
+from . import events, projects, recurrence, tasks, time_log, xp_events
 from .constants import (
     EVENTS_COLLECTION,
     PROJECTS_COLLECTION,
+    RECURRENCES_COLLECTION,
     TASKS_COLLECTION,
     TIME_LOG_COLLECTION,
     XP_EVENTS_COLLECTION,
@@ -26,9 +27,10 @@ from .ical import now_utc
 class CalDAVFacade:
     """Facade for CalDAV storage of tasks, projects, events, and time log.
 
-    Connects to a Radicale server and exposes four cohesive CRUD surfaces,
-    one per entity type. Each surface is a thin delegation to a module
-    function in projects.py, tasks.py, events.py, or time_log.py.
+    Connects to a Radicale server and exposes one cohesive CRUD surface
+    per entity type. Each surface is a thin delegation to a module
+    function in projects.py, tasks.py, events.py, time_log.py, or
+    recurrence.py.
     """
 
     PROJECTS_COLLECTION: str = PROJECTS_COLLECTION
@@ -36,6 +38,7 @@ class CalDAVFacade:
     EVENTS_COLLECTION: str = EVENTS_COLLECTION
     TIME_LOG_COLLECTION: str = TIME_LOG_COLLECTION
     XP_EVENTS_COLLECTION: str = XP_EVENTS_COLLECTION
+    RECURRENCES_COLLECTION: str = RECURRENCES_COLLECTION
 
     def __init__(
         self,
@@ -130,6 +133,7 @@ class CalDAVFacade:
         end: datetime | None = None,
         completed_at_start: datetime | None = None,
         completed_at_end: datetime | None = None,
+        series_uid: str | None = None,
         sort_by: list[str] | None = None,
         sort_order: str = "asc",
     ):
@@ -142,15 +146,100 @@ class CalDAVFacade:
             end,
             completed_at_start,
             completed_at_end,
+            series_uid,
             sort_by,
             sort_order,
         )
 
     def update_task(self, uid: str, data):
-        return tasks.update_task(self, uid, data)
+        # The series owns the schedule of its occurrences. A write
+        # that changes one of the series-owned fields of an occurrence
+        # is refused here, before anything is written (ADR-033).
+        existing = self.get_task(uid)
+        if existing is not None:
+            changed = recurrence.series_owned_changes(existing, data)
+            if changed:
+                series_uid = existing.recurrence_series_uid
+                verb = "is" if len(changed) == 1 else "are"
+                raise ValueError(
+                    f"task {uid} is an occurrence of recurrence series {series_uid}; "
+                    f"its {', '.join(changed)} {verb} owned by the series. "
+                    f"Edit the series with PATCH /productivity/recurrences/{series_uid} instead.",
+                )
+        task = tasks.update_task(self, uid, data)
+        self._reconcile_series_of(task)
+        return task
 
     def delete_task(self, uid: str) -> bool:
-        return tasks.delete_task(self, uid)
+        existing = self.get_task(uid)
+        deleted = tasks.delete_task(self, uid)
+        if deleted and existing is not None and existing.recurrence_series_uid:
+            # A deleted occurrence is skipped for good: the next open
+            # occurrence is promoted, but the window is not refilled by
+            # the delete (ADR-033).
+            recurrence.reconcile_series(
+                self._recurrence_store(),
+                existing.recurrence_series_uid,
+                refill=False,
+            )
+        return deleted
+
+    # -------------------------------------------------------------------------
+    # Recurrence series (ADR-033)
+    # -------------------------------------------------------------------------
+
+    def _recurrence_store(self) -> recurrence.CalDAVRecurrenceStore:
+        """Return the recurrence store bound to this facade."""
+        return recurrence.CalDAVRecurrenceStore(self)
+
+    def _reconcile_series_of(self, task) -> None:
+        """Restore the recurrence window of the series a task belongs to.
+
+        Called after a task write: when the current occurrence becomes
+        terminal, the next open occurrence is promoted and the tail of
+        the window is materialized again.
+        """
+        if task is None or not getattr(task, "recurrence_series_uid", None):
+            return
+        recurrence.reconcile_series(self._recurrence_store(), task.recurrence_series_uid)
+
+    def create_recurrent_task(self, data, *, rule, materialized_future_count: int, end_date=None):
+        """Create a recurrent task with its series and future occurrences."""
+        return recurrence.create_recurrent_task(
+            self._recurrence_store(),
+            data,
+            rule=rule,
+            materialized_future_count=materialized_future_count,
+            end_date=end_date,
+        )
+
+    def update_series(self, series_uid: str, changes):
+        """Apply a series edit and re-derive the open occurrences."""
+        return recurrence.update_series(self._recurrence_store(), series_uid, changes)
+
+    def cancel_series(self, series_uid: str):
+        """Cancel the future window of a series and stop its renewal."""
+        return recurrence.cancel_series(self._recurrence_store(), series_uid)
+
+    def list_series_summaries(self):
+        """Return the summary row of every recurrence series."""
+        return recurrence.series_summaries(self._recurrence_store())
+
+    def get_series(self, series_uid: str):
+        """Return one recurrence series, or None."""
+        return self._recurrence_store().get_series(series_uid)
+
+    def list_series(self):
+        """Return every recurrence series."""
+        return self._recurrence_store().list_series()
+
+    def list_series_tasks(self, series_uid: str):
+        """Return every task that belongs to the given series."""
+        return self._recurrence_store().list_series_tasks(series_uid)
+
+    def get_series_state(self, series_uid: str):
+        """Return the inspection state of a series, or None."""
+        return recurrence.series_state(self._recurrence_store(), series_uid)
 
     # -------------------------------------------------------------------------
     # Event delegations

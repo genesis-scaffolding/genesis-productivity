@@ -14,25 +14,39 @@ the user leave the wizard.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, date, datetime, time
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import streamlit as st
 
-from genesis.entities import Contact, ContactUpdate, Project, ProjectStatus, ProjectUpdate, Task, TaskStatus, TaskUpdate
+from genesis.entities import (
+    Contact,
+    ContactUpdate,
+    Project,
+    ProjectStatus,
+    ProjectUpdate,
+    SeriesSummary,
+    Task,
+    TaskStatus,
+    TaskUpdate,
+    series_status,
+)
 from genesis.journal.facade import Entry
 from genesis.tz import to_local, to_utc
 from genesis.ui._render import (
-    delete_confirm_dialog,
     focus_create_dialog,
+    series_cancel_dialog,
+    series_edit_dialog,
     session_log_dialog,
+    task_delete_dialog,
     task_edit_dialog,
 )
 from genesis.ui._state import get_facade
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from genesis.caldav import CalDAVFacade
 
@@ -71,6 +85,23 @@ TASK_TABLE_DEFAULT_SORT_KEYS: list[SortKey] = [
     ("priority", 5, True),
     ("created", _DATETIME_MAX_UTC),
 ]
+
+
+# -----------------------------------------------------------------------------
+# Row identity
+# -----------------------------------------------------------------------------
+
+
+def _row_identity_signature(uids: Sequence[str]) -> str:
+    """Return a short, stable signature of a rendered row order.
+
+    The signature is the identity of a rendered row map: it changes
+    when a row is added, removed, or replaced, and when the order
+    changes. It is used to bind the data editor widget instance to
+    the rows it was rendered with (ADR-034).
+    """
+    digest = hashlib.sha1("\n".join(uids).encode("utf-8")).hexdigest()
+    return digest[:12]
 
 
 # -----------------------------------------------------------------------------
@@ -114,6 +145,12 @@ def run_pending_page_switch() -> None:
 # -----------------------------------------------------------------------------
 
 
+# Key the inline-edit handler stores an error message in. A widget
+# callback cannot render on the page itself, so the message is handed
+# to the script body through the session state.
+_INLINE_EDIT_ERROR_KEY = "_inline_edit_error"
+
+
 def request_task_detail(uid: str) -> None:
     """Ask for the Tasks page in its detail state.
 
@@ -155,10 +192,7 @@ def handle_task_action(label: str, task: Task, *, caldav: CalDAVFacade) -> None:
     elif label == "Log Session":
         session_log_dialog(task=task)
     elif label == "Delete":
-        delete_confirm_dialog(
-            f"task '{task.title}'",
-            lambda: caldav.delete_task(task.uid),
-        )
+        task_delete_dialog(caldav, task)
 
 
 def _parse_sort_key_entry(entry: tuple) -> tuple[str, Any, bool]:
@@ -289,6 +323,10 @@ def render_filterable_tasks_table(
     the cache-based stable sort (ADR-023). When provided, the table
     freezes its display order on first render, does not re-sort on
     inline edits, and shows a Re-sort button to force a refresh.
+
+    A change of the filter changes the rows of the table, so the
+    editor widget is replaced and any pending inline edit is dropped
+    (ADR-034).
     """
     statuses_all = [s.value for s in TaskStatus]
     default = [s.value for s in (default_statuses or TaskStatus)]
@@ -315,6 +353,61 @@ def render_filterable_tasks_table(
     )
 
 
+def apply_inline_task_edit(
+    caldav: CalDAVFacade,
+    task: Task,
+    update: TaskUpdate,
+) -> str | None:
+    """Apply one inline table edit and return an error message, if any.
+
+    An inline edit touches one task. When the task is an occurrence
+    of a series and the edit changes a series-owned field, the write
+    is refused by the domain layer: the error is returned so the
+    caller can surface it, and the edit is not applied at all.
+    """
+    try:
+        caldav.update_task(task.uid, update)
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
+def recurrence_labels(tasks: list[Task], caldav: CalDAVFacade) -> dict[str, tuple[str, str, str]]:
+    """Return per-task (recurrence, role, series) labels.
+
+    The series of every distinct series is fetched once, not once per
+    task. The label pairs are:
+
+    - ``recurrence``: e.g. "Monthly, 4 ahead";
+    - ``role``: "Current", "Future 1 of 4", or "History";
+    - ``series``: the series UID (empty for ordinary tasks).
+    """
+    series_uids = {t.recurrence_series_uid for t in tasks if t.recurrence_series_uid}
+    states: dict[str, Any] = {}
+    for uid in series_uids:
+        state = caldav.get_series_state(uid)
+        if state is not None:
+            states[uid] = state
+
+    labels: dict[str, tuple[str, str, str]] = {}
+    for task in tasks:
+        series_uid = task.recurrence_series_uid
+        state = states.get(series_uid or "")
+        if state is None:
+            labels[task.uid] = ("", "", "")
+            continue
+        recurrence_label = f"{state.frequency.value.capitalize()}, {state.materialized_future_count} ahead"
+        future_uids = [occurrence.uid for occurrence in state.future_occurrences]
+        if task.uid == state.current_task_uid:
+            role = "Current"
+        elif task.uid in future_uids:
+            role = f"Future {future_uids.index(task.uid) + 1} of {len(future_uids)}"
+        else:
+            role = "History"
+        labels[task.uid] = (recurrence_label, role, series_uid or "")
+    return labels
+
+
 def render_tasks_table(
     tasks: list[Task],
     *,
@@ -330,8 +423,9 @@ def render_tasks_table(
         tasks: Tasks to display (caller pre-filters by status / project).
         caldav: Facade used for ``update_task`` and ``delete_task``.
         key: Unique widget-key prefix. The data editor stores its
-            state under ``st.session_state[key]``; the row-action
-            click info lands under ``st.session_state[f"{key}_action"]``.
+            state under a key derived from ``key`` and the signature
+            of the rendered rows; the row-action click info lands
+            under ``st.session_state[f"{key}_action"]``.
         show_project_column: Show the project name column. Pass
             ``False`` on project-detail pages where every row belongs
             to the same project.
@@ -354,11 +448,21 @@ def render_tasks_table(
 
     Inline edits to Title, Priority, Scheduled, Deadline, Assigned,
     Status, and Project flow through ``on_change``. The on-change
-    handler reads ``st.session_state[key]["edited_rows"]`` and
-    dispatches a single ``update_task`` per changed row covering all
-    changed columns. The Project column is a SelectboxColumn so users
-    can reassign or unassign tasks without opening the edit dialog;
-    Actions (Edit / Delete) is the last column.
+    handler reads the editing state of the widget instance it was
+    registered with and dispatches a single ``update_task`` per
+    changed row covering all changed columns. The Project column is
+    a SelectboxColumn so users can reassign or unassign tasks without
+    opening the edit dialog; Actions (Edit / Delete) is the last
+    column.
+
+    The editor widget is bound to the row map it was rendered with
+    (ADR-034): the widget key carries the signature of the rendered
+    row UIDs, so a change of the rows replaces the widget and drops
+    the pending edit the browser was holding. An inline edit is
+    therefore always applied to the task whose row the user edited,
+    even when the rows changed under the table (a completed
+    occurrence of a series, a deleted task, a filter change, a
+    re-sort).
     """
     if not tasks:
         st.info("No tasks to show.")
@@ -379,6 +483,13 @@ def render_tasks_table(
             cache_key=sort_cache_key,
         )
 
+    # The editor widget is bound to the rows it was rendered with
+    # (ADR-034). The signature covers the displayed order, so any
+    # change of the row map (a row added, removed, or replaced, or
+    # the order changed) replaces the widget and drops the pending
+    # edit the browser was holding.
+    widget_key = f"{key}__{_row_identity_signature([t.uid for t in tasks])}"
+
     statuses_all = [s.value for s in TaskStatus]
 
     projects_list = list(caldav.list_projects()) if show_project_column else []
@@ -396,6 +507,7 @@ def render_tasks_table(
         return "(missing)"
 
     rows: list[dict] = []
+    recurrence_info = recurrence_labels(tasks, caldav)
     for t in tasks:
         # Strip tz for the dataframe; on edit, the value comes back as
         # naive local and we convert via to_utc before storing.
@@ -407,6 +519,7 @@ def render_tasks_table(
         # the next level (priority) breaks ties. See _handle_inline_edit
         # for the write path.
         dl_local = to_local(t.hard_deadline) if t.hard_deadline else None
+        recurrence_label, role_label, series_label = recurrence_info.get(t.uid, ("", "", ""))
         row: dict = {
             "uid": t.uid,
             "Title": t.title,
@@ -415,6 +528,9 @@ def render_tasks_table(
             "Deadline": dl_local.date() if dl_local else None,
             "Assigned": t.assigned_date,
             "Status": t.status.value,
+            "Recurrence": recurrence_label,
+            "Role": role_label,
+            "Series": series_label,
         }
         if show_project_column:
             row["Project"] = _project_label(t.project_id)
@@ -438,7 +554,7 @@ def render_tasks_table(
         handle_task_action(label, target, caldav=caldav)
 
     def _handle_inline_edit() -> None:
-        state = st.session_state.get(key) or {}
+        state = st.session_state.get(widget_key) or {}
         edited_rows = state.get("edited_rows") or {}
         if not edited_rows:
             return
@@ -506,7 +622,18 @@ def render_tasks_table(
 
             if not touched:
                 continue
-            caldav.update_task(original.uid, update)
+            # An inline edit touches one task. When the task is an
+            # occurrence of a series and the edit changes a
+            # series-owned field, the write is refused by the domain
+            # layer and the error is reported under the table.
+            error = apply_inline_task_edit(caldav, original, update)
+            if error is not None:
+                # The callback cannot render on the page, so the
+                # message is handed to the script body through the
+                # session state. The edit was not applied, so there
+                # is nothing to reward.
+                st.session_state[_INLINE_EDIT_ERROR_KEY] = error
+                continue
             # ADR-026: if the user just transitioned this task to
             # COMPLETED via inline edit, fire the XP event. The
             # intent is read from the changes dict (already known
@@ -520,14 +647,15 @@ def render_tasks_table(
                     task_id=original.uid,
                     occurred_at=datetime.now(UTC),
                 )
-        # Clear in-flight edits so they are not re-applied to the new
-        # df on the next render. data_editor preserves edited_rows in
-        # widget state and reapplies them to row positions on each
-        # render; if the underlying data reorders between renders
-        # (Radicale's PROPFIND order is not stable across PUTs), the
-        # preserved edits would land on the wrong rows. Clearing here
-        # after we've already dispatched the updates prevents that.
-        state["edited_rows"] = {}
+        # The server's copy of the editing state is not what the
+        # browser sends back: the browser owns the accumulated edits
+        # and re-sends them on the next interaction. Clearing the copy
+        # here would protect nothing, so it is not done. The
+        # protection is the widget identity (ADR-034): the editing
+        # state belongs to the widget instance that was rendered with
+        # the rows the user was looking at, and a change of the rows
+        # replaces the widget, so a pending edit can never be
+        # dispatched against a row map it was not made against.
         # No explicit st.rerun() — this is an on_change callback.
         # Streamlit's natural rerun after on_change picks up the updates.
 
@@ -539,6 +667,9 @@ def render_tasks_table(
         "Deadline": st.column_config.DateColumn("Deadline", format="YYYY-MM-DD"),
         "Assigned": st.column_config.DateColumn("Assigned", format="YYYY-MM-DD"),
         "Status": st.column_config.SelectboxColumn("Status", options=statuses_all, required=True),
+        "Recurrence": st.column_config.TextColumn("Recurrence", disabled=True, width="small"),
+        "Role": st.column_config.TextColumn("Occurrence", disabled=True, width="small"),
+        "Series": st.column_config.TextColumn("Series", disabled=True, width="small"),
     }
     if show_project_column:
         column_config["Project"] = st.column_config.SelectboxColumn(
@@ -559,13 +690,130 @@ def render_tasks_table(
         column_config=column_config,
         hide_index=True,
         on_change=_handle_inline_edit,
-        key=key,
+        key=widget_key,
     )
+
+    # A refused inline edit leaves a message behind. The callback
+    # cannot render it, so the script body does.
+    inline_error = st.session_state.pop(_INLINE_EDIT_ERROR_KEY, None)
+    if inline_error:
+        st.error(inline_error)
 
     # A row action may have asked for another page. Perform the switch
     # here, in the script body: st.switch_page inside the row-action
     # callback is a no-op and Streamlit warns about it.
     run_pending_page_switch()
+
+
+# -----------------------------------------------------------------------------
+# Recurrence series table
+# -----------------------------------------------------------------------------
+
+
+def _sort_series_summaries(summaries: list[SeriesSummary]) -> list[SeriesSummary]:
+    """Order the series summaries for the series table.
+
+    The active series come first: they are the ones that still
+    produce work, and they are what the user came to see. The
+    stopped ones (cancelled, finished, inactive) follow.
+
+    Inside a group the order is the next occurrence date, then the
+    title, then the UID. The next date puts the series that is due
+    first at the top; the title and the UID break the ties, so the
+    table is the same on every render.
+    """
+
+    def _sort_key(summary: SeriesSummary) -> tuple[int, date, str, str]:
+        return (
+            0 if summary.active else 1,
+            summary.next_occurrence_date or date.max,
+            summary.title.casefold(),
+            summary.uid,
+        )
+
+    return sorted(summaries, key=_sort_key)
+
+
+def render_recurrence_series_table(
+    summaries: list[SeriesSummary],
+    *,
+    key: str,
+) -> None:
+    """Render the read-only recurrence series table.
+
+    The table is the discovery surface of a series (ADR-033): it
+    lists every series with its rule, its anchor, its dates, its
+    materialized horizon, its next occurrence, and its status. It is
+    not an inline editor. The two row actions open the series form
+    and the series cancellation, so the user never has to find the
+    original task to stop a recurrence.
+
+    The active series are listed first, then the stopped ones. Inside
+    a group the order is the next occurrence date, then the title,
+    then the UID.
+    """
+    if not summaries:
+        st.info("No recurrence series.")
+        return
+
+    ordered = _sort_series_summaries(summaries)
+
+    rows: list[dict] = []
+    for summary in ordered:
+        rows.append(
+            {
+                "uid": summary.uid,
+                "Title": summary.title,
+                "Repeats": f"{summary.frequency.value.capitalize()}, every {summary.interval}",
+                "Anchor": summary.anchor.value,
+                "Start": summary.start_date.isoformat(),
+                "End": summary.end_date.isoformat() if summary.end_date else "no end",
+                "Ready": summary.materialized_future_count,
+                "Next": summary.next_occurrence_date.isoformat() if summary.next_occurrence_date else "-",
+                "Current": summary.current_task_uid or "-",
+                "Status": series_status(summary),
+                "actions": ["Edit", "Cancel series"],
+            },
+        )
+    df = pd.DataFrame(rows)
+
+    action_key = f"{key}_action"
+    table_series = ordered
+
+    def _handle_action() -> None:
+        click = st.session_state.get(action_key)
+        if not click:
+            return
+        row_idx = click["row"]
+        label = click["label"]
+        if row_idx >= len(table_series):
+            return
+        target = table_series[row_idx]
+        if label == "Edit":
+            series_edit_dialog(target.uid)
+        elif label == "Cancel series":
+            series_cancel_dialog(target.uid, target.title)
+
+    column_config: dict = {
+        "uid": None,  # hidden
+        "Title": st.column_config.TextColumn("Title", width="large", disabled=True),
+        "Repeats": st.column_config.TextColumn("Repeats", disabled=True, width="small"),
+        "Anchor": st.column_config.TextColumn("Anchor", disabled=True, width="small"),
+        "Start": st.column_config.TextColumn("Start", disabled=True, width="small"),
+        "End": st.column_config.TextColumn("End", disabled=True, width="small"),
+        "Ready": st.column_config.NumberColumn("Ready", disabled=True, width="small"),
+        "Next": st.column_config.TextColumn("Next", disabled=True, width="small"),
+        "Current": st.column_config.TextColumn("Current", disabled=True, width="small"),
+        "Status": st.column_config.TextColumn("Status", disabled=True, width="small"),
+        "actions": st.column_config.ButtonColumn("Actions", on_click=_handle_action, key=action_key),
+    }
+
+    st.data_editor(
+        df,
+        column_config=column_config,
+        hide_index=True,
+        key=key,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -591,6 +839,10 @@ def render_projects_table(
     "Delete"). When it is None the Actions column is hidden, which
     is what the onboarding wizard wants: its list is a view of the
     account, not a way out of the wizard.
+
+    The editor widget is bound to the rows it was rendered with
+    (ADR-034): a change of the rows replaces the widget and drops
+    the pending inline edit the browser was holding.
     """
     if not projects:
         st.info("No projects to show.")
@@ -619,6 +871,7 @@ def render_projects_table(
 
     action_key = f"{key}_action"
     table_projects = projects
+    widget_key = f"{key}__{_row_identity_signature([p.uid for p in projects])}"
 
     def _handle_action() -> None:
         click = st.session_state.get(action_key)
@@ -631,7 +884,7 @@ def render_projects_table(
         on_action(label, table_projects[row_idx])
 
     def _handle_inline_edit() -> None:
-        state = st.session_state.get(key) or {}
+        state = st.session_state.get(widget_key) or {}
         edited_rows = state.get("edited_rows") or {}
         if not edited_rows:
             return
@@ -654,7 +907,9 @@ def render_projects_table(
             if not touched:
                 continue
             caldav.update_project(original.uid, update)
-        state["edited_rows"] = {}
+        # The server's copy of the editing state is not what the
+        # browser sends back, so clearing it would protect nothing.
+        # The widget identity is the protection (ADR-034).
 
     column_config: dict = {
         "uid": None,  # hidden
@@ -677,7 +932,7 @@ def render_projects_table(
         column_config=column_config,
         hide_index=True,
         on_change=_handle_inline_edit,
-        key=key,
+        key=widget_key,
     )
 
 
@@ -699,6 +954,10 @@ def render_journal_table(
     ``on_action`` handles the per-row Actions buttons ("Open",
     "Delete"). When it is None the Actions column is hidden, which
     is what the onboarding wizard wants.
+
+    The editor widget is bound to the rows it was rendered with
+    (ADR-034): a change of the rows replaces the widget and drops
+    the pending inline edit the browser was holding.
     """
     if not entries:
         st.info("No journal entries to show.")
@@ -720,6 +979,7 @@ def render_journal_table(
 
     action_key = f"{key}_action"
     table_entries = entries
+    widget_key = f"{key}__{_row_identity_signature([e.uid for e in entries])}"
 
     def _handle_action() -> None:
         click = st.session_state.get(action_key)
@@ -732,7 +992,7 @@ def render_journal_table(
         on_action(label, table_entries[row_idx])
 
     def _handle_inline_edit() -> None:
-        state = st.session_state.get(key) or {}
+        state = st.session_state.get(widget_key) or {}
         edited_rows = state.get("edited_rows") or {}
         if not edited_rows:
             return
@@ -750,7 +1010,9 @@ def render_journal_table(
             except ValueError as exc:
                 st.error(str(exc))
                 return
-        state["edited_rows"] = {}
+        # The server's copy of the editing state is not what the
+        # browser sends back, so clearing it would protect nothing.
+        # The widget identity is the protection (ADR-034).
 
     column_config: dict = {
         "date": st.column_config.DateColumn("Date", disabled=True, format="YYYY-MM-DD"),
@@ -767,7 +1029,7 @@ def render_journal_table(
         column_config=column_config,
         hide_index=True,
         on_change=_handle_inline_edit,
-        key=key,
+        key=widget_key,
     )
 
     # A row action may have asked for another page. Perform the switch

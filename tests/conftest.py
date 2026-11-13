@@ -108,9 +108,10 @@ def _build_mock_facade() -> object:
         tests can flip ``game.enabled`` in place."""
 
         def __init__(self) -> None:
-            from genesis.configs import GameConfig
+            from genesis.configs import GameConfig, RecurrenceConfig
 
             self.game = GameConfig(enabled=True)
+            self.recurrence = RecurrenceConfig()
 
     class _MockFacade:
         def __init__(self) -> None:
@@ -193,6 +194,51 @@ def _build_mock_facade() -> object:
                     source_session_id=session_id,
                 )
             )
+
+        def create_recurrent_task(
+            self,
+            data,
+            *,
+            frequency,
+            interval=1,
+            anchor,
+            materialized_future_count=None,
+            end_date=None,
+        ):
+            """Create a recurrent task, resolving the global default.
+
+            Mirrors ``genesis.core.facade.Facade.create_recurrent_task``
+            so the API and the UI resolve the materialized horizon in
+            one place.
+            """
+            from genesis.entities import RecurrenceAnchor, RecurrenceFrequency, RecurrenceRule
+
+            count = materialized_future_count
+            if count is None:
+                count = self.configs.recurrence.default_materialized_future_count
+            rule = RecurrenceRule(
+                frequency=RecurrenceFrequency(frequency),
+                interval=interval,
+                anchor=RecurrenceAnchor(anchor),
+            )
+            return self.caldav.create_recurrent_task(
+                data,
+                rule=rule,
+                materialized_future_count=count,
+                end_date=end_date,
+            )
+
+        def update_series(self, series_uid, changes):
+            """Apply a series edit (ADR-033)."""
+            return self.caldav.update_series(series_uid, changes)
+
+        def cancel_series(self, series_uid):
+            """Cancel a series (ADR-033)."""
+            return self.caldav.cancel_series(series_uid)
+
+        def list_series_summaries(self):
+            """Return the summary row of every recurrence series."""
+            return self.caldav.list_series_summaries()
 
         def complete_task(self, uid):
             from genesis.entities import TaskStatus, TaskUpdate

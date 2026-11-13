@@ -56,7 +56,8 @@ def _render_validation(report: ValidationReport) -> None:
             f"projects `{counts.projects}`, tasks `{counts.tasks}`, "
             f"events `{counts.events}`, time_log `{counts.time_log}`, "
             f"journal `{counts.journal}`, "
-            f"profile `{counts.profile}`, contacts `{counts.contacts}`"
+            f"profile `{counts.profile}`, contacts `{counts.contacts}`, "
+            f"recurrences `{counts.recurrences}`"
         )
 
     if report.issues:
@@ -220,6 +221,29 @@ with st.expander("Notifications", expanded=False):
         "Edit `ntfy.url` and `ntfy.topic` in `configs.yaml` under the "
         "`ntfy:` key, or override with `GENESIS__NTFY__URL` / "
         "`GENESIS__NTFY__TOPIC`. Changes apply on the next session."
+    )
+
+
+# -----------------------------------------------------------------------------
+# Recurring tasks
+# -----------------------------------------------------------------------------
+
+
+with st.expander("Recurring tasks", expanded=False):
+    """Show the global default for materialized future occurrences.
+
+    Read-only this round, consistent with the ntfy section. The value
+    applies to series created from now on; a running series keeps the
+    count it was created with and can be resized from the task dialog
+    or the API (ADR-033).
+    """
+    recurrence_cfg = facade.configs.recurrence
+    st.markdown(f"**Default future occurrences kept ready:** `{recurrence_cfg.default_materialized_future_count}`")
+    st.caption(
+        "Edit `recurrence.default_materialized_future_count` in `configs.yaml` under the "
+        "`recurrence:` key, or override with "
+        "`GENESIS__RECURRENCE__DEFAULT_MATERIALIZED_FUTURE_COUNT`. Changes apply on the "
+        "next session and affect new series only; existing series keep their own count."
     )
 
 

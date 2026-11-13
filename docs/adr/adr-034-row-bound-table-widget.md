@@ -1,4 +1,4 @@
-# ADR-034: Row-bound table widget
+# 034. Row-bound table widget
 
 ## Context
 

@@ -107,9 +107,7 @@ class _FakeFacade:
 
     def list_series_summaries(self):
         """Return the summary row of every recurrence series."""
-        from genesis.caldav import recurrence
-
-        return recurrence.series_summaries(self.caldav._recurrence_store())
+        return self.caldav.list_series_summaries()
 
     def record_xp_event(self, *, task_id: str, occurred_at: Any) -> None:
         """Accept an XP event (ADR-026)."""

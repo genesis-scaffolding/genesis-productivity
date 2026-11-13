@@ -496,9 +496,10 @@ def test_a_title_only_patch_leaves_a_finished_series_finished(api_server: TestCl
     series = api_server.get(f"/productivity/recurrences/{series_uid}", headers=_auth(token))
     assert series.json()["stop_reason"] == "finished"
     assert series.json()["active"] is False
-    assert api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token)).json()[
-        "total"
-    ] == 0
+    assert (
+        api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token)).json()["total"]
+        == 0
+    )
 
 
 def test_a_schedule_patch_reactivates_a_finished_series(api_server: TestClient) -> None:
@@ -522,9 +523,10 @@ def test_a_schedule_patch_reactivates_a_finished_series(api_server: TestClient) 
 
     series = api_server.get(f"/productivity/recurrences/{series_uid}", headers=_auth(token))
     assert series.json()["stop_reason"] is None
-    assert api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token)).json()[
-        "total"
-    ] > 0
+    assert (
+        api_server.get("/productivity/tasks", params={"series_uid": series_uid}, headers=_auth(token)).json()["total"]
+        > 0
+    )
 
 
 def test_patch_series_on_a_cancelled_series_is_409(api_server: TestClient) -> None:
